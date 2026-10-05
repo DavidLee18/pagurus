@@ -85,3 +85,36 @@ fn fail_use_after_free() {
     assert!(hit.span.line >= 9);
     assert!(hit.to_string().contains("use of freed value `p`"));
 }
+
+#[test]
+fn fail_chained_assign_is_use_after_move() {
+    let diags = check(&fixture("fail", "chained_assign.c"));
+    assert!(
+        diags.iter().any(|d| d.kind == DiagnosticKind::UseAfterMove),
+        "expected use-after-move on chained assign, got {diags:?}"
+    );
+}
+
+#[test]
+fn fail_if_join_use_after_free() {
+    let diags = check(&fixture("fail", "if_join_use_after_free.c"));
+    assert!(
+        diags.iter().any(|d| d.kind == DiagnosticKind::UseAfterFree),
+        "expected use-after-free after if-join, got {diags:?}"
+    );
+}
+
+#[test]
+fn pass_nested_shadow_is_clean() {
+    let diags = check(&fixture("pass", "nested_shadow.c"));
+    assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+}
+
+#[test]
+fn fail_for_init_double_free() {
+    let diags = check(&fixture("fail", "for_init_double_free.c"));
+    assert!(
+        diags.iter().any(|d| d.kind == DiagnosticKind::DoubleFree),
+        "expected double-free in for-init, got {diags:?}"
+    );
+}

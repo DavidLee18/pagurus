@@ -75,6 +75,8 @@ Aligned with Rust’s unique-ownership story and with CORAL’s treatment of own
 5. Integers (and other non-pointer types) are **copied**, not moved.
 6. Passing a pointer to an ordinary function is a **borrow** (a use): it does not move ownership. Annotating extra move sinks is future work.
 
+Control flow in v1: `if`/`else` joins are pessimistic (`Freed`/`Moved` win; an owner assigned on one path stays tracked). Nested blocks have lexical scope (inner `p` does not steal an outer `p`). Loops are walked **once**.
+
 Example error (tone modelled on rustc, not yet as polished):
 
 ```
@@ -84,7 +86,7 @@ error: use of moved value `p`
   8 |     free(p);
   |          ^ value used here
 note: `p` moved here
- --> tests/fixtures/fail/use_after_move.c:7:14
+ --> tests/fixtures/fail/use_after_move.c:7:15
 ```
 
 ## Tests

@@ -53,4 +53,25 @@ mod tests {
         assert!(rendered.contains("inline.c"));
         assert!(rendered.contains("use of moved value"));
     }
+
+    #[test]
+    fn chained_assign_moves_once() {
+        let src = r#"
+            void *malloc(unsigned long n);
+            void free(void *p);
+            int main(void) {
+                void *p;
+                void *q;
+                q = p = malloc(8);
+                free(p);
+                free(q);
+                return 0;
+            }
+        "#;
+        let diags = check_source("chain.c", src).expect("parse");
+        assert!(
+            diags.iter().any(|d| d.kind == DiagnosticKind::UseAfterMove),
+            "expected use-after-move, got {diags:?}"
+        );
+    }
 }

@@ -2,8 +2,8 @@
 
 use lang_c::ast::{
     BinaryOperator, BlockItem, Declaration, Declarator, DeclaratorKind, DerivedDeclarator,
-    Expression, ExternalDeclaration, FunctionDefinition, InitDeclarator, Initializer,
-    ParameterDeclaration, Statement, UnaryOperator,
+    Expression, ExternalDeclaration, ForInitializer, FunctionDefinition, InitDeclarator,
+    Initializer, ParameterDeclaration, Statement, UnaryOperator,
 };
 use lang_c::driver::{parse_preprocessed, Config, Flavor};
 use lang_c::span::{Node, Span};
@@ -85,15 +85,17 @@ impl Lowering<'_> {
         })
     }
 
+    fn lower_items(&self, items: &[Node<BlockItem>]) -> Vec<Stmt> {
+        let mut out = Vec::new();
+        for item in items {
+            out.extend(self.lower_block_item(item));
+        }
+        out
+    }
+
     fn lower_statement(&self, stmt: &Node<Statement>) -> Vec<Stmt> {
         match &stmt.node {
-            Statement::Compound(items) => {
-                let mut out = Vec::new();
-                for item in items {
-                    out.extend(self.lower_block_item(item));
-                }
-                out
-            }
+            Statement::Compound(items) => vec![Stmt::Block(self.lower_items(items))],
             Statement::Expression(Some(expr)) => {
                 vec![Stmt::Expr(self.lower_expr(expr))]
             }
@@ -128,11 +130,21 @@ impl Lowering<'_> {
                 vec![Stmt::Block(body)]
             }
             Statement::For(for_stmt) => {
-                // Walk the loop body once (v1 does not unroll or iterate).
-                let mut body = self.lower_statement(&for_stmt.node.statement);
-                if let Some(cond) = &for_stmt.node.condition {
-                    body.insert(0, Stmt::Expr(self.lower_expr(cond)));
+                // Walk the loop once (v1 does not model repeated iteration).
+                let mut body = Vec::new();
+                match &for_stmt.node.initializer.node {
+                    ForInitializer::Expression(expr) => {
+                        body.push(Stmt::Expr(self.lower_expr(expr)));
+                    }
+                    ForInitializer::Declaration(decl) => {
+                        body.extend(self.lower_declaration(decl));
+                    }
+                    ForInitializer::Empty | ForInitializer::StaticAssert(_) => {}
                 }
+                if let Some(cond) = &for_stmt.node.condition {
+                    body.push(Stmt::Expr(self.lower_expr(cond)));
+                }
+                body.extend(self.lower_statement(&for_stmt.node.statement));
                 if let Some(step) = &for_stmt.node.step {
                     body.push(Stmt::Expr(self.lower_expr(step)));
                 }

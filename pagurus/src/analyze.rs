@@ -25,22 +25,24 @@ struct Binding {
 }
 
 struct Analyzer {
-    env: HashMap<String, Binding>,
+    /// Innermost scope is last. Declarations bind in the current scope.
+    scopes: Vec<HashMap<String, Binding>>,
     diags: Vec<Diagnostic>,
 }
 
 impl Analyzer {
     fn new() -> Self {
         Self {
-            env: HashMap::new(),
+            scopes: Vec::new(),
             diags: Vec::new(),
         }
     }
 
     fn analyze_function(&mut self, fun: &Function) {
-        self.env.clear();
+        self.scopes.clear();
+        self.push_scope();
         for param in &fun.params {
-            self.env.insert(
+            self.declare(
                 param.name.clone(),
                 Binding {
                     ty: param.ty,
@@ -53,6 +55,32 @@ impl Analyzer {
             );
         }
         self.analyze_stmts(&fun.body);
+        self.scopes.clear();
+    }
+
+    fn push_scope(&mut self) {
+        self.scopes.push(HashMap::new());
+    }
+
+    fn pop_scope(&mut self) {
+        self.scopes.pop();
+    }
+
+    fn declare(&mut self, name: String, binding: Binding) {
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.insert(name, binding);
+        }
+    }
+
+    fn lookup(&self, name: &str) -> Option<&Binding> {
+        self.scopes.iter().rev().find_map(|scope| scope.get(name))
+    }
+
+    fn lookup_mut(&mut self, name: &str) -> Option<&mut Binding> {
+        self.scopes
+            .iter_mut()
+            .rev()
+            .find_map(|scope| scope.get_mut(name))
     }
 
     fn analyze_stmts(&mut self, stmts: &[Stmt]) {
@@ -79,14 +107,13 @@ impl Analyzer {
                         self.use_expr(init);
                     }
                 }
-                self.env.insert(name.clone(), Binding { ty: *ty, status });
+                self.declare(name.clone(), Binding { ty: *ty, status });
             }
             Stmt::Expr(expr) => {
                 self.use_expr(expr);
             }
             Stmt::Return { value, .. } => {
                 if let Some(expr) = value {
-                    // Returning a pointer moves it out of the callee.
                     if matches!(expr, Expr::Var { name, .. } if self.is_pointer(name)) {
                         self.take_ownership(expr);
                     } else {
@@ -107,25 +134,32 @@ impl Analyzer {
                 self.restore(saved.clone());
                 self.analyze_stmts(else_branch);
                 let else_env = self.snapshot();
-                self.env = merge_envs(then_env, else_env);
+                self.scopes = merge_scopes(then_env, else_env);
             }
-            Stmt::Block(stmts) => self.analyze_stmts(stmts),
+            Stmt::Block(stmts) => {
+                self.push_scope();
+                self.analyze_stmts(stmts);
+                self.pop_scope();
+            }
         }
     }
 
-    fn snapshot(&self) -> HashMap<String, Binding> {
-        self.env.clone()
+    fn snapshot(&self) -> Vec<HashMap<String, Binding>> {
+        self.scopes.clone()
     }
 
-    fn restore(&mut self, env: HashMap<String, Binding>) {
-        self.env = env;
+    fn restore(&mut self, scopes: Vec<HashMap<String, Binding>>) {
+        self.scopes = scopes;
     }
 
     fn is_pointer(&self, name: &str) -> bool {
-        self.env
-            .get(name)
+        self.lookup(name)
             .map(|b| b.ty == Ty::Pointer)
             .unwrap_or(false)
+    }
+
+    fn is_owned(&self, name: &str) -> bool {
+        matches!(self.lookup(name).map(|b| &b.status), Some(Status::Owned))
     }
 
     fn use_expr(&mut self, expr: &Expr) {
@@ -147,9 +181,7 @@ impl Analyzer {
             }
             Expr::Assign { lhs, rhs, .. } => self.check_assign(lhs, rhs),
             Expr::Deref { inner, .. } => self.use_expr(inner),
-            Expr::AddrOf { .. } => {
-                // `&p` addresses the stack slot of `p`; it does not use the owned heap value.
-            }
+            Expr::AddrOf { .. } => {}
             Expr::Other { children, .. } => {
                 for child in children {
                     self.use_expr(child);
@@ -162,7 +194,7 @@ impl Analyzer {
         if let Expr::Var { name, .. } = lhs {
             if self.is_pointer(name) {
                 let owned = self.take_ownership(rhs);
-                if let Some(binding) = self.env.get_mut(name) {
+                if let Some(binding) = self.lookup_mut(name) {
                     binding.status = if owned { Status::Owned } else { Status::Empty };
                 }
                 return;
@@ -172,7 +204,7 @@ impl Analyzer {
         self.use_expr(rhs);
     }
 
-    /// Consume a unique pointer rvalue. Returns whether the rvalue is an owner.
+    /// Consume a unique pointer rvalue. Returns whether the rvalue is a live owner.
     fn take_ownership(&mut self, expr: &Expr) -> bool {
         match expr {
             Expr::Malloc { args, .. } => {
@@ -182,12 +214,20 @@ impl Analyzer {
                 true
             }
             Expr::Var { name, span } if self.is_pointer(name) => {
+                let was_owned = self.is_owned(name);
                 self.check_use(name, span, UseKind::Move);
-                true
+                was_owned
             }
             Expr::Assign { lhs, rhs, .. } => {
                 self.check_assign(lhs, rhs);
-                matches!(lhs.as_ref(), Expr::Var { name, .. } if self.is_pointer(name))
+                if let Expr::Var { name, span } = lhs.as_ref() {
+                    if self.is_pointer(name) {
+                        let was_owned = self.is_owned(name);
+                        self.check_use(name, span, UseKind::Move);
+                        return was_owned;
+                    }
+                }
+                false
             }
             Expr::Free { arg, span } => {
                 self.check_free(arg, span);
@@ -215,7 +255,7 @@ impl Analyzer {
     }
 
     fn check_use(&mut self, name: &str, span: &SrcSpan, kind: UseKind) {
-        let Some(binding) = self.env.get(name) else {
+        let Some(binding) = self.lookup(name) else {
             return;
         };
         if binding.ty != Ty::Pointer {
@@ -224,12 +264,12 @@ impl Analyzer {
         match (&binding.status, kind) {
             (Status::Owned, UseKind::Read) => {}
             (Status::Owned, UseKind::Move) => {
-                if let Some(binding) = self.env.get_mut(name) {
+                if let Some(binding) = self.lookup_mut(name) {
                     binding.status = Status::Moved { at: span.clone() };
                 }
             }
             (Status::Owned, UseKind::Free { at }) => {
-                if let Some(binding) = self.env.get_mut(name) {
+                if let Some(binding) = self.lookup_mut(name) {
                     binding.status = Status::Freed { at };
                 }
             }
@@ -290,6 +330,20 @@ enum UseKind {
     Free { at: SrcSpan },
 }
 
+fn merge_scopes(
+    left: Vec<HashMap<String, Binding>>,
+    right: Vec<HashMap<String, Binding>>,
+) -> Vec<HashMap<String, Binding>> {
+    let n = left.len().max(right.len());
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let l = left.get(i).cloned().unwrap_or_default();
+        let r = right.get(i).cloned().unwrap_or_default();
+        out.push(merge_envs(l, r));
+    }
+    out
+}
+
 fn merge_envs(
     mut left: HashMap<String, Binding>,
     right: HashMap<String, Binding>,
@@ -306,7 +360,7 @@ fn merge_status(a: &Status, b: &Status) -> Status {
     match (a, b) {
         (Status::Freed { at }, _) | (_, Status::Freed { at }) => Status::Freed { at: at.clone() },
         (Status::Moved { at }, _) | (_, Status::Moved { at }) => Status::Moved { at: at.clone() },
-        (Status::Owned, Status::Owned) => Status::Owned,
+        (Status::Owned, _) | (_, Status::Owned) => Status::Owned,
         _ => Status::Empty,
     }
 }

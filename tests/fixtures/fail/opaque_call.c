@@ -1,13 +1,11 @@
-/* FAIL: using a pointer after free is use-after-free. */
+/* FAIL: a prototype-only callee cannot be assumed safe. */
 void *malloc(unsigned long n);
 void free(void *p);
-
-void inspect(void *p) {
-}
+void mystery(void *p);
 
 int main(void) {
     void *p = malloc(8);
+    mystery(p);
     free(p);
-    inspect(p);
     return 0;
 }

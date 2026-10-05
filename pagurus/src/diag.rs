@@ -1,4 +1,4 @@
-//! Source location and rustc-style diagnostics.
+//! Source locations and rustc/CORAL-style diagnostics.
 
 use std::fmt;
 use std::path::Path;
@@ -20,6 +20,15 @@ impl SrcSpan {
             line,
             column,
             snippet,
+        }
+    }
+
+    pub fn dummy(file: &str) -> Self {
+        Self {
+            file: file.to_string(),
+            line: 1,
+            column: 1,
+            snippet: String::new(),
         }
     }
 }
@@ -52,10 +61,34 @@ pub enum DiagnosticKind {
     UseAfterMove,
     UseAfterFree,
     DoubleFree,
+    Unsupported,
+    Unproven,
+}
+
+impl DiagnosticKind {
+    pub fn code(self) -> &'static str {
+        match self {
+            DiagnosticKind::UseAfterMove => "use_after_move",
+            DiagnosticKind::UseAfterFree => "use_after_free",
+            DiagnosticKind::DoubleFree => "double_free",
+            DiagnosticKind::Unsupported => "unsupported",
+            DiagnosticKind::Unproven => "unproven_ownership",
+        }
+    }
+
+    pub fn from_code(code: &str) -> Self {
+        match code {
+            "use_after_move" => DiagnosticKind::UseAfterMove,
+            "use_after_free" => DiagnosticKind::UseAfterFree,
+            "double_free" => DiagnosticKind::DoubleFree,
+            "unsupported" => DiagnosticKind::Unsupported,
+            _ => DiagnosticKind::Unproven,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Note {
+pub struct Label {
     pub message: String,
     pub span: SrcSpan,
 }
@@ -65,16 +98,21 @@ pub struct Diagnostic {
     pub kind: DiagnosticKind,
     pub message: String,
     pub span: SrcSpan,
-    pub notes: Vec<Note>,
+    pub primary_label: String,
+    pub notes: Vec<Label>,
+    pub help: String,
 }
 
 impl fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "error: {}", self.message)?;
-        write_span(f, &self.span, "value used here")?;
+        writeln!(f, "error[{}]: {}", self.kind.code(), self.message)?;
+        write_span(f, &self.span, &self.primary_label)?;
         for note in &self.notes {
             writeln!(f, "note: {}", note.message)?;
-            write_span(f, &note.span, "previous event")?;
+            write_span(f, &note.span, &note.message)?;
+        }
+        if !self.help.is_empty() {
+            writeln!(f, "help: {}", self.help)?;
         }
         Ok(())
     }
@@ -91,8 +129,5 @@ fn write_span(f: &mut fmt::Formatter<'_>, span: &SrcSpan, caret_label: &str) -> 
 }
 
 pub fn display_path(path: &Path) -> String {
-    path.canonicalize()
-        .unwrap_or_else(|_| path.to_path_buf())
-        .display()
-        .to_string()
+    path.display().to_string()
 }

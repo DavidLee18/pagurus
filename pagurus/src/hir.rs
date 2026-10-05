@@ -1,116 +1,148 @@
-//! Tiny C subset after lowering `lang-c`'s C11 AST.
+//! Core IR that is serialised to the Idris checker. Node ids map back to C spans.
+
+use std::collections::HashMap;
 
 use crate::diag::SrcSpan;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ty {
-    /// Integers and other trivially copyable values.
     Copy,
-    /// Pointer types modelled as unique owners (like Rust `Box`).
     Pointer,
 }
 
 #[derive(Debug, Clone)]
 pub struct Param {
+    pub id: u32,
     pub name: String,
     pub ty: Ty,
-    pub span: SrcSpan,
 }
 
 #[derive(Debug, Clone)]
 pub struct Function {
+    pub id: u32,
     pub name: String,
+    pub defined: bool,
     pub params: Vec<Param>,
     pub body: Vec<Stmt>,
-    pub span: SrcSpan,
 }
 
 #[derive(Debug, Clone)]
 pub struct Unit {
     pub file: String,
     pub functions: Vec<Function>,
+    pub spans: HashMap<u32, SrcSpan>,
 }
 
 #[derive(Debug, Clone)]
 pub enum Stmt {
-    /// Local declaration, optionally initialized.
+    Block {
+        id: u32,
+        body: Vec<Stmt>,
+    },
     Decl {
+        id: u32,
         name: String,
         ty: Ty,
         init: Option<Expr>,
-        span: SrcSpan,
     },
-    Expr(Expr),
+    Assign {
+        id: u32,
+        name: String,
+        rhs: Expr,
+    },
+    Drop {
+        id: u32,
+        name: String,
+    },
+    Call {
+        id: u32,
+        callee: String,
+        args: Vec<Expr>,
+    },
     Return {
+        id: u32,
         value: Option<Expr>,
-        span: SrcSpan,
     },
     If {
+        id: u32,
         cond: Expr,
         then_branch: Vec<Stmt>,
         else_branch: Vec<Stmt>,
-        span: SrcSpan,
     },
-    Block(Vec<Stmt>),
+    Loop {
+        id: u32,
+        body: Vec<Stmt>,
+    },
+    Expr {
+        id: u32,
+        expr: Expr,
+    },
+    Unsupported {
+        id: u32,
+        reason: String,
+    },
+}
+
+impl Stmt {
+    pub fn id(&self) -> u32 {
+        match self {
+            Stmt::Block { id, .. }
+            | Stmt::Decl { id, .. }
+            | Stmt::Assign { id, .. }
+            | Stmt::Drop { id, .. }
+            | Stmt::Call { id, .. }
+            | Stmt::Return { id, .. }
+            | Stmt::If { id, .. }
+            | Stmt::Loop { id, .. }
+            | Stmt::Expr { id, .. }
+            | Stmt::Unsupported { id, .. } => *id,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub enum Expr {
     Var {
+        id: u32,
         name: String,
-        span: SrcSpan,
     },
     Lit {
-        span: SrcSpan,
+        id: u32,
     },
-    /// `malloc(...)` — produces a fresh unique owner.
     Malloc {
+        id: u32,
         args: Vec<Expr>,
-        span: SrcSpan,
     },
-    /// `free(arg)` — consumes unique ownership of `arg`.
-    Free {
-        arg: Box<Expr>,
-        span: SrcSpan,
-    },
-    /// Other calls: pointer arguments are borrowed, not moved.
     Call {
+        id: u32,
         callee: String,
         args: Vec<Expr>,
-        span: SrcSpan,
     },
     Assign {
-        lhs: Box<Expr>,
+        id: u32,
+        name: String,
         rhs: Box<Expr>,
-        span: SrcSpan,
     },
-    Deref {
-        inner: Box<Expr>,
-        span: SrcSpan,
+    Use {
+        id: u32,
+        args: Vec<Expr>,
     },
-    AddrOf {
-        inner: Box<Expr>,
-        span: SrcSpan,
-    },
-    /// Catch-all for operators we do not special-case; nested exprs are uses.
-    Other {
-        children: Vec<Expr>,
-        span: SrcSpan,
+    Unsupported {
+        id: u32,
+        reason: String,
     },
 }
 
 impl Expr {
-    pub fn span(&self) -> &SrcSpan {
+    pub fn id(&self) -> u32 {
         match self {
-            Expr::Var { span, .. }
-            | Expr::Lit { span }
-            | Expr::Malloc { span, .. }
-            | Expr::Free { span, .. }
-            | Expr::Call { span, .. }
-            | Expr::Assign { span, .. }
-            | Expr::Deref { span, .. }
-            | Expr::AddrOf { span, .. }
-            | Expr::Other { span, .. } => span,
+            Expr::Var { id, .. }
+            | Expr::Lit { id }
+            | Expr::Malloc { id, .. }
+            | Expr::Call { id, .. }
+            | Expr::Assign { id, .. }
+            | Expr::Use { id, .. }
+            | Expr::Unsupported { id, .. } => *id,
         }
     }
 }

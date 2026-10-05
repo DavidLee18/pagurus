@@ -1,4 +1,9 @@
-//! Lower `lang-c` C11 AST into the v1 HIR subset.
+//! Lower `lang-c` C11 AST into the core IR.
+//!
+//! Anything that cannot be modelled is an `Unsupported` node. Statements are
+//! never silently dropped.
+
+use std::collections::{HashMap, HashSet};
 
 use lang_c::ast::{
     BinaryOperator, BlockItem, Declaration, Declarator, DeclaratorKind, DerivedDeclarator,
@@ -27,65 +32,194 @@ impl std::error::Error for ParseError {}
 struct Lowering<'a> {
     file: &'a str,
     source: &'a str,
+    next_id: u32,
+    spans: HashMap<u32, SrcSpan>,
+    pointers: Vec<HashSet<String>>,
 }
 
-impl Lowering<'_> {
-    fn span(&self, span: Span) -> SrcSpan {
-        SrcSpan::from_offset(self.file, self.source, span.start)
+impl<'a> Lowering<'a> {
+    fn new(file: &'a str, source: &'a str) -> Self {
+        Self {
+            file,
+            source,
+            next_id: 1,
+            spans: HashMap::new(),
+            pointers: vec![HashSet::new()],
+        }
     }
 
-    fn expr_span(&self, expr: &Node<Expression>) -> SrcSpan {
-        self.span(expr.span)
+    fn alloc(&mut self, span: Span) -> u32 {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.spans
+            .insert(id, SrcSpan::from_offset(self.file, self.source, span.start));
+        id
     }
 
-    fn lower_unit(&self, tu: &lang_c::ast::TranslationUnit) -> Unit {
-        let mut functions = Vec::new();
+    fn alloc_node<T>(&mut self, node: &Node<T>) -> u32 {
+        self.alloc(node.span)
+    }
+
+    fn is_pointer_name(&self, name: &str) -> bool {
+        self.pointers.iter().rev().any(|s| s.contains(name))
+    }
+
+    fn declare_pointer(&mut self, name: String) {
+        if let Some(scope) = self.pointers.last_mut() {
+            scope.insert(name);
+        }
+    }
+
+    fn push_scope(&mut self) {
+        self.pointers.push(HashSet::new());
+    }
+
+    fn pop_scope(&mut self) {
+        self.pointers.pop();
+    }
+
+    fn unsupported_expr(&mut self, span: Span, reason: impl Into<String>) -> Expr {
+        Expr::Unsupported {
+            id: self.alloc(span),
+            reason: reason.into(),
+        }
+    }
+
+    fn unsupported_stmt(&mut self, span: Span, reason: impl Into<String>) -> Stmt {
+        Stmt::Unsupported {
+            id: self.alloc(span),
+            reason: reason.into(),
+        }
+    }
+
+    fn lower_unit(&mut self, tu: &lang_c::ast::TranslationUnit) -> Unit {
+        let mut by_name: HashMap<String, Function> = HashMap::new();
+        let mut extras: Vec<Stmt> = Vec::new();
         for ext in &tu.0 {
-            if let ExternalDeclaration::FunctionDefinition(def) = &ext.node {
-                if let Some(fun) = self.lower_function(def) {
-                    functions.push(fun);
+            match &ext.node {
+                ExternalDeclaration::FunctionDefinition(def) => {
+                    if let Some(fun) = self.lower_function(def, true) {
+                        by_name.insert(fun.name.clone(), fun);
+                    }
+                }
+                ExternalDeclaration::Declaration(decl) => {
+                    for init in &decl.node.declarators {
+                        let d = &init.node.declarator.node;
+                        if is_function_declarator(d) {
+                            if let Some(fun) = self.lower_function_decl(init) {
+                                by_name.entry(fun.name.clone()).or_insert(fun);
+                            }
+                        } else {
+                            extras.push(self.unsupported_stmt(
+                                init.span,
+                                format!(
+                                    "global declaration of `{}` is not modelled",
+                                    declarator_name(d).unwrap_or_else(|| "<anon>".into())
+                                ),
+                            ));
+                        }
+                    }
+                }
+                ExternalDeclaration::StaticAssert(_) => {
+                    extras.push(self.unsupported_stmt(ext.span, "static_assert is not modelled"));
                 }
             }
         }
+        let mut functions: Vec<Function> = by_name.into_values().collect();
+        if !extras.is_empty() {
+            functions.push(Function {
+                id: self.alloc(Span { start: 0, end: 0 }),
+                name: "__pagurus_globals".into(),
+                defined: true,
+                params: Vec::new(),
+                body: extras,
+            });
+        }
+        functions.sort_by(|a, b| a.name.cmp(&b.name));
         Unit {
             file: self.file.to_string(),
             functions,
+            spans: std::mem::take(&mut self.spans),
         }
     }
 
-    fn lower_function(&self, def: &Node<FunctionDefinition>) -> Option<Function> {
-        let name = declarator_name(&def.node.declarator.node)?;
-        let params = function_params(&def.node.declarator.node)
+    fn lower_function_decl(&mut self, init: &Node<InitDeclarator>) -> Option<Function> {
+        let d = &init.node.declarator.node;
+        let name = declarator_name(d)?;
+        if is_builtin(&name) {
+            return None;
+        }
+        let params = function_params(d)
             .into_iter()
             .filter_map(|p| self.lower_param(p))
             .collect();
-        let body = self.lower_statement(&def.node.statement);
         Some(Function {
+            id: self.alloc_node(init),
             name,
+            defined: false,
             params,
-            body,
-            span: self.span(def.span),
+            body: Vec::new(),
         })
     }
 
-    fn lower_param(&self, param: &Node<ParameterDeclaration>) -> Option<Param> {
+    fn lower_function(
+        &mut self,
+        def: &Node<FunctionDefinition>,
+        defined: bool,
+    ) -> Option<Function> {
+        let name = declarator_name(&def.node.declarator.node)?;
+        self.push_scope();
+        let params = function_params(&def.node.declarator.node)
+            .into_iter()
+            .filter_map(|p| {
+                let param = self.lower_param(p);
+                if let Some(p) = &param {
+                    if p.ty == Ty::Pointer {
+                        self.declare_pointer(p.name.clone());
+                    }
+                }
+                param
+            })
+            .collect();
+        let body = match &def.node.statement.node {
+            Statement::Compound(items) => self.lower_items(items),
+            _ => self.lower_statement(&def.node.statement),
+        };
+        self.pop_scope();
+        Some(Function {
+            id: self.alloc_node(def),
+            name,
+            defined,
+            params,
+            body,
+        })
+    }
+
+    fn lower_param(&mut self, param: &Node<ParameterDeclaration>) -> Option<Param> {
         let decl = param.node.declarator.as_ref()?;
         let name = declarator_name(&decl.node)?;
         if name == "void" {
             return None;
         }
+        if has_array(&decl.node) {
+            return Some(Param {
+                id: self.alloc_node(decl),
+                name,
+                ty: Ty::Copy,
+            });
+        }
         Some(Param {
+            id: self.alloc_node(decl),
             name,
             ty: if is_pointer_declarator(&decl.node) {
                 Ty::Pointer
             } else {
                 Ty::Copy
             },
-            span: self.span(decl.span),
         })
     }
 
-    fn lower_items(&self, items: &[Node<BlockItem>]) -> Vec<Stmt> {
+    fn lower_items(&mut self, items: &[Node<BlockItem>]) -> Vec<Stmt> {
         let mut out = Vec::new();
         for item in items {
             out.extend(self.lower_block_item(item));
@@ -93,16 +227,32 @@ impl Lowering<'_> {
         out
     }
 
-    fn lower_statement(&self, stmt: &Node<Statement>) -> Vec<Stmt> {
-        match &stmt.node {
-            Statement::Compound(items) => vec![Stmt::Block(self.lower_items(items))],
-            Statement::Expression(Some(expr)) => {
-                vec![Stmt::Expr(self.lower_expr(expr))]
+    fn lower_block_item(&mut self, item: &Node<BlockItem>) -> Vec<Stmt> {
+        match &item.node {
+            BlockItem::Declaration(decl) => self.lower_declaration(decl),
+            BlockItem::Statement(stmt) => self.lower_statement(stmt),
+            BlockItem::StaticAssert(_) => {
+                vec![self.unsupported_stmt(item.span, "static_assert is not modelled")]
             }
+        }
+    }
+
+    fn lower_statement(&mut self, stmt: &Node<Statement>) -> Vec<Stmt> {
+        match &stmt.node {
+            Statement::Compound(items) => {
+                self.push_scope();
+                let body = self.lower_items(items);
+                self.pop_scope();
+                vec![Stmt::Block {
+                    id: self.alloc_node(stmt),
+                    body,
+                }]
+            }
+            Statement::Expression(Some(expr)) => self.lower_expr_stmt(expr),
             Statement::Expression(None) => Vec::new(),
             Statement::Return(value) => vec![Stmt::Return {
+                id: self.alloc_node(stmt),
                 value: value.as_ref().map(|e| self.lower_expr(e)),
-                span: self.span(stmt.span),
             }],
             Statement::If(if_stmt) => {
                 let then_branch = self.lower_statement(&if_stmt.node.then_statement);
@@ -113,100 +263,94 @@ impl Lowering<'_> {
                     .map(|s| self.lower_statement(s))
                     .unwrap_or_default();
                 vec![Stmt::If {
+                    id: self.alloc_node(stmt),
                     cond: self.lower_expr(&if_stmt.node.condition),
                     then_branch,
                     else_branch,
-                    span: self.span(stmt.span),
                 }]
             }
             Statement::While(w) => {
-                let mut body = vec![Stmt::Expr(self.lower_expr(&w.node.expression))];
+                let mut body = vec![Stmt::Expr {
+                    id: self.alloc_node(&w.node.expression),
+                    expr: self.lower_expr(&w.node.expression),
+                }];
                 body.extend(self.lower_statement(&w.node.statement));
-                vec![Stmt::Block(body)]
+                vec![Stmt::Loop {
+                    id: self.alloc_node(stmt),
+                    body,
+                }]
             }
             Statement::DoWhile(w) => {
                 let mut body = self.lower_statement(&w.node.statement);
-                body.push(Stmt::Expr(self.lower_expr(&w.node.expression)));
-                vec![Stmt::Block(body)]
+                body.push(Stmt::Expr {
+                    id: self.alloc_node(&w.node.expression),
+                    expr: self.lower_expr(&w.node.expression),
+                });
+                vec![Stmt::Loop {
+                    id: self.alloc_node(stmt),
+                    body,
+                }]
             }
             Statement::For(for_stmt) => {
-                // Walk the loop once (v1 does not model repeated iteration).
-                let mut body = Vec::new();
+                self.push_scope();
+                let mut prefix = Vec::new();
                 match &for_stmt.node.initializer.node {
                     ForInitializer::Expression(expr) => {
-                        body.push(Stmt::Expr(self.lower_expr(expr)));
+                        prefix.extend(self.lower_expr_stmt(expr));
                     }
+                    ForInitializer::Empty => {}
                     ForInitializer::Declaration(decl) => {
-                        body.extend(self.lower_declaration(decl));
+                        prefix.extend(self.lower_declaration(decl));
                     }
-                    ForInitializer::Empty | ForInitializer::StaticAssert(_) => {}
+                    ForInitializer::StaticAssert(_) => {
+                        prefix.push(self.unsupported_stmt(
+                            for_stmt.node.initializer.span,
+                            "static_assert in for-init is not modelled",
+                        ));
+                    }
                 }
+                let mut loop_body = Vec::new();
                 if let Some(cond) = &for_stmt.node.condition {
-                    body.push(Stmt::Expr(self.lower_expr(cond)));
+                    loop_body.push(Stmt::Expr {
+                        id: self.alloc_node(cond),
+                        expr: self.lower_expr(cond),
+                    });
                 }
-                body.extend(self.lower_statement(&for_stmt.node.statement));
+                loop_body.extend(self.lower_statement(&for_stmt.node.statement));
                 if let Some(step) = &for_stmt.node.step {
-                    body.push(Stmt::Expr(self.lower_expr(step)));
+                    loop_body.extend(self.lower_expr_stmt(step));
                 }
-                vec![Stmt::Block(body)]
+                let loop_stmt = Stmt::Loop {
+                    id: self.alloc_node(stmt),
+                    body: loop_body,
+                };
+                self.pop_scope();
+                let mut block_body = prefix;
+                block_body.push(loop_stmt);
+                vec![Stmt::Block {
+                    id: self.alloc_node(stmt),
+                    body: block_body,
+                }]
             }
             Statement::Labeled(labeled) => self.lower_statement(&labeled.node.statement),
-            _ => Vec::new(),
-        }
-    }
-
-    fn lower_block_item(&self, item: &Node<BlockItem>) -> Vec<Stmt> {
-        match &item.node {
-            BlockItem::Declaration(decl) => self.lower_declaration(decl),
-            BlockItem::Statement(stmt) => self.lower_statement(stmt),
-            BlockItem::StaticAssert(_) => Vec::new(),
-        }
-    }
-
-    fn lower_declaration(&self, decl: &Node<Declaration>) -> Vec<Stmt> {
-        let mut out = Vec::new();
-        for init_decl in &decl.node.declarators {
-            if let Some(stmt) = self.lower_init_declarator(init_decl) {
-                out.push(stmt);
+            Statement::Goto(_) => {
+                vec![self.unsupported_stmt(stmt.span, "goto is not modelled")]
             }
+            Statement::Continue => {
+                vec![self.unsupported_stmt(stmt.span, "continue is not modelled")]
+            }
+            Statement::Break => {
+                vec![self.unsupported_stmt(stmt.span, "break is not modelled")]
+            }
+            Statement::Switch(_) => {
+                vec![self.unsupported_stmt(stmt.span, "switch is not modelled")]
+            }
+            _ => vec![self.unsupported_stmt(stmt.span, "this statement form is not modelled")],
         }
-        out
     }
 
-    fn lower_init_declarator(&self, init: &Node<InitDeclarator>) -> Option<Stmt> {
-        let declarator = &init.node.declarator.node;
-        if is_function_declarator(declarator) {
-            return None;
-        }
-        let name = declarator_name(declarator)?;
-        let ty = if is_pointer_declarator(declarator) {
-            Ty::Pointer
-        } else {
-            Ty::Copy
-        };
-        let init_expr = match &init.node.initializer {
-            Some(Node {
-                node: Initializer::Expression(expr),
-                ..
-            }) => Some(self.lower_expr(expr)),
-            _ => None,
-        };
-        Some(Stmt::Decl {
-            name,
-            ty,
-            init: init_expr,
-            span: self.span(init.span),
-        })
-    }
-
-    fn lower_expr(&self, expr: &Node<Expression>) -> Expr {
-        let span = self.expr_span(expr);
+    fn lower_expr_stmt(&mut self, expr: &Node<Expression>) -> Vec<Stmt> {
         match &expr.node {
-            Expression::Identifier(id) => Expr::Var {
-                name: id.node.name.clone(),
-                span,
-            },
-            Expression::Constant(_) | Expression::StringLiteral(_) => Expr::Lit { span },
             Expression::Call(call) => {
                 let callee = callee_name(&call.node.callee.node);
                 let args: Vec<Expr> = call
@@ -216,86 +360,239 @@ impl Lowering<'_> {
                     .map(|a| self.lower_expr(a))
                     .collect();
                 match callee.as_deref() {
-                    Some("malloc") | Some("calloc") => Expr::Malloc { args, span },
-                    Some("free") => {
-                        let arg = args
-                            .into_iter()
-                            .next()
-                            .unwrap_or(Expr::Lit { span: span.clone() });
-                        Expr::Free {
-                            arg: Box::new(arg),
-                            span,
-                        }
-                    }
-                    Some(name) => Expr::Call {
+                    Some("free") => match args.as_slice() {
+                        [Expr::Var { id, name }] => vec![Stmt::Drop {
+                            id: *id,
+                            name: name.clone(),
+                        }],
+                        _ => vec![self.unsupported_stmt(
+                            expr.span,
+                            "free() of a non-variable is not modelled",
+                        )],
+                    },
+                    Some("malloc") | Some("calloc") => vec![Stmt::Expr {
+                        id: self.alloc_node(expr),
+                        expr: Expr::Malloc {
+                            id: self.alloc_node(expr),
+                            args,
+                        },
+                    }],
+                    Some(name) => vec![Stmt::Call {
+                        id: self.alloc_node(expr),
                         callee: name.to_string(),
                         args,
-                        span,
+                    }],
+                    None => vec![self.unsupported_stmt(
+                        expr.span,
+                        "call through a function pointer is not modelled",
+                    )],
+                }
+            }
+            Expression::BinaryOperator(bin)
+                if matches!(bin.node.operator.node, BinaryOperator::Assign) =>
+            {
+                if let Expression::Identifier(id) = &bin.node.lhs.node {
+                    vec![Stmt::Assign {
+                        id: self.alloc_node(expr),
+                        name: id.node.name.clone(),
+                        rhs: self.lower_expr(&bin.node.rhs),
+                    }]
+                } else {
+                    vec![self.unsupported_stmt(
+                        expr.span,
+                        "assignment to a non-variable place is not modelled",
+                    )]
+                }
+            }
+            _ => vec![Stmt::Expr {
+                id: self.alloc_node(expr),
+                expr: self.lower_expr(expr),
+            }],
+        }
+    }
+
+    fn lower_declaration(&mut self, decl: &Node<Declaration>) -> Vec<Stmt> {
+        let mut out = Vec::new();
+        for init_decl in &decl.node.declarators {
+            if is_function_declarator(&init_decl.node.declarator.node) {
+                out.push(self.unsupported_stmt(
+                    init_decl.span,
+                    "nested function declaration is not modelled",
+                ));
+                continue;
+            }
+            if let Some(stmt) = self.lower_init_declarator(init_decl) {
+                out.push(stmt);
+            } else {
+                out.push(
+                    self.unsupported_stmt(init_decl.span, "declaration could not be modelled"),
+                );
+            }
+        }
+        if out.is_empty() && !decl.node.declarators.is_empty() {
+            out.push(self.unsupported_stmt(decl.span, "declaration could not be modelled"));
+        }
+        out
+    }
+
+    fn lower_init_declarator(&mut self, init: &Node<InitDeclarator>) -> Option<Stmt> {
+        let declarator = &init.node.declarator.node;
+        if has_array(declarator) {
+            return Some(self.unsupported_stmt(init.span, "array types are not modelled"));
+        }
+        let name = declarator_name(declarator)?;
+        let ty = if is_pointer_declarator(declarator) {
+            Ty::Pointer
+        } else {
+            Ty::Copy
+        };
+        if ty == Ty::Pointer {
+            self.declare_pointer(name.clone());
+        }
+        let init_expr = match &init.node.initializer {
+            Some(Node {
+                node: Initializer::Expression(expr),
+                ..
+            }) => Some(self.lower_expr(expr)),
+            Some(_) => {
+                return Some(
+                    self.unsupported_stmt(init.span, "this initializer form is not modelled"),
+                );
+            }
+            None => None,
+        };
+        Some(Stmt::Decl {
+            id: self.alloc_node(init),
+            name,
+            ty,
+            init: init_expr,
+        })
+    }
+
+    fn lower_expr(&mut self, expr: &Node<Expression>) -> Expr {
+        match &expr.node {
+            Expression::Identifier(id) => Expr::Var {
+                id: self.alloc_node(expr),
+                name: id.node.name.clone(),
+            },
+            Expression::Constant(_) | Expression::StringLiteral(_) => Expr::Lit {
+                id: self.alloc_node(expr),
+            },
+            Expression::Call(call) => {
+                let callee = callee_name(&call.node.callee.node);
+                let args: Vec<Expr> = call
+                    .node
+                    .arguments
+                    .iter()
+                    .map(|a| self.lower_expr(a))
+                    .collect();
+                match callee.as_deref() {
+                    Some("malloc") | Some("calloc") => Expr::Malloc {
+                        id: self.alloc_node(expr),
+                        args,
                     },
-                    None => Expr::Other {
-                        children: args,
-                        span,
+                    Some("free") => self.unsupported_expr(
+                        expr.span,
+                        "free() used as an expression is not modelled",
+                    ),
+                    Some(name) => Expr::Call {
+                        id: self.alloc_node(expr),
+                        callee: name.to_string(),
+                        args,
                     },
+                    None => self.unsupported_expr(
+                        expr.span,
+                        "call through a function pointer is not modelled",
+                    ),
                 }
             }
             Expression::UnaryOperator(unary) => {
                 let inner = self.lower_expr(&unary.node.operand);
                 match unary.node.operator.node {
-                    UnaryOperator::Indirection => Expr::Deref {
-                        inner: Box::new(inner),
-                        span,
-                    },
-                    UnaryOperator::Address => Expr::AddrOf {
-                        inner: Box::new(inner),
-                        span,
-                    },
-                    _ => Expr::Other {
-                        children: vec![inner],
-                        span,
+                    UnaryOperator::Indirection => self.unsupported_expr(
+                        expr.span,
+                        "pointer dereference is not modelled (pagurus tracks the unique pointer, not the pointee)",
+                    ),
+                    UnaryOperator::Address => self.unsupported_expr(
+                        expr.span,
+                        "address-of is not modelled",
+                    ),
+                    _ => Expr::Use {
+                        id: self.alloc_node(expr),
+                        args: vec![inner],
                     },
                 }
             }
             Expression::BinaryOperator(bin) => {
+                let op = &bin.node.operator.node;
+                if matches!(op, BinaryOperator::Assign) {
+                    if let Expression::Identifier(id) = &bin.node.lhs.node {
+                        return Expr::Assign {
+                            id: self.alloc_node(expr),
+                            name: id.node.name.clone(),
+                            rhs: Box::new(self.lower_expr(&bin.node.rhs)),
+                        };
+                    }
+                    return self.unsupported_expr(
+                        expr.span,
+                        "assignment to a non-variable place is not modelled",
+                    );
+                }
+                if matches!(
+                    op,
+                    BinaryOperator::Index | BinaryOperator::Plus | BinaryOperator::Minus
+                ) && (self.expr_is_pointer(&bin.node.lhs) || self.expr_is_pointer(&bin.node.rhs))
+                {
+                    return self.unsupported_expr(expr.span, "pointer arithmetic is not modelled");
+                }
                 let lhs = self.lower_expr(&bin.node.lhs);
                 let rhs = self.lower_expr(&bin.node.rhs);
-                if matches!(bin.node.operator.node, BinaryOperator::Assign) {
-                    Expr::Assign {
-                        lhs: Box::new(lhs),
-                        rhs: Box::new(rhs),
-                        span,
-                    }
-                } else {
-                    Expr::Other {
-                        children: vec![lhs, rhs],
-                        span,
-                    }
+                Expr::Use {
+                    id: self.alloc_node(expr),
+                    args: vec![lhs, rhs],
                 }
             }
             Expression::Cast(cast) => self.lower_expr(&cast.node.expression),
-            Expression::Conditional(cond) => Expr::Other {
-                children: vec![
-                    self.lower_expr(&cond.node.condition),
-                    self.lower_expr(&cond.node.then_expression),
-                    self.lower_expr(&cond.node.else_expression),
-                ],
-                span,
+            Expression::Conditional(_) => {
+                self.unsupported_expr(expr.span, "ternary (?:) is not modelled")
+            }
+            Expression::Comma(_) => {
+                self.unsupported_expr(expr.span, "comma operator is not modelled")
+            }
+            Expression::Member(_) => self.unsupported_expr(
+                expr.span,
+                "member access of a unique pointer is not modelled",
+            ),
+            Expression::SizeOfTy(_) => Expr::Lit {
+                id: self.alloc_node(expr),
             },
-            Expression::Comma(items) => Expr::Other {
-                children: items.iter().map(|e| self.lower_expr(e)).collect(),
-                span,
+            Expression::SizeOfVal(_) => Expr::Lit {
+                id: self.alloc_node(expr),
             },
-            Expression::Member(member) => Expr::Other {
-                children: vec![self.lower_expr(&member.node.expression)],
-                span,
+            Expression::AlignOf(_) => Expr::Lit {
+                id: self.alloc_node(expr),
             },
-            Expression::SizeOfVal(val) => self.lower_expr(&val.node.0),
-            Expression::Statement(_) => Expr::Other {
-                children: Vec::new(),
-                span,
-            },
-            _ => Expr::Lit { span },
+            Expression::Statement(_) => {
+                self.unsupported_expr(expr.span, "GNU statement-expression is not modelled")
+            }
+            Expression::GenericSelection(_) => {
+                self.unsupported_expr(expr.span, "_Generic is not modelled")
+            }
+            _ => self.unsupported_expr(expr.span, "this expression form is not modelled"),
         }
     }
+
+    fn expr_is_pointer(&self, expr: &Node<Expression>) -> bool {
+        match &expr.node {
+            Expression::Identifier(id) => self.is_pointer_name(&id.node.name),
+            Expression::Cast(cast) => self.expr_is_pointer(&cast.node.expression),
+            _ => false,
+        }
+    }
+}
+
+fn is_builtin(name: &str) -> bool {
+    matches!(name, "malloc" | "calloc" | "free")
 }
 
 fn declarator_name(decl: &Declarator) -> Option<String> {
@@ -316,6 +613,20 @@ fn is_pointer_declarator(decl: &Declarator) -> bool {
     }
     match &decl.kind.node {
         DeclaratorKind::Declarator(inner) => is_pointer_declarator(&inner.node),
+        _ => false,
+    }
+}
+
+fn has_array(decl: &Declarator) -> bool {
+    if decl
+        .derived
+        .iter()
+        .any(|d| matches!(d.node, DerivedDeclarator::Array(_)))
+    {
+        return true;
+    }
+    match &decl.kind.node {
+        DeclaratorKind::Declarator(inner) => has_array(&inner.node),
         _ => false,
     }
 }
@@ -356,9 +667,6 @@ fn callee_name(expr: &Expression) -> Option<String> {
 }
 
 /// Replace comments with spaces so line/column offsets stay aligned with `source`.
-///
-/// `lang-c`'s `parse_preprocessed` does not run a preprocessor, so `/* */` and
-/// `//` comments must be stripped first.
 fn strip_comments_keep_layout(source: &str) -> String {
     let chars: Vec<char> = source.chars().collect();
     let mut out = String::with_capacity(source.len());
@@ -422,7 +730,7 @@ fn strip_comments_keep_layout(source: &str) -> String {
     out
 }
 
-/// Parse preprocessed C (no `#include` expansion) into HIR.
+/// Parse preprocessed C (no `#include` expansion) into IR.
 pub fn parse_source(file: &str, source: &str) -> Result<Unit, ParseError> {
     let config = Config {
         cpp_command: String::new(),
@@ -438,7 +746,7 @@ pub fn parse_source(file: &str, source: &str) -> Result<Unit, ParseError> {
             format_expected(&err.expected)
         ),
     })?;
-    let lowering = Lowering { file, source };
+    let mut lowering = Lowering::new(file, source);
     Ok(lowering.lower_unit(&parsed.unit))
 }
 

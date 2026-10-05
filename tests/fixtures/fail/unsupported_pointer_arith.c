@@ -1,13 +1,10 @@
-/* FAIL: using a pointer after free is use-after-free. */
+/* FAIL: pointer arithmetic is not modelled. */
 void *malloc(unsigned long n);
 void free(void *p);
 
-void inspect(void *p) {
-}
-
 int main(void) {
     void *p = malloc(8);
+    p = p + 1;
     free(p);
-    inspect(p);
     return 0;
 }

@@ -1,13 +1,14 @@
-/* FAIL: using a pointer after free is use-after-free. */
+/* FAIL: passing a unique owner to a consuming function is a move. */
 void *malloc(unsigned long n);
 void free(void *p);
 
-void inspect(void *p) {
+void consume(void *p) {
+    free(p);
 }
 
 int main(void) {
     void *p = malloc(8);
+    consume(p);
     free(p);
-    inspect(p);
     return 0;
 }

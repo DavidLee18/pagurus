@@ -1,11 +1,11 @@
 error[use_after_move]: use of moved value `p`
  --> use_after_move.c:8:10
   |
-   8 |     free(p);
-     |          ^ used here after move
+8 |     free(p);
+  |          ^ used here after move
 note: value moved here
  --> use_after_move.c:7:15
   |
-   7 |     void *q = p;
-     |               ^ value moved here
+7 |     void *q = p;
+  |               ^ value moved here
 help: this pointer was moved; free the unique owner instead, not the moved-from name

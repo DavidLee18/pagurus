@@ -27,6 +27,27 @@ modules = Pagurus.IR
         , Pagurus.Safety.Seq
         , Pagurus.Safety.Expr
         , Pagurus.Safety.Stmt
+        , Pagurus.Heap
+        , Pagurus.Heap.Eval
+        , Pagurus.Heap.Fits
+        , Pagurus.Heap.Update
+        , Pagurus.Heap.Act
+        , Pagurus.Heap.Drop
+        , Pagurus.Heap.Thm
+        , Pagurus.Heap.Lit
+        , Pagurus.Heap.Var
+        , Pagurus.Heap.Seq
+        , Pagurus.Heap.Ended
+        , Pagurus.Heap.Args
+        , Pagurus.Heap.Call
+        , Pagurus.Heap.Malloc
+        , Pagurus.Heap.Assign
+        , Pagurus.Heap.Decl
+        , Pagurus.Heap.If
+        , Pagurus.Heap.Return
+        , Pagurus.Heap.Expr
+        , Pagurus.Heap.Stmt
+        , Pagurus.Heap.Witness
         , Pagurus.Sexp
         , Pagurus.ParseIR
         , Pagurus.Output

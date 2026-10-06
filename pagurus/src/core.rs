@@ -33,30 +33,50 @@ struct CoreLocJson {
     label: String,
 }
 
+const CORE_MISSING: &str = "pagurus-core not found. Build it with Idris 2 0.8.0 \
+(`cargo test --features build-core`, or `cd core && idris2 --build pagurus-core.ipkg`) \
+and put `scheme` (Chez Scheme) on PATH, or set PAGURUS_CORE to the wrapper script. See README.";
+
 pub fn check_unit(unit: &Unit) -> Result<Vec<Diagnostic>, ParseError> {
     let ir = crate::emit::emit_unit(unit);
     let core = core_path().ok_or_else(|| ParseError {
-        message:
-            "pagurus-core executable not found; install Idris 2 0.8.0 and rebuild (see README)"
-                .into(),
+        message: CORE_MISSING.into(),
     })?;
 
-    let tmp = tempfile(ir.as_bytes())?;
+    let mut tmp = tempfile::NamedTempFile::new().map_err(|e| ParseError {
+        message: format!("cannot create IR temp file: {e}"),
+    })?;
+    tmp.write_all(ir.as_bytes()).map_err(|e| ParseError {
+        message: format!("cannot write IR temp file: {e}"),
+    })?;
+    tmp.flush().map_err(|e| ParseError {
+        message: format!("cannot write IR temp file: {e}"),
+    })?;
+
     let output = Command::new(&core)
-        .arg(&tmp.path)
+        .arg(tmp.path())
         .output()
         .map_err(|e| ParseError {
-            message: format!("failed to spawn pagurus-core ({}): {e}", core.display()),
+            message: format!(
+                "failed to spawn pagurus-core ({}): {e}. \
+The Idris 2 binary is a Chez Scheme wrapper; install `scheme` on PATH. {CORE_MISSING}",
+                core.display()
+            ),
         })?;
     drop(tmp);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
     let line = stdout.lines().last().unwrap_or("").trim();
     if line.is_empty() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        let hint = if stderr.contains("scheme") || stderr.contains("chez") {
+            " Chez Scheme (`scheme`) is required to run pagurus-core."
+        } else {
+            ""
+        };
         return Ok(vec![unproven(
             &unit.file,
-            format!("pagurus-core produced no verdict (stderr: {stderr})"),
+            format!("pagurus-core produced no verdict (stderr: {stderr}).{hint}"),
         )]);
     }
 
@@ -154,31 +174,4 @@ fn which(name: &str) -> Option<PathBuf> {
         }
     }
     None
-}
-
-struct TempIr {
-    path: PathBuf,
-}
-
-impl Drop for TempIr {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
-}
-
-use std::sync::atomic::{AtomicU64, Ordering};
-
-static IR_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-fn tempfile(bytes: &[u8]) -> Result<TempIr, ParseError> {
-    let dir = std::env::temp_dir();
-    let n = IR_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let path = dir.join(format!("pagurus-{}-{}.ir", std::process::id(), n));
-    let mut f = std::fs::File::create(&path).map_err(|e| ParseError {
-        message: format!("cannot write IR to {}: {e}", path.display()),
-    })?;
-    f.write_all(bytes).map_err(|e| ParseError {
-        message: format!("cannot write IR to {}: {e}", path.display()),
-    })?;
-    Ok(TempIr { path })
 }

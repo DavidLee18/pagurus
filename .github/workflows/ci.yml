@@ -1,0 +1,54 @@
+name: ci
+
+on:
+  push:
+    branches: [main, "cursor/**"]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install Chez Scheme
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y chezscheme libgmp-dev build-essential
+
+      - name: Cache Idris 2
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.idris2
+            /tmp/idris2-src
+          key: idris2-0.8.0-${{ runner.os }}
+
+      - name: Install Idris 2 0.8.0
+        run: |
+          if [ ! -x "${HOME}/.idris2/bin/idris2" ]; then
+            ./scripts/setup-idris2.sh
+          fi
+          echo "${HOME}/.idris2/bin" >> "${GITHUB_PATH}"
+
+      - name: Idris core
+        run: |
+          idris2 --version
+          idris2 --build pagurus-core.ipkg
+        working-directory: core
+
+      - name: cargo test
+        env:
+          PAGURUS_CORE: ${{ github.workspace }}/core/build/exec/pagurus-core
+        run: cargo test -p pagurus --features build-core
+
+      - name: cargo clippy
+        env:
+          PAGURUS_CORE: ${{ github.workspace }}/core/build/exec/pagurus-core
+        run: cargo clippy -p pagurus --all-targets --features build-core -- -D warnings

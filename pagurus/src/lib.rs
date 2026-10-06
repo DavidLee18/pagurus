@@ -1,4 +1,4 @@
-//! pagurus: verified ownership diagnostics for a small C subset.
+//! pagurus: a total Idris 2 ownership checker with lemmas, plus a Rust shell.
 //!
 //! The Idris 2 core is the only source of acceptance. This crate parses C,
 //! serialises IR, and renders the core's structured diagnostics.

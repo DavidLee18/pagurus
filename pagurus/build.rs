@@ -1,4 +1,11 @@
 //! Build the Idris 2 `pagurus-core` executable next to this crate.
+//!
+//! The `build-core` cargo feature (on by default for local development)
+//! compiles the Idris checker. `cargo install` and docs.rs must not require
+//! Idris 2 or Chez Scheme: disable the feature (`--no-default-features`,
+//! which docs.rs does automatically) and the build becomes a no-op. At
+//! runtime the CLI looks up `PAGURUS_CORE` / `PATH` and reports a clear
+//! error if the wrapper or `scheme` is missing.
 
 use std::env;
 use std::fs;
@@ -11,23 +18,43 @@ fn main() {
     println!("cargo:rerun-if-changed={}", core_dir.display());
     println!("cargo:rerun-if-env-changed=IDRIS2");
     println!("cargo:rerun-if-env-changed=PAGURUS_CORE");
+    println!("cargo:rerun-if-env-changed=DOCS_RS");
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let dest = out_dir.join("pagurus-core");
 
     if let Ok(prebuilt) = env::var("PAGURUS_CORE") {
-        let src = PathBuf::from(prebuilt);
+        let src = PathBuf::from(&prebuilt);
+        if !src.exists() {
+            println!(
+                "cargo:warning=PAGURUS_CORE={} does not exist; skipping core copy",
+                src.display()
+            );
+            return;
+        }
         copy_core_bundle(&src, &dest);
         println!("cargo:rustc-env=PAGURUS_CORE_PATH={}", dest.display());
         return;
     }
 
-    let idris2 = find_idris2().unwrap_or_else(|| {
-        panic!(
-            "Idris 2 0.8.0 not found. Install it with scripts/setup-idris2.sh \
-             (or set IDRIS2 / PAGURUS_CORE). See README.md."
+    let docs_rs = env::var("DOCS_RS").is_ok();
+    let build_core = env::var("CARGO_FEATURE_BUILD_CORE").is_ok();
+    if docs_rs || !build_core {
+        println!(
+            "cargo:warning=skipping pagurus-core build (docs.rs or --no-default-features); \
+             set PAGURUS_CORE or enable feature build-core to compile the Idris checker"
         );
-    });
+        return;
+    }
+
+    let Some(idris2) = find_idris2() else {
+        println!(
+            "cargo:warning=Idris 2 0.8.0 not found; pagurus-core will be looked up at \
+             runtime. Install with scripts/setup-idris2.sh (Chez Scheme `scheme` required), \
+             or set IDRIS2 / PAGURUS_CORE. See README.md."
+        );
+        return;
+    };
 
     let status = Command::new(&idris2)
         .args(["--build", "pagurus-core.ipkg"])
@@ -35,7 +62,10 @@ fn main() {
         .status()
         .unwrap_or_else(|e| panic!("failed to run {}: {e}", idris2.display()));
     if !status.success() {
-        panic!("idris2 --build pagurus-core.ipkg failed");
+        panic!(
+            "idris2 --build pagurus-core.ipkg failed. Idris 2 0.8.0 and Chez Scheme \
+             (`scheme` on PATH) are required to compile the checker."
+        );
     }
 
     let built = core_dir.join("build").join("exec").join("pagurus-core");

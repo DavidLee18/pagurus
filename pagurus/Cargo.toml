@@ -4,13 +4,24 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.74"
 license = "MIT"
-description = "Verified static ownership diagnostics for a small C subset"
+description = "Static ownership diagnostics for a small C subset (Idris checker + Rust shell)"
 readme = "../README.md"
 repository = "https://github.com/DavidLee18/pagurus"
 keywords = ["c", "ownership", "borrow-checker", "static-analysis", "idris"]
 categories = ["command-line-utilities", "development-tools"]
 
+[features]
+default = ["build-core"]
+# Compile the Idris 2 checker during `cargo build`. Off for docs.rs / `cargo install`
+# without Idris: the binary then looks up `pagurus-core` and Chez Scheme at runtime.
+build-core = []
+
+[package.metadata.docs.rs]
+no-default-features = true
+targets = ["x86_64-unknown-linux-gnu"]
+
 [dependencies]
 lang-c = "0.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tempfile = "~3.13"

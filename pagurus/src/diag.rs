@@ -105,11 +105,12 @@ pub struct Diagnostic {
 
 impl fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let width = gutter_width(self);
         writeln!(f, "error[{}]: {}", self.kind.code(), self.message)?;
-        write_span(f, &self.span, &self.primary_label)?;
+        write_span(f, width, &self.span, &self.primary_label)?;
         for note in &self.notes {
             writeln!(f, "note: {}", note.message)?;
-            write_span(f, &note.span, &note.message)?;
+            write_span(f, width, &note.span, &note.message)?;
         }
         if !self.help.is_empty() {
             writeln!(f, "help: {}", self.help)?;
@@ -118,13 +119,34 @@ impl fmt::Display for Diagnostic {
     }
 }
 
-fn write_span(f: &mut fmt::Formatter<'_>, span: &SrcSpan, caret_label: &str) -> fmt::Result {
-    writeln!(f, " --> {}:{}:{}", span.file, span.line, span.column)?;
-    writeln!(f, "  |")?;
-    writeln!(f, "{:>4} | {}", span.line, span.snippet)?;
+fn line_digits(line: u32) -> usize {
+    line.to_string().len().max(1)
+}
+
+fn gutter_width(diag: &Diagnostic) -> usize {
+    let mut w = line_digits(diag.span.line);
+    for note in &diag.notes {
+        w = w.max(line_digits(note.span.line));
+    }
+    w
+}
+
+fn write_span(
+    f: &mut fmt::Formatter<'_>,
+    width: usize,
+    span: &SrcSpan,
+    caret_label: &str,
+) -> fmt::Result {
+    writeln!(
+        f,
+        "{:>width$}--> {}:{}:{}",
+        "", span.file, span.line, span.column
+    )?;
+    writeln!(f, "{:>width$} |", "")?;
+    writeln!(f, "{:>width$} | {}", span.line, span.snippet)?;
     let caret_col = span.column.max(1) as usize;
     let pad = " ".repeat(caret_col.saturating_sub(1));
-    writeln!(f, "     | {pad}^ {caret_label}")?;
+    writeln!(f, "{:>width$} | {pad}^ {caret_label}", "")?;
     Ok(())
 }
 

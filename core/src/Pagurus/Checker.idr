@@ -16,15 +16,17 @@ public export
 Scopes : Type
 Scopes = List Env
 
+public export
 lookupName : String -> Env -> Maybe Status
 lookupName n [] = Nothing
 lookupName n ((k, v) :: xs) = if n == k then Just v else lookupName n xs
 
+public export
 setName : String -> Status -> Env -> Env
 setName n v [] = [(n, v)]
 setName n v ((k, x) :: xs) = if n == k then (n, v) :: xs else (k, x) :: setName n v xs
 
-export
+public export
 lookupPlace : String -> Scopes -> Maybe Status
 lookupPlace _ [] = Nothing
 lookupPlace n (e :: es) =
@@ -32,6 +34,7 @@ lookupPlace n (e :: es) =
     Just v => Just v
     Nothing => lookupPlace n es
 
+public export
 setPlace : String -> Status -> Scopes -> Scopes
 setPlace n v [] = [[(n, v)]]
 setPlace n v (e :: es) =
@@ -43,6 +46,7 @@ declarePlace : String -> Status -> Scopes -> Scopes
 declarePlace n v [] = [[(n, v)]]
 declarePlace n v (e :: es) = setName n v e :: es
 
+public export
 joinEnv : Env -> Env -> Env
 joinEnv [] ys = ys
 joinEnv ((n, s) :: xs) ys =
@@ -50,16 +54,19 @@ joinEnv ((n, s) :: xs) ys =
     Nothing => (n, s) :: joinEnv xs ys
     Just s2 => (n, join s s2) :: joinEnv xs (filter (\(k, _) => k /= n) ys)
 
+public export
 joinScopes : Scopes -> Scopes -> Scopes
 joinScopes [] ys = ys
 joinScopes xs [] = xs
 joinScopes (x :: xs) (y :: ys) = joinEnv x y :: joinScopes xs ys
 
+public export
 eqStatus : Status -> Status -> Bool
 eqStatus [] [] = True
 eqStatus (a :: as) (b :: bs) = a == b && eqStatus as bs
 eqStatus _ _ = False
 
+public export
 eqEnv : Env -> Env -> Bool
 eqEnv [] [] = True
 eqEnv ((n, s) :: xs) ys =
@@ -68,6 +75,7 @@ eqEnv ((n, s) :: xs) ys =
     Just s2 => eqStatus s s2 && eqEnv xs (filter (\(k, _) => k /= n) ys)
 eqEnv _ _ = False
 
+public export
 eqScopes : Scopes -> Scopes -> Bool
 eqScopes [] [] = True
 eqScopes (x :: xs) (y :: ys) = eqEnv x y && eqScopes xs ys
@@ -132,6 +140,7 @@ summarise (S k) funs acc =
       merged = unionNames acc next
   in if length merged == length acc then acc else summarise k funs merged
 
+public export
 record Ctx where
   constructor MkCtx
   consuming : List String
@@ -154,6 +163,7 @@ withName n d =
     KUseAfterFree => { message := "use of freed value `" ++ n ++ "`" } d
     _ => { message := d.message ++ " `" ++ n ++ "`" } d
 
+public export
 usePlace : Scopes -> String -> Nat -> Either Diag Scopes
 usePlace sc n nid =
   case lookupPlace n sc of
@@ -163,6 +173,7 @@ usePlace sc n nid =
         Left d => Left (withName n d)
         Right st' => Right (setPlace n st' sc)
 
+public export
 movePlace : Scopes -> String -> Nat -> Either Diag Scopes
 movePlace sc n nid =
   case lookupPlace n sc of
@@ -177,6 +188,7 @@ movePlace sc n nid =
         Left d => Left (withName n d)
         Right st' => Right (setPlace n st' sc)
 
+public export
 dropPlace : Scopes -> String -> Nat -> Either Diag Scopes
 dropPlace sc n nid =
   case lookupPlace n sc of
@@ -200,6 +212,7 @@ unsupported id reason =
     "rewrite this using the supported C subset (see README); pagurus rejects what it cannot prove"
 
 mutual
+  public export
   checkExpr : Ctx -> Scopes -> Expr -> Either Diag Scopes
   checkExpr ctx sc (ELit _) = Right sc
   checkExpr ctx sc (EMalloc _ args) = checkArgsBorrow ctx sc args
@@ -286,6 +299,7 @@ mutual
           then checkArgsMove ctx sc args
           else checkArgsBorrow ctx sc args
 
+  public export
   checkStmt : Nat -> Ctx -> Scopes -> Stmt -> Either Diag Scopes
   checkStmt Z _ _ s =
     Left (MkDiag KUnproven
@@ -355,6 +369,7 @@ mutual
   checkStmt (S fuel) ctx sc (SExpr _ e) = checkExpr ctx sc e
   checkStmt (S fuel) _ _ (SUnsupported id reason) = Left (unsupported id reason)
 
+  public export
   checkStmts : Nat -> Ctx -> Scopes -> List Stmt -> Either Diag Scopes
   checkStmts Z _ _ (s :: _) =
     Left (MkDiag KUnproven "analysis fuel exhausted" (stmtId s) "here" []
@@ -365,7 +380,7 @@ mutual
       Left d => Left d
       Right sc' => checkStmts fuel ctx sc' ss
 
-  ||| Kleene iteration on a finite lattice of status maps, bounded by fuel.
+  public export
   loopFix : Nat -> Ctx -> Scopes -> Nat -> List Stmt -> Either Diag Scopes
   loopFix Z _ _ id _ =
     Left (MkDiag KUnproven

@@ -86,6 +86,12 @@ fn pass_pointer_param_borrow_is_clean() {
 }
 
 #[test]
+fn pass_free_null_constant_is_clean() {
+    let diags = check(&fixture("pass", "free_null.c"));
+    assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+}
+
+#[test]
 fn fail_use_after_move() {
     let path = fixture("fail", "use_after_move.c");
     let diags = check(&path);
@@ -218,5 +224,14 @@ fn fail_opaque_prototype_is_unsupported() {
     assert!(
         diags.iter().any(|d| d.kind == DiagnosticKind::Unsupported),
         "expected unsupported opaque call, got {diags:?}"
+    );
+}
+
+#[test]
+fn fail_free_null_identifier_is_rejected() {
+    let diags = check(&fixture("fail", "free_null_ident.c"));
+    assert!(
+        !diags.is_empty(),
+        "expected conservative rejection of free(NULL) as an identifier"
     );
 }

@@ -1,4 +1,4 @@
-||| Core IR for the verified ownership checker.
+||| Core IR for the Idris ownership checker.
 ||| Node ids (`id`) identify source locations; Rust maps them back to C spans.
 module Pagurus.IR
 

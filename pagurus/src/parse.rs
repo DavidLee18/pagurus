@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 
 use lang_c::ast::{
-    BinaryOperator, BlockItem, Declaration, Declarator, DeclaratorKind, DerivedDeclarator,
+    BinaryOperator, BlockItem, Constant, Declaration, Declarator, DeclaratorKind, DerivedDeclarator,
     Expression, ExternalDeclaration, ForInitializer, FunctionDefinition, InitDeclarator,
     Initializer, ParameterDeclaration, Statement, UnaryOperator,
 };
@@ -360,11 +360,26 @@ impl<'a> Lowering<'a> {
                     .map(|a| self.lower_expr(a))
                     .collect();
                 match callee.as_deref() {
-                    Some("free") => match args.as_slice() {
-                        [Expr::Var { id, name }] => vec![Stmt::Drop {
-                            id: *id,
-                            name: name.clone(),
-                        }],
+                    Some("free") => match call.node.arguments.as_slice() {
+                        [arg] if is_null_constant(arg) => {
+                            // ISO C: free(NULL) is a defined no-op. We only
+                            // accept a constant 0 (after peeling casts).
+                            let id = self.alloc_node(expr);
+                            vec![Stmt::Expr {
+                                id,
+                                expr: Expr::Lit { id },
+                            }]
+                        }
+                        [arg] => match self.lower_expr(arg) {
+                            Expr::Var { id, name } => vec![Stmt::Drop {
+                                id,
+                                name,
+                            }],
+                            _ => vec![self.unsupported_stmt(
+                                expr.span,
+                                "free() of a non-variable is not modelled",
+                            )],
+                        },
                         _ => vec![self.unsupported_stmt(
                             expr.span,
                             "free() of a non-variable is not modelled",
@@ -593,6 +608,22 @@ impl<'a> Lowering<'a> {
 
 fn is_builtin(name: &str) -> bool {
     matches!(name, "malloc" | "calloc" | "free")
+}
+
+/// True for integer constant 0, including `(void *)0` after peeling casts.
+/// The identifier `NULL` is *not* recognised (it is just a name without
+/// `<stddef.h>`); `free(NULL)` is therefore rejected conservatively.
+fn is_null_constant(expr: &Node<Expression>) -> bool {
+    match &expr.node {
+        Expression::Constant(c) => match &c.node {
+            Constant::Integer(int) => {
+                !int.number.is_empty() && int.number.chars().all(|ch| ch == '0')
+            }
+            _ => false,
+        },
+        Expression::Cast(cast) => is_null_constant(&cast.node.expression),
+        _ => false,
+    }
 }
 
 fn declarator_name(decl: &Declarator) -> Option<String> {

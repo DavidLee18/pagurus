@@ -9,6 +9,8 @@ import Pagurus.ParseIR
 import Pagurus.Sexp
 import Pagurus.Status
 import Pagurus.Step
+import Pagurus.Lattice
+import Pagurus.Safety
 import Pagurus.Soundness
 
 %default covering
@@ -17,13 +19,32 @@ import Pagurus.Soundness
 lemmas : (n : Nat) ->
          (stepAtom AOwned Use n = Right AOwned,
           IsLeft (stepAtom (AMoved n) Use n),
-          join [AOwned] [AEmpty] = [AEmpty, AOwned])
-lemmas n = (ownedUseOk n, movedUseRejected n n, joinOwnedEmptyIsBoth)
+          IsLeft (stepAtom AEmpty Use n),
+          join [AOwned] [AEmpty] = [AEmpty, AOwned],
+          stepStatus [] Use n = Right [],
+          inSet AOwned (join [AOwned] [AEmpty]) = True)
+lemmas n =
+  (ownedUseOk n,
+   movedUseRejected n n,
+   emptyUseRejected n,
+   joinOwnedEmptyIsBoth,
+   stepEmptySetOk Use n,
+   joinOverApprox [AOwned] [AEmpty] AOwned (Left Refl))
+
+lemmaStepStatus :
+  (n : Nat) ->
+  (a' : Atom ** (stepAtom AOwned Use n = Right a', inSet a' [AOwned] = True))
+lemmaStepStatus n =
+  stepStatusSound [AOwned] Use n [AOwned] Refl AOwned Refl
+
+keepSafetyType : Type
+keepSafetyType = CheckAcceptedNoOwnershipCrash
 
 covering
 main : IO ()
 main = do
   let _ = lemmas 0
+  let _ = lemmaStepStatus 0
   args <- getArgs
   case args of
     (_ :: path :: _) =>
@@ -48,6 +69,6 @@ main = do
                     exitWith (ExitFailure 1)
                   Right () => putStrLn jsonSafe
     _ => do
-      putStrLn "pagurus-core: verified ownership checker"
+      putStrLn "pagurus-core: total Idris ownership checker with lemmas"
       putStrLn "Usage: pagurus-core <program.ir>"
       exitWith (ExitFailure 2)

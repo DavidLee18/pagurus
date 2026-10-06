@@ -623,7 +623,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} bok evs veq pMode
         a = b ->
         Void
       ownConsumed pc rec Refl (HEVarLive c lookN cl) HEArgsNil pM oaC beq
-          {e = EVar nid n nm} {env0} {h0 = h1} {envX = env0} {hX = h1} {ms0} =
+          {e = EVar nid n nm} {ms0} =
         let (sc1 ** (fl ** (pT, pEs))) = argsModesMoveSplit pc pM
             scEq = rightInj (trans (sym (checkArgsModesNil ctx sc1 callee ms0)) pEs)
             (stN ** lpN) = oaC.tracked n (HVPtr a) lookN
@@ -1659,9 +1659,26 @@ mutual
             in MkLN (oaKeepEnv ln1.oaLN (stmtsWf {funs} ln1.oaLN.wf evBody) pres)
                  ln1.nuoLN lnB.liveLN
           nestedJustLN {funs} {chk} {ctx} oa0 ln1 eq pB f look pDef evs evBody bok
-              | Left pd | Just leftoverSafe | True | Right pnoF =
-            restoreOwnLN {funs} {frame = bindFrame f.params (collectArgVals evs)}
-              ln1 evBody
+              | Left pd | Just leftoverSafe | True | Right pnoF with (cell hB a) proof phB
+            nestedJustLN {funs} {chk} {ctx} oa0 ln1 eq pB f look pDef evs evBody bok
+                | Left pd | Just leftoverSafe | True | Right pnoF | Just Live =
+              let funOk = checkedLookup chk look
+                  (scB ** pBdy) = checkFunOkBody {fuel = cfuel} pDef funOk
+                  oaBind = oaBindFrame ln1.oaLN.wf bok
+                  pBdyP = replace {p = \sc0 => checkStmts cfuel ctx sc0 f.body = Right scB}
+                            (paramScopesEq ctx f) pBdy
+                  pres = restoreFromBind {funs} {chk} {fuel = cfuel} ln1.oaLN oaBind bok leftoverSafe pBdyP evBody
+              in MkLN (oaKeepEnv ln1.oaLN (stmtsWf {funs} ln1.oaLN.wf evBody) pres)
+                   ln1.nuoLN phB
+            nestedJustLN {funs} {chk} {ctx} oa0 ln1 eq pB f look pDef evs evBody bok
+                | Left pd | Just leftoverSafe | True | Right pnoF | Just Freed =
+              -- Unique-own free of leftover `a`. leftoverSafe needs a leftover
+              -- intern of `a`; leftover nuo does not exhibit one. LiveNuo after
+              -- this free is uninhabited. Do not inhabit with HSDropLive.
+              void (liveNotFreed (justInjH (trans (sym ln1.liveLN) phB)))
+            nestedJustLN {funs} {chk} {ctx} oa0 ln1 eq pB f look pDef evs evBody bok
+                | Left pd | Just leftoverSafe | True | Right pnoF | Nothing =
+              void (stmtsStay {funs} ln1.oaLN.wf evBody ln1.liveLN phB)
       nestedJustLN {funs} {chk} {ctx} oa0 ln1 eq pB f look pDef evs evBody bok
           | Left pd | Nothing =
         restoreOwnLN {funs} {frame = bindFrame f.params (collectArgVals evs)}
@@ -2084,13 +2101,13 @@ mutual
             in MkTLN (MkLN (oaRewrite scEq ln1.oaLN) (nuoRewrite scEq ln1.nuoLN) ln1.liveLN)
                  (htTaken ht)
   takeLN ln eq (HECall unk env1 h1 evs) {e = ECall id callee args} =
-    nestedTakeCallLN ln eq (HECall unk env1 h1 evs)
+    nestedTakeCallLN {funs} {chk} ln eq (HECall unk env1 h1 evs)
   takeLN ln eq (HECallUser pB f look pDef env1 h1 evs envB hB evBody)
       {e = ECall id callee args} =
-    nestedTakeCallLN ln eq (HECallUser pB f look pDef env1 h1 evs envB hB evBody)
+    nestedTakeCallLN {funs} {chk} ln eq (HECallUser pB f look pDef env1 h1 evs envB hB evBody)
   takeLN ln eq (HECallUserRet pB f look pDef env1 h1 evs envB hB evBody)
       {e = ECall id callee args} =
-    nestedTakeCallLN ln eq (HECallUserRet pB f look pDef env1 h1 evs envB hB evBody)
+    nestedTakeCallLN {funs} {chk} ln eq (HECallUserRet pB f look pDef env1 h1 evs envB hB evBody)
   takeLN ln eq (HERealloc pName pMiss env1 h1 evs) {e = ECall id callee args} =
     reallocTakeLN ln eq pName evs
   takeLN ln eq (HEAsgPtr w env1 h1 ev) {e = EAssign id n nm Ptr rhs} =

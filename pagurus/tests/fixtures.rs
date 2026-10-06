@@ -186,6 +186,61 @@ fn fail_loop_free_then_use() {
     );
 }
 
+fn ownership_crash(d: &pagurus::Diagnostic) -> bool {
+    matches!(
+        d.kind,
+        DiagnosticKind::UseAfterMove | DiagnosticKind::UseAfterFree | DiagnosticKind::DoubleFree
+    )
+}
+
+#[test]
+fn fail_while_cond_consume() {
+    let path = fixture("fail", "while_cond_consume.c");
+    let diags = check(&path);
+    let hit = diags
+        .iter()
+        .find(|d| ownership_crash(d))
+        .expect("expected ownership error: while must evaluate consume(p) on exit");
+    let text = normalize(&hit.to_string(), &path);
+    assert_golden("while_cond_consume.txt", &text);
+}
+
+#[test]
+fn fail_for_cond_consume() {
+    let path = fixture("fail", "for_cond_consume.c");
+    let diags = check(&path);
+    let hit = diags
+        .iter()
+        .find(|d| ownership_crash(d))
+        .expect("expected ownership error: for must evaluate consume(p) on exit");
+    let text = normalize(&hit.to_string(), &path);
+    assert_golden("for_cond_consume.txt", &text);
+}
+
+#[test]
+fn fail_for_step_free() {
+    let path = fixture("fail", "for_step_free.c");
+    let diags = check(&path);
+    let hit = diags
+        .iter()
+        .find(|d| ownership_crash(d))
+        .expect("expected ownership error after for-step free");
+    let text = normalize(&hit.to_string(), &path);
+    assert_golden("for_step_free.txt", &text);
+}
+
+#[test]
+fn fail_dowhile_control() {
+    let path = fixture("fail", "dowhile_control.c");
+    let diags = check(&path);
+    let hit = diags
+        .iter()
+        .find(|d| ownership_crash(d))
+        .expect("expected ownership error on do-while consume");
+    let text = normalize(&hit.to_string(), &path);
+    assert_golden("dowhile_control.txt", &text);
+}
+
 #[test]
 fn fail_pointer_param_consume() {
     let diags = check(&fixture("fail", "pointer_param_consume.c"));
@@ -233,5 +288,141 @@ fn fail_free_null_identifier_is_rejected() {
     assert!(
         !diags.is_empty(),
         "expected conservative rejection of free(NULL) as an identifier"
+    );
+}
+
+/// Programs from the pg-cex2 adversarial suite that must stay accepted.
+const CEX2_PASS: &[&str] = &[
+    "safe_dowhile_use.c",
+    "safe_for_use.c",
+    "safe_nested_loops.c",
+    "safe_while_int.c",
+    "safe_while_ptr_use.c",
+    "safe_while_realloc.c",
+];
+
+/// Programs from the pg-cex2 suite that must be rejected (false accepts,
+/// already-rejected bugs, and conservative false rejects such as
+/// `return_mid_loop_safe` / `sc_and_consume_safe`).
+const CEX2_FAIL: &[&str] = &[
+    "break_stmt.c",
+    "comma_cond.c",
+    "comma_for_header.c",
+    "cond_assign_consume.c",
+    "continue_for.c",
+    "elseif_consume.c",
+    "for_empty_cond_return.c",
+    "for_empty_init_cond_df.c",
+    "for_empty_step_df.c",
+    "goto_stmt.c",
+    "if_noelse_consume.c",
+    "nested_for_inner_cond.c",
+    "nested_inner_cond.c",
+    "nested_outer_cond.c",
+    "ptr_compound_alias.c",
+    "ptr_increment_free.c",
+    "return_consume_df.c",
+    "return_mid_loop_safe.c",
+    "sc_and_assign_move.c",
+    "sc_and_consume_safe.c",
+    "sc_and_reinit.c",
+    "sc_decl_reinit.c",
+    "sc_or_consume_df.c",
+    "sc_or_reinit.c",
+    "sc_while_reinit.c",
+    "switch_stmt.c",
+    "ternary_consume.c",
+    "tu_malloc.c",
+];
+
+#[test]
+fn cex2_safe_programs_are_accepted() {
+    for name in CEX2_PASS {
+        let diags = check(&fixture("pass", name));
+        assert!(
+            diags.is_empty(),
+            "{name} must stay accepted, got {diags:?}"
+        );
+    }
+}
+
+#[test]
+fn cex2_false_accepts_and_rejects_are_rejected() {
+    for name in CEX2_FAIL {
+        let diags = check(&fixture("fail", name));
+        assert!(
+            !diags.is_empty(),
+            "{name} must be rejected, got a clean verdict"
+        );
+    }
+}
+
+/// pg-cex3 programmes that pagurus accepted at c3de693 (`pag_rc=0`).
+const CEX3_PASS: &[&str] = &["cast_lhs_assign.c", "two_sinks.c"];
+
+/// pg-cex3 programmes rejected by the checker at c3de693 (`pag_rc=1`).
+const CEX3_FAIL: &[&str] = &[
+    "calloc_df.c",
+    "cast_arith_hidden.c",
+    "cast_char_void.c",
+    "cast_launder_int.c",
+    "cast_long_plus0.c",
+    "cast_long_roundtrip.c",
+    "cast_uintptr_alias.c",
+    "consume2_same.c",
+    "fnptr_free.c",
+    "fnptr_wrapper.c",
+    "id_alias.c",
+    "id_alias_only_q.c",
+    "if_guard_free.c",
+    "mutual_rec.c",
+    "null_after_free.c",
+    "param_consume_unseen.c",
+    "pp_addr_consume.c",
+    "pp_deref_free.c",
+    "realloc_df.c",
+    "realloc_ok.c",
+    "return_p_alias.c",
+    "strdup_df.c",
+    "unary_addr.c",
+    "variadic_consume.c",
+    "wrap_cond_free.c",
+    "wrap_free_first.c",
+    "wrap_move_then_free.c",
+    "wrap_myfree_twice.c",
+    "wrap_of_wrapper.c",
+];
+
+#[test]
+fn cex3_accepted_programs_stay_accepted() {
+    for name in CEX3_PASS {
+        let diags = check(&fixture("pass", name));
+        assert!(
+            diags.is_empty(),
+            "{name} must stay accepted (RESULTS.txt pag_rc=0), got {diags:?}"
+        );
+    }
+}
+
+#[test]
+fn cex3_rejected_programs_stay_rejected() {
+    for name in CEX3_FAIL {
+        let diags = check(&fixture("fail", name));
+        assert!(
+            !diags.is_empty(),
+            "{name} must stay rejected (RESULTS.txt pag_rc=1), got a clean verdict"
+        );
+    }
+}
+
+#[test]
+fn cex3_stmt_expr_stays_a_parse_failure() {
+    let path = fixture("fail", "stmt_expr.c");
+    let err = check_file(&path).expect_err(
+        "RESULTS.txt pag_rc=2: GNU statement-expression must fail to parse, not reach the checker",
+    );
+    assert!(
+        err.to_string().contains("failed to parse"),
+        "expected a parse error, got {err}"
     );
 }

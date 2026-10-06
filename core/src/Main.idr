@@ -11,11 +11,13 @@ import Pagurus.Status
 import Pagurus.Step
 import Pagurus.Lattice
 import Pagurus.Safety
+import Pagurus.Safety.Stmt
 import Pagurus.Soundness
 
 %default covering
 
-||| Mention lemmas so they stay in the compiled core.
+||| Mention lemmas so they stay in the compiled core. The safety theorem is
+||| total; `main` stays covering because file IO and the IR parser are.
 lemmas : (n : Nat) ->
          (stepAtom AOwned Use n = Right AOwned,
           IsLeft (stepAtom (AMoved n) Use n),
@@ -40,11 +42,14 @@ lemmaStepStatus n =
 keepSafetyType : Type
 keepSafetyType = CheckAcceptedNoOwnershipCrash
 
-covering
+keepSafety : CheckAcceptedNoOwnershipCrash
+keepSafety = checkAcceptedNoOwnershipCrash
+
 main : IO ()
 main = do
   let _ = lemmas 0
   let _ = lemmaStepStatus 0
+  let _ = keepSafety
   args <- getArgs
   case args of
     (_ :: path :: _) =>

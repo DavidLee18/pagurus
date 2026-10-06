@@ -1,5 +1,6 @@
 ||| Local action soundness, Represents preservation, `ownerFlagTrue`, and the
-||| stated fuel-indexed theorem type `CheckAcceptedNoOwnershipCrash`.
+||| fuel-indexed theorem type `CheckAcceptedNoOwnershipCrash` (inhabited in
+||| `Pagurus.Safety.Stmt`).
 module Pagurus.Safety
 
 import Pagurus.IR
@@ -13,12 +14,14 @@ import Pagurus.Soundness
 
 %default total
 
+export
 okNotHit : Not (IsOwnershipCrash (Ok c))
 okNotHit (Hit _) impossible
 
 trueNotFalse : Not (True = False)
 trueNotFalse Refl impossible
 
+export
 unsupHit : {msg : String} -> {p : Nat} -> {lab : String} ->
            {sec : List (Nat, String)} -> {hlp : String} ->
            Not (IsOwnershipCrash (Crash (MkDiag KUnsupported msg p lab sec hlp)))
@@ -169,6 +172,10 @@ joinLeftSub : (xs, ys : Env) -> SubEnv xs (joinEnv xs ys)
 joinLeftSub xs ys n s look = joinEnvLookupLeft xs ys n s look
 
 export
+joinRightSub : (xs, ys : Env) -> SubEnv ys (joinEnv xs ys)
+joinRightSub xs ys n s look = joinEnvLookupRight xs ys n s look
+
+export
 reprWeaken :
   {c : CScopes} -> {xs, ys : Scopes} ->
   SubEnv xs ys -> Represents c xs -> Represents c ys
@@ -177,20 +184,46 @@ reprWeaken sub r n a lookc =
       (st ** (lookY, subS)) = sub n s look
   in (st ** (lookY, fitWeaken subS fit))
 
-export
-loopFixSub :
-  (fuel : Nat) -> (ctx : Ctx) -> (sc : Scopes) ->
-  (lid : Nat) -> (bod : List Stmt) -> (scF : Scopes) ->
-  loopFix fuel ctx sc lid bod = Right scF ->
-  SubEnv sc scF
-loopFixSub Z _ _ _ _ _ eq = void (leftNotRight eq)
-loopFixSub (S k) ctx sc lid bod scF eq with (checkStmts k ctx sc bod)
-  loopFixSub (S k) ctx sc lid bod scF eq | Left d = void (leftNotRight eq)
-  loopFixSub (S k) ctx sc lid bod scF eq | Right sc' with (eqScopes (joinScopes sc sc') sc)
-    loopFixSub (S k) ctx sc lid bod scF eq | Right sc' | True =
-      replace {p = SubEnv sc} (rightInj eq) (joinLeftSub sc sc')
-    loopFixSub (S k) ctx sc lid bod scF eq | Right sc' | False =
-      subEnvTrans (joinLeftSub sc sc') (loopFixSub k ctx (joinScopes sc sc') lid bod scF eq)
+mutual
+  export
+  loopFixSub :
+    (fuel : Nat) -> (ctx : Ctx) -> (sc : Scopes) ->
+    (lid : Nat) -> (bod : List Stmt) -> (scF : Scopes) ->
+    loopFix fuel ctx sc lid bod = Right scF ->
+    SubEnv sc scF
+  loopFixSub Z ctx sc lid bod scF eq =
+    void (leftNotRight (trans (sym (loopFixZero ctx sc lid bod)) eq))
+  loopFixSub (S k) ctx sc lid bod scF eq =
+    loopFixSubGo k ctx sc lid bod scF eq (checkStmts k ctx sc bod) Refl
+
+  loopFixSubGo :
+    (k : Nat) -> (ctx : Ctx) -> (sc : Scopes) ->
+    (lid : Nat) -> (bod : List Stmt) -> (scF : Scopes) ->
+    loopFix (S k) ctx sc lid bod = Right scF ->
+    (res : Either Diag Scopes) ->
+    checkStmts k ctx sc bod = res ->
+    SubEnv sc scF
+  loopFixSubGo k ctx sc lid bod scF eq (Left d) pB =
+    void (leftNotRight (trans (sym (loopFixLeft lid pB)) eq))
+  loopFixSubGo k ctx sc lid bod scF eq (Right sc') pB =
+    loopFixSubEq k ctx sc lid bod scF eq pB (eqScopes (joinScopes sc sc') sc) Refl
+
+  loopFixSubEq :
+    (k : Nat) -> (ctx : Ctx) -> (sc : Scopes) ->
+    (lid : Nat) -> (bod : List Stmt) -> (scF : Scopes) ->
+    {scB : Scopes} ->
+    loopFix (S k) ctx sc lid bod = Right scF ->
+    checkStmts k ctx sc bod = Right scB ->
+    (b : Bool) ->
+    eqScopes (joinScopes sc scB) sc = b ->
+    SubEnv sc scF
+  loopFixSubEq k ctx sc lid bod scF eq pB True pEq =
+    replace {p = SubEnv sc} (rightInj (trans (sym (loopFixTrue pB pEq)) eq))
+      (joinLeftSub sc scB)
+  loopFixSubEq k ctx sc lid bod scF eq pB False pEq =
+    subEnvTrans (joinLeftSub sc scB)
+      (loopFixSub k ctx (joinScopes sc scB) lid bod scF
+        (trans (sym (loopFixFalse lid pB pEq)) eq))
 
 --------------------------------------------------------------------------------
 -- ActOn / drop / use / move
@@ -467,365 +500,149 @@ movePlaceGhostMiss eq miss r with (lookupPlace n sc) proof pLook
     movePlaceGhostMiss eq miss r | Just st | Right st' =
       reprRewrite (rightInj eq) (reprSetMiss r miss)
 
+export
+reprSetOwned :
+  {n : Place} -> {c : CScopes} -> {sc : Scopes} ->
+  Represents c sc ->
+  Represents (setC n AOwned c) (setPlace n (Pagurus.Status.singleton AOwned) sc)
+reprSetOwned r = reprSetFit r (InSt (inSetSingleton AOwned))
 
---------------------------------------------------------------------------------
--- Unfold lemmas: rewrite the checker's case-trees without `with` on Flag/Bool
---------------------------------------------------------------------------------
+export
+reprSetEmpty :
+  {n : Place} -> {c : CScopes} -> {sc : Scopes} ->
+  Represents c sc ->
+  Represents (setC n AEmpty c) (setPlace n (Pagurus.Status.singleton AEmpty) sc)
+reprSetEmpty r = reprSetFit r ExtraEmpty
 
-ownerNotGhost : Not (Owner = Ghost)
-ownerNotGhost Refl impossible
+export
+reprSetFitEmpty :
+  {n : Place} -> {st' : Status} -> {c : CScopes} -> {sc : Scopes} ->
+  Represents c sc ->
+  Represents (setC n AEmpty c) (setPlace n st' sc)
+reprSetFitEmpty r = reprSetFit r ExtraEmpty
 
+usePlaceJustR :
+  {sc : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
+  {st, st' : Status} ->
+  lookupPlace n sc = Just st ->
+  stepStatus st Use nid = Right st' ->
+  usePlace sc n nid nm = Right (setPlace n st' sc)
+usePlaceJustR pL pS = rewrite pL in rewrite pS in Refl
+
+usePlaceJustL :
+  {sc : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
+  {st : Status} -> {d : Diag} ->
+  lookupPlace n sc = Just st ->
+  stepStatus st Use nid = Left d ->
+  usePlace sc n nid nm = Left (withName nm d)
+usePlaceJustL pL pS = rewrite pL in rewrite pS in Refl
+
+movePlaceJustR :
+  {sc : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
+  {st, st' : Status} ->
+  lookupPlace n sc = Just st ->
+  stepStatus st Move nid = Right st' ->
+  movePlace sc n nid nm = Right (setPlace n st' sc)
+movePlaceJustR pL pS = rewrite pL in rewrite pS in Refl
+
+movePlaceJustL :
+  {sc : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
+  {st : Status} -> {d : Diag} ->
+  lookupPlace n sc = Just st ->
+  stepStatus st Move nid = Left d ->
+  movePlace sc n nid nm = Left (withName nm d)
+movePlaceJustL pL pS = rewrite pL in rewrite pS in Refl
+
+mutual
+  export
+  usePlaceEmptyPres :
+    {sc1, sc' : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
+    {c1 : CScopes} ->
+    usePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n nid nm = Right sc' ->
+    Represents c1 sc1 ->
+    Represents (setC n AEmpty c1) sc'
+  usePlaceEmptyPres {n} {sc1} eq r =
+    usePlaceEmptyGo eq r (lookupPlace n (setPlace n (Pagurus.Status.singleton AOwned) sc1)) Refl
+
+  usePlaceEmptyGo :
+    {sc1, sc' : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
+    {c1 : CScopes} ->
+    usePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n nid nm = Right sc' ->
+    Represents c1 sc1 ->
+    (look : Maybe Status) ->
+    lookupPlace n (setPlace n (Pagurus.Status.singleton AOwned) sc1) = look ->
+    Represents (setC n AEmpty c1) sc'
+  usePlaceEmptyGo {n} {sc1} eq r Nothing pLook =
+    void (justNotNothing (trans (sym (lookupPlaceSetHit n (Pagurus.Status.singleton AOwned) sc1)) pLook))
+  usePlaceEmptyGo {n} {nid} {sc1} eq r (Just st) pLook =
+    usePlaceEmptyStep eq r pLook (stepStatus st Use nid) Refl
+
+  usePlaceEmptyStep :
+    {sc1, sc' : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
+    {c1 : CScopes} -> {st : Status} ->
+    usePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n nid nm = Right sc' ->
+    Represents c1 sc1 ->
+    lookupPlace n (setPlace n (Pagurus.Status.singleton AOwned) sc1) = Just st ->
+    (resS : Either Diag Status) ->
+    stepStatus st Use nid = resS ->
+    Represents (setC n AEmpty c1) sc'
+  usePlaceEmptyStep eq r pLook (Left d) pStep =
+    void (leftNotRight (trans (sym (usePlaceJustL pLook pStep)) eq))
+  usePlaceEmptyStep {n} {sc1} eq r pLook (Right st') pStep =
+    reprRewrite
+      (trans (sym (setPlaceSetPlace n (Pagurus.Status.singleton AOwned) st' sc1))
+             (rightInj (trans (sym (usePlaceJustR pLook pStep)) eq)))
+      (reprSetFitEmpty r)
+
+mutual
+  export
+  movePlaceEmptyPres :
+    {sc1, sc' : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
+    {c1 : CScopes} ->
+    movePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n nid nm = Right sc' ->
+    Represents c1 sc1 ->
+    Represents (setC n AEmpty c1) sc'
+  movePlaceEmptyPres {n} {sc1} eq r =
+    movePlaceEmptyGo eq r (lookupPlace n (setPlace n (Pagurus.Status.singleton AOwned) sc1)) Refl
+
+  movePlaceEmptyGo :
+    {sc1, sc' : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
+    {c1 : CScopes} ->
+    movePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n nid nm = Right sc' ->
+    Represents c1 sc1 ->
+    (look : Maybe Status) ->
+    lookupPlace n (setPlace n (Pagurus.Status.singleton AOwned) sc1) = look ->
+    Represents (setC n AEmpty c1) sc'
+  movePlaceEmptyGo {n} {sc1} eq r Nothing pLook =
+    void (justNotNothing (trans (sym (lookupPlaceSetHit n (Pagurus.Status.singleton AOwned) sc1)) pLook))
+  movePlaceEmptyGo {n} {nid} {sc1} eq r (Just st) pLook =
+    movePlaceEmptyStep eq r pLook (stepStatus st Move nid) Refl
+
+  movePlaceEmptyStep :
+    {sc1, sc' : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
+    {c1 : CScopes} -> {st : Status} ->
+    movePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n nid nm = Right sc' ->
+    Represents c1 sc1 ->
+    lookupPlace n (setPlace n (Pagurus.Status.singleton AOwned) sc1) = Just st ->
+    (resS : Either Diag Status) ->
+    stepStatus st Move nid = resS ->
+    Represents (setC n AEmpty c1) sc'
+  movePlaceEmptyStep eq r pLook (Left d) pStep =
+    void (leftNotRight (trans (sym (movePlaceJustL pLook pStep)) eq))
+  movePlaceEmptyStep {n} {sc1} eq r pLook (Right st') pStep =
+    reprRewrite
+      (trans (sym (setPlaceSetPlace n (Pagurus.Status.singleton AOwned) st' sc1))
+             (rightInj (trans (sym (movePlaceJustR pLook pStep)) eq)))
+      (reprSetFitEmpty r)
+
+
+export
 ghostNotOwner : Not (Ghost = Owner)
 ghostNotOwner Refl impossible
 
-checkCallBuiltin :
-  {ctx : Ctx} -> {sc : Scopes} -> {nid : Nat} -> {callee : String} ->
-  {args : List Expr} ->
-  isBuiltin callee = True ->
-  checkCall ctx sc nid callee args = checkArgsBorrow ctx sc args
-checkCallBuiltin pb = rewrite pb in Refl
-
-checkCallOpaque :
-  {ctx : Ctx} -> {sc : Scopes} -> {nid : Nat} -> {callee : String} ->
-  {args : List Expr} ->
-  isBuiltin callee = False ->
-  isDefined ctx callee = False ->
-  checkCall ctx sc nid callee args =
-    Left (MkDiag KUnsupported
-      ("unsupported call to `" ++ callee ++ "`: no function body, so pagurus cannot prove the call is safe")
-      nid "called here"
-      []
-      "provide a definition in this translation unit, or avoid passing unique pointers to opaque functions")
-checkCallOpaque pb pd = rewrite pb in rewrite pd in Refl
-
-checkCallBorrow :
-  {ctx : Ctx} -> {sc : Scopes} -> {nid : Nat} -> {callee : String} ->
-  {args : List Expr} ->
-  isBuiltin callee = False ->
-  isDefined ctx callee = True ->
-  isConsuming ctx callee = False ->
-  checkCall ctx sc nid callee args = checkArgsBorrow ctx sc args
-checkCallBorrow pb pd pc = rewrite pb in rewrite pd in rewrite pc in Refl
-
-checkCallConsume :
-  {ctx : Ctx} -> {sc : Scopes} -> {nid : Nat} -> {callee : String} ->
-  {args : List Expr} ->
-  isBuiltin callee = False ->
-  isDefined ctx callee = True ->
-  isConsuming ctx callee = True ->
-  checkCall ctx sc nid callee args = checkArgsMove ctx sc args
-checkCallConsume pb pd pc = rewrite pb in rewrite pd in rewrite pc in Refl
-
-assignPtrLeft :
-  (id : Nat) -> (n : Place) -> (nm : String) ->
-  {ctx : Ctx} -> {sc : Scopes} -> {rhs : Expr} -> {d : Diag} ->
-  takeOwner ctx sc rhs = Left d ->
-  assignPlace ctx sc id n nm Ptr rhs False = Left d
-assignPtrLeft _ _ _ prf = rewrite prf in Refl
-
-assignPtrOwner :
-  {ctx : Ctx} -> {sc, sc1, sc2 : Scopes} -> {id : Nat} -> {n : Place} ->
-  {nm : String} -> {rhs : Expr} ->
-  takeOwner ctx sc rhs = Right (sc1, Owner) ->
-  usePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n id nm = Right sc2 ->
-  assignPlace ctx sc id n nm Ptr rhs False = Right sc2
-assignPtrOwner pT pU = rewrite pT in rewrite pU in Refl
-
-assignPtrUseFail :
-  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {id : Nat} -> {n : Place} ->
-  {nm : String} -> {rhs : Expr} -> {d : Diag} ->
-  takeOwner ctx sc rhs = Right (sc1, Owner) ->
-  usePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n id nm = Left d ->
-  assignPlace ctx sc id n nm Ptr rhs False = Left d
-assignPtrUseFail pT pU = rewrite pT in rewrite pU in Refl
-
-assignPtrGhost :
-  (id : Nat) -> (n : Place) -> (nm : String) ->
-  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {rhs : Expr} ->
-  takeOwner ctx sc rhs = Right (sc1, Ghost) ->
-  assignPlace ctx sc id n nm Ptr rhs False =
-    Right (setPlace n (Pagurus.Status.singleton AEmpty) sc1)
-assignPtrGhost _ _ _ pT = rewrite pT in Refl
-
-takeMallocLeft :
-  (mid : Nat) ->
-  {ctx : Ctx} -> {sc : Scopes} -> {args : List Expr} -> {d : Diag} ->
-  checkArgsBorrow ctx sc args = Left d ->
-  takeOwner ctx sc (EMalloc mid args) = Left d
-takeMallocLeft _ prf = rewrite prf in Refl
-
-takeMallocRight :
-  (mid : Nat) ->
-  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {args : List Expr} ->
-  checkArgsBorrow ctx sc args = Right sc1 ->
-  takeOwner ctx sc (EMalloc mid args) = Right (sc1, Owner)
-takeMallocRight _ prf = rewrite prf in Refl
-
-takeAsgCopyLeft :
-  (id : Nat) -> (n : Place) -> (nm : String) ->
-  {ctx : Ctx} -> {sc : Scopes} -> {rhs : Expr} -> {d : Diag} ->
-  checkExpr ctx sc rhs = Left d ->
-  takeOwner ctx sc (EAssign id n nm Copy rhs) = Left d
-takeAsgCopyLeft _ _ _ prf = rewrite prf in Refl
-
-takeAsgCopyRight :
-  (id : Nat) -> (n : Place) -> (nm : String) ->
-  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {rhs : Expr} ->
-  checkExpr ctx sc rhs = Right sc1 ->
-  takeOwner ctx sc (EAssign id n nm Copy rhs) = Right (sc1, Ghost)
-takeAsgCopyRight _ _ _ prf = rewrite prf in Refl
-
-takeAsgPtrLeft :
-  (id : Nat) -> (n : Place) -> (nm : String) ->
-  {ctx : Ctx} -> {sc : Scopes} -> {rhs : Expr} -> {d : Diag} ->
-  takeOwner ctx sc rhs = Left d ->
-  takeOwner ctx sc (EAssign id n nm Ptr rhs) = Left d
-takeAsgPtrLeft _ _ _ prf = rewrite prf in Refl
-
-takeAsgPtrOwner :
-  {ctx : Ctx} -> {sc, sc1, sc2 : Scopes} -> {id : Nat} -> {n : Place} ->
-  {nm : String} -> {rhs : Expr} ->
-  takeOwner ctx sc rhs = Right (sc1, Owner) ->
-  movePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n id nm = Right sc2 ->
-  takeOwner ctx sc (EAssign id n nm Ptr rhs) = Right (sc2, Owner)
-takeAsgPtrOwner pT pM = rewrite pT in rewrite pM in Refl
-
-takeAsgPtrGhost :
-  (id : Nat) -> (n : Place) -> (nm : String) ->
-  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {rhs : Expr} ->
-  takeOwner ctx sc rhs = Right (sc1, Ghost) ->
-  takeOwner ctx sc (EAssign id n nm Ptr rhs) =
-    Right (setPlace n (Pagurus.Status.singleton AEmpty) sc1, Ghost)
-takeAsgPtrGhost _ _ _ pT = rewrite pT in Refl
-
-takeAsgPtrFail :
-  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {id : Nat} -> {n : Place} ->
-  {nm : String} -> {rhs : Expr} -> {d : Diag} ->
-  takeOwner ctx sc rhs = Right (sc1, Owner) ->
-  movePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n id nm = Left d ->
-  takeOwner ctx sc (EAssign id n nm Ptr rhs) = Left d
-takeAsgPtrFail pT pM = rewrite pT in rewrite pM in Refl
-
-takeVarMiss :
-  (ctx : Ctx) -> (nid : Nat) -> (nm : String) ->
-  {sc : Scopes} -> {n : Place} ->
-  lookupPlace n sc = Nothing ->
-  takeOwner ctx sc (EVar nid n nm) = Right (sc, Ghost)
-takeVarMiss _ _ _ prf = rewrite prf in Refl
-
-takeVarJustL :
-  (ctx : Ctx) ->
-  {sc : Scopes} -> {nid : Nat} -> {n : Place} -> {nm : String} ->
-  {st : Status} -> {d : Diag} ->
-  lookupPlace n sc = Just st ->
-  movePlace sc n nid nm = Left d ->
-  takeOwner ctx sc (EVar nid n nm) = Left d
-takeVarJustL _ pLook pM = rewrite pLook in rewrite pM in Refl
-
-takeVarJustR :
-  (ctx : Ctx) ->
-  {sc, sc1 : Scopes} -> {nid : Nat} -> {n : Place} -> {nm : String} ->
-  {st : Status} ->
-  lookupPlace n sc = Just st ->
-  movePlace sc n nid nm = Right sc1 ->
-  takeOwner ctx sc (EVar nid n nm) = Right (sc1, Owner)
-takeVarJustR _ pLook pM = rewrite pLook in rewrite pM in Refl
-
-takeCallLeft :
-  {ctx : Ctx} -> {sc : Scopes} -> {id : Nat} -> {callee : String} ->
-  {args : List Expr} -> {d : Diag} ->
-  checkExpr ctx sc (ECall id callee args) = Left d ->
-  takeOwner ctx sc (ECall id callee args) = Left d
-takeCallLeft prf = rewrite prf in Refl
-
-takeCallRight :
-  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {id : Nat} -> {callee : String} ->
-  {args : List Expr} ->
-  checkExpr ctx sc (ECall id callee args) = Right sc1 ->
-  takeOwner ctx sc (ECall id callee args) = Right (sc1, Ghost)
-takeCallRight prf = rewrite prf in Refl
-
-takeUseLeft :
-  (uid : Nat) ->
-  {ctx : Ctx} -> {sc : Scopes} -> {args : List Expr} -> {d : Diag} ->
-  checkArgsBorrow ctx sc args = Left d ->
-  takeOwner ctx sc (EUse uid args) = Left d
-takeUseLeft _ prf = rewrite prf in Refl
-
-takeUseRight :
-  (uid : Nat) ->
-  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {args : List Expr} ->
-  checkArgsBorrow ctx sc args = Right sc1 ->
-  takeOwner ctx sc (EUse uid args) = Right (sc1, Ghost)
-takeUseRight _ prf = rewrite prf in Refl
-
-declPtrLeft :
-  (fuel : Nat) -> (id : Nat) -> (n : Place) -> (nm : String) ->
-  {ctx : Ctx} -> {sc : Scopes} -> {e : Expr} -> {d : Diag} ->
-  takeOwner ctx sc e = Left d ->
-  checkStmt (S fuel) ctx sc (SDecl id n nm Ptr (Just e)) = Left d
-declPtrLeft _ _ _ _ prf = rewrite prf in Refl
-
-declPtrOwner :
-  (fuel : Nat) -> (id : Nat) -> (n : Place) -> (nm : String) ->
-  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {e : Expr} ->
-  takeOwner ctx sc e = Right (sc1, Owner) ->
-  checkStmt (S fuel) ctx sc (SDecl id n nm Ptr (Just e)) =
-    Right (declarePlace n (Pagurus.Status.singleton AOwned) sc1)
-declPtrOwner _ _ _ _ prf = rewrite prf in Refl
-
-declPtrGhostEq :
-  (fuel : Nat) -> (id : Nat) -> (n : Place) -> (nm : String) ->
-  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {e : Expr} ->
-  takeOwner ctx sc e = Right (sc1, Ghost) ->
-  checkStmt (S fuel) ctx sc (SDecl id n nm Ptr (Just e)) =
-    Left (MkDiag KUnproven
-      ("cannot prove `" ++ nm ++ "` uniquely owns a heap object")
-      id "declared here"
-      []
-      "initialise unique pointers from malloc or by moving from another unique owner")
-declPtrGhostEq _ _ _ _ prf = rewrite prf in Refl
-
-stmtAsgPtrLeft :
-  (fuel : Nat) -> (id : Nat) -> (n : Place) -> (nm : String) ->
-  {ctx : Ctx} -> {sc : Scopes} -> {rhs : Expr} -> {d : Diag} ->
-  takeOwner ctx sc rhs = Left d ->
-  checkStmt (S fuel) ctx sc (SAssign id n nm Ptr rhs) = Left d
-stmtAsgPtrLeft _ _ _ _ prf = rewrite prf in Refl
-
-stmtAsgPtrOwner :
-  (fuel : Nat) -> (id : Nat) -> (n : Place) -> (nm : String) ->
-  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {rhs : Expr} ->
-  takeOwner ctx sc rhs = Right (sc1, Owner) ->
-  checkStmt (S fuel) ctx sc (SAssign id n nm Ptr rhs) =
-    Right (setPlace n (Pagurus.Status.singleton AOwned) sc1)
-stmtAsgPtrOwner _ _ _ _ prf = rewrite prf in Refl
-
-stmtAsgPtrGhost :
-  (fuel : Nat) -> (id : Nat) -> (n : Place) -> (nm : String) ->
-  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {rhs : Expr} ->
-  takeOwner ctx sc rhs = Right (sc1, Ghost) ->
-  checkStmt (S fuel) ctx sc (SAssign id n nm Ptr rhs) =
-    Right (setPlace n (Pagurus.Status.singleton AEmpty) sc1)
-stmtAsgPtrGhost _ _ _ _ prf = rewrite prf in Refl
-
-retVarLeft :
-  (fuel : Nat) -> (ctx : Ctx) -> (rid : Nat) ->
-  {sc : Scopes} -> {nid : Nat} -> {n : Place} -> {nm : String} -> {d : Diag} ->
-  takeOwner ctx sc (EVar nid n nm) = Left d ->
-  checkStmt (S fuel) ctx sc (SReturn rid (Just (EVar nid n nm))) = Left d
-retVarLeft _ _ _ prf = rewrite prf in Refl
-
-retVarRight :
-  (fuel : Nat) -> (ctx : Ctx) -> (rid : Nat) ->
-  {sc, sc1 : Scopes} -> {nid : Nat} -> {n : Place} -> {nm : String} -> {fl : Flag} ->
-  takeOwner ctx sc (EVar nid n nm) = Right (sc1, fl) ->
-  checkStmt (S fuel) ctx sc (SReturn rid (Just (EVar nid n nm))) = Right sc1
-retVarRight _ _ _ prf = rewrite prf in Refl
-
-argsBorrowLeft :
-  (es : List Expr) ->
-  {ctx : Ctx} -> {sc : Scopes} -> {e : Expr} -> {d : Diag} ->
-  checkExpr ctx sc e = Left d ->
-  checkArgsBorrow ctx sc (e :: es) = Left d
-argsBorrowLeft _ prf = rewrite prf in Refl
-
-argsBorrowRight :
-  (es : List Expr) ->
-  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {e : Expr} ->
-  checkExpr ctx sc e = Right sc1 ->
-  checkArgsBorrow ctx sc (e :: es) = checkArgsBorrow ctx sc1 es
-argsBorrowRight _ prf = rewrite prf in Refl
-
-argsMoveLeft :
-  (es : List Expr) ->
-  {ctx : Ctx} -> {sc : Scopes} -> {e : Expr} -> {d : Diag} ->
-  takeOwner ctx sc e = Left d ->
-  checkArgsMove ctx sc (e :: es) = Left d
-argsMoveLeft _ prf = rewrite prf in Refl
-
-argsMoveRight :
-  (es : List Expr) ->
-  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {e : Expr} -> {fl : Flag} ->
-  takeOwner ctx sc e = Right (sc1, fl) ->
-  checkArgsMove ctx sc (e :: es) = checkArgsMove ctx sc1 es
-argsMoveRight _ prf = rewrite prf in Refl
-
-stmtsConsLeft :
-  (ss : List Stmt) ->
-  {fuel : Nat} -> {ctx : Ctx} -> {sc : Scopes} -> {s : Stmt} -> {d : Diag} ->
-  checkStmt fuel ctx sc s = Left d ->
-  checkStmts (S fuel) ctx sc (s :: ss) = Left d
-stmtsConsLeft _ prf = rewrite prf in Refl
-
-stmtsConsRight :
-  (ss : List Stmt) ->
-  {fuel : Nat} -> {ctx : Ctx} -> {sc, sc1 : Scopes} -> {s : Stmt} ->
-  checkStmt fuel ctx sc s = Right sc1 ->
-  checkStmts (S fuel) ctx sc (s :: ss) = checkStmts fuel ctx sc1 ss
-stmtsConsRight _ prf = rewrite prf in Refl
-
-ifExprLeft :
-  (fuel : Nat) -> (iid : Nat) -> (thn : List Stmt) -> (els : List Stmt) ->
-  {ctx : Ctx} -> {sc : Scopes} -> {cond : Expr} -> {d : Diag} ->
-  checkExpr ctx sc cond = Left d ->
-  checkStmt (S fuel) ctx sc (SIf iid cond thn els) = Left d
-ifExprLeft _ _ _ _ prf = rewrite prf in Refl
-
-ifThenLeft :
-  (iid : Nat) -> (els : List Stmt) ->
-  {fuel : Nat} -> {ctx : Ctx} -> {sc, sc0 : Scopes} ->
-  {cond : Expr} -> {thn : List Stmt} -> {d : Diag} ->
-  checkExpr ctx sc cond = Right sc0 ->
-  checkStmts fuel ctx sc0 thn = Left d ->
-  checkStmt (S fuel) ctx sc (SIf iid cond thn els) = Left d
-ifThenLeft _ _ pC pT = rewrite pC in rewrite pT in Refl
-
-ifElseLeft :
-  (iid : Nat) ->
-  {fuel : Nat} -> {ctx : Ctx} -> {sc, sc0, scT : Scopes} ->
-  {cond : Expr} -> {thn, els : List Stmt} -> {d : Diag} ->
-  checkExpr ctx sc cond = Right sc0 ->
-  checkStmts fuel ctx sc0 thn = Right scT ->
-  checkStmts fuel ctx sc0 els = Left d ->
-  checkStmt (S fuel) ctx sc (SIf iid cond thn els) = Left d
-ifElseLeft _ pC pT pE = rewrite pC in rewrite pT in rewrite pE in Refl
-
-ifFull :
-  (iid : Nat) ->
-  {fuel : Nat} -> {ctx : Ctx} -> {sc, sc0, scT, scE : Scopes} ->
-  {cond : Expr} -> {thn, els : List Stmt} ->
-  checkExpr ctx sc cond = Right sc0 ->
-  checkStmts fuel ctx sc0 thn = Right scT ->
-  checkStmts fuel ctx sc0 els = Right scE ->
-  checkStmt (S fuel) ctx sc (SIf iid cond thn els) = Right (joinScopes scT scE)
-ifFull _ pC pT pE = rewrite pC in rewrite pT in rewrite pE in Refl
-
-loopFixLeft :
-  (lid : Nat) ->
-  {k : Nat} -> {ctx : Ctx} -> {sc : Scopes} -> {bod : List Stmt} -> {d : Diag} ->
-  checkStmts k ctx sc bod = Left d ->
-  loopFix (S k) ctx sc lid bod = Left d
-loopFixLeft _ prf = rewrite prf in Refl
-
-loopFixTrue :
-  {k : Nat} -> {ctx : Ctx} -> {sc, scB : Scopes} -> {lid : Nat} -> {bod : List Stmt} ->
-  checkStmts k ctx sc bod = Right scB ->
-  eqScopes (joinScopes sc scB) sc = True ->
-  loopFix (S k) ctx sc lid bod = Right (joinScopes sc scB)
-loopFixTrue pB pEq = rewrite pB in rewrite pEq in Refl
-
-loopFixFalse :
-  (lid : Nat) ->
-  {k : Nat} -> {ctx : Ctx} -> {sc, scB : Scopes} -> {bod : List Stmt} ->
-  checkStmts k ctx sc bod = Right scB ->
-  eqScopes (joinScopes sc scB) sc = False ->
-  loopFix (S k) ctx sc lid bod = loopFix k ctx (joinScopes sc scB) lid bod
-loopFixFalse _ pB pEq = rewrite pB in rewrite pEq in Refl
-
---------------------------------------------------------------------------------
--- Concrete Owner implies the checker produced Owner
---------------------------------------------------------------------------------
+export
+ownerNotGhost : Not (Owner = Ghost)
+ownerNotGhost Refl impossible
 
 ownerMallocGo :
   (mid : Nat) ->
@@ -854,6 +671,7 @@ ownerAsgMove eq pT (Right sc2) pM =
   sym (cong snd (rightInj (trans (sym (takeAsgPtrOwner pT pM)) eq)))
 
 mutual
+  export
   ownerFlagTrue :
     {ctx : Ctx} -> {sc, sc' : Scopes} -> {c, c' : CScopes} ->
     {e : Expr} -> {fl : Flag} ->
@@ -925,27 +743,34 @@ data SafeOut : Outcome -> Scopes -> Type where
   OutOk : {c' : CScopes} -> Represents c' sc' -> SafeOut (Ok c') sc'
   OutCrash : Not (IsOwnershipCrash (Crash d)) -> SafeOut (Crash d) sc'
 
+export
 fromOut : SafeOut o sc' -> Not (IsOwnershipCrash o)
 fromOut (OutOk _) hit = okNotHit hit
 fromOut (OutCrash p) hit = p hit
 
+export
 outRewrite : {sc1, sc2 : Scopes} -> sc1 = sc2 -> SafeOut o sc1 -> SafeOut o sc2
 outRewrite Refl s = s
 
+export
 joinOutL : {scT, scE : Scopes} -> SafeOut o scT -> SafeOut o (joinScopes scT scE)
 joinOutL (OutOk r) = OutOk (reprJoinLeft r)
 joinOutL (OutCrash p) = OutCrash p
 
+export
 joinOutR : {scT, scE : Scopes} -> SafeOut o scE -> SafeOut o (joinScopes scT scE)
 joinOutR (OutOk r) = OutOk (reprJoinRight r)
 joinOutR (OutCrash p) = OutCrash p
 
+export
 crashScope : SafeOut (Crash d) sc1 -> SafeOut (Crash d) sc2
 crashScope (OutCrash p) = OutCrash p
 
+export
 fromOk : SafeOut (Ok c') sc' -> Represents c' sc'
 fromOk (OutOk r) = r
 
+export
 outUse : {sc, sc' : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
          {c : CScopes} -> {o : Outcome} ->
          usePlace sc n nid nm = Right sc' ->
@@ -955,6 +780,7 @@ outUse : {sc, sc' : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
 outUse {o = Ok _} eq r act = OutOk (usePlacePres eq r act)
 outUse {o = Crash _} eq r act = OutCrash (usePlaceSafe eq r act)
 
+export
 outMove : {sc, sc' : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
           {c : CScopes} -> {o : Outcome} ->
           movePlace sc n nid nm = Right sc' ->
@@ -964,6 +790,7 @@ outMove : {sc, sc' : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
 outMove {o = Ok _} eq r act = OutOk (movePlacePres eq r act)
 outMove {o = Crash _} eq r act = OutCrash (movePlaceSafe eq r act)
 
+export
 outDrop : {sc, sc' : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
           {c : CScopes} -> {o : Outcome} ->
           dropPlace sc n nid nm = Right sc' ->
@@ -974,7 +801,8 @@ outDrop {o = Ok _} eq r act = OutOk (dropPres eq r act)
 outDrop {o = Crash _} eq r act = OutCrash (dropSafe eq r act)
 
 ||| If `checkStmts fuel` accepts, no concrete `EvalStmts` from a represented
-||| store is UAM/UAF/DF. Fuel exhaustion is a rejection.
+||| store is UAM/UAF/DF. Fuel exhaustion is a rejection. The inhabitant lives
+||| in `Pagurus.Safety.Stmt`.
 public export
 CheckAcceptedNoOwnershipCrash : Type
 CheckAcceptedNoOwnershipCrash =
@@ -984,11 +812,3 @@ CheckAcceptedNoOwnershipCrash =
   (c : CScopes) -> Represents c sc ->
   (o : Outcome) -> EvalStmts ctx c ss o ->
   Not (IsOwnershipCrash o)
-
--- The constructor-by-constructor inhabitant of
--- `CheckAcceptedNoOwnershipCrash` (assignment, initialised decl, call, if,
--- loop unroll, sequential EvConsOk) is omitted: Idris 2 0.8.0's elaborator
--- diverges and is OOM-killed (~15GiB) while typechecking that mutual, even
--- after splitting expression vs statement cases and making unfold indices
--- explicit. Local lemmas above (ownerFlagTrue, store/Represents
--- preservation, unfold equations) remain.

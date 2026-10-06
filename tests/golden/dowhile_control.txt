@@ -1,0 +1,11 @@
+error[use_after_move]: use of moved value `p`
+  --> dowhile_control.c:11:10
+   |
+11 |     free(p);
+   |          ^ used here after move
+note: value moved here
+  --> dowhile_control.c:10:22
+   |
+10 |     } while (consume(p));
+   |                      ^ value moved here
+help: this pointer was moved; free the unique owner instead, not the moved-from name

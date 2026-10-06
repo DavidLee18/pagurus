@@ -150,15 +150,19 @@ public export
 isConsuming : Ctx -> String -> Bool
 isConsuming ctx n = elem n ctx.consuming
 
+||| `malloc`/`calloc` only. `free` is `SDrop` in the C lowering; a
+||| hand-written `(call free …)` is not a builtin use — it is opaque
+||| (unsupported) unless a user function of that name is defined.
 public export
 isBuiltin : String -> Bool
-isBuiltin n = n == "malloc" || n == "calloc" || n == "free"
+isBuiltin n = n == "malloc" || n == "calloc"
 
 ||| Whether `takeOwner` produced a unique owner (`Owner`) or a non-owner
 ||| (`Ghost`, e.g. a literal or an untracked name).
 public export
 data Flag = Owner | Ghost
 
+export
 withName : String -> Diag -> Diag
 withName n d =
   case d.kind of
@@ -280,8 +284,11 @@ ifJoin : Scopes -> Either Diag Scopes -> Either Diag Scopes
 ifJoin _ (Left d) = Left d
 ifJoin scT (Right scE) = Right (joinScopes scT scE)
 
+-- Checker functions are `export` (opaque outside this module) so proof
+-- modules cannot unfold them. Use the unfold lemmas below; first-order
+-- eliminators stay `public export` for `rewrite`.
 mutual
-  public export
+  export
   checkExpr : Ctx -> Scopes -> Expr -> Either Diag Scopes
   checkExpr ctx sc (ELit _) = Right sc
   checkExpr ctx sc (EMalloc _ args) = checkArgsBorrow ctx sc args
@@ -292,7 +299,7 @@ mutual
   checkExpr _ _ (EUnsupported id reason) = Left (unsupported id reason)
 
   ||| Evaluate an expression as a unique-owner rvalue.
-  public export
+  export
   takeOwner : Ctx -> Scopes -> Expr -> Either Diag (Scopes, Flag)
   takeOwner ctx sc (EMalloc _ args) = mapToOwner (checkArgsBorrow ctx sc args)
   takeOwner _ sc (ELit _) = Right (sc, Ghost)
@@ -304,7 +311,7 @@ mutual
   takeOwner ctx sc e = mapToGhost (checkExpr ctx sc e)
 
   ||| Store into `n`. If `asMove` then yield the stored owner (assignment rvalue).
-  public export
+  export
   assignPlace : Ctx -> Scopes -> Nat -> Place -> String -> Ty -> Expr -> Bool -> Either Diag Scopes
   assignPlace ctx sc id n nm ty rhs asMove =
     case ty of
@@ -316,7 +323,7 @@ mutual
   argsBorrowFrom _ _ (Left d) = Left d
   argsBorrowFrom ctx es (Right sc') = checkArgsBorrow ctx sc' es
 
-  public export
+  export
   checkArgsBorrow : Ctx -> Scopes -> List Expr -> Either Diag Scopes
   checkArgsBorrow _ sc [] = Right sc
   checkArgsBorrow ctx sc (e :: es) = argsBorrowFrom ctx es (checkExpr ctx sc e)
@@ -326,12 +333,12 @@ mutual
   argsMoveFrom _ _ (Left d) = Left d
   argsMoveFrom ctx es (Right (sc', _)) = checkArgsMove ctx sc' es
 
-  public export
+  export
   checkArgsMove : Ctx -> Scopes -> List Expr -> Either Diag Scopes
   checkArgsMove _ sc [] = Right sc
   checkArgsMove ctx sc (e :: es) = argsMoveFrom ctx es (takeOwner ctx sc e)
 
-  public export
+  export
   checkCall : Ctx -> Scopes -> Nat -> String -> List Expr -> Either Diag Scopes
   checkCall ctx sc id callee args =
     if isBuiltin callee
@@ -346,7 +353,7 @@ mutual
           then checkArgsMove ctx sc args
           else checkArgsBorrow ctx sc args
 
-  public export
+  export
   checkStmt : Nat -> Ctx -> Scopes -> Stmt -> Either Diag Scopes
   checkStmt Z _ _ s =
     Left (MkDiag KUnproven
@@ -394,7 +401,7 @@ mutual
   ifFromCond fuel ctx thn els (Right sc0) =
     ifFromThn fuel ctx sc0 els (checkStmts fuel ctx sc0 thn)
 
-  public export
+  export
   checkStmts : Nat -> Ctx -> Scopes -> List Stmt -> Either Diag Scopes
   checkStmts Z _ _ (s :: _) =
     Left (MkDiag KUnproven "analysis fuel exhausted" (stmtId s) "here" []
@@ -408,7 +415,7 @@ mutual
   stmtsConsFrom _ _ _ (Left d) = Left d
   stmtsConsFrom fuel ctx ss (Right sc') = checkStmts fuel ctx sc' ss
 
-  public export
+  export
   loopFix : Nat -> Ctx -> Scopes -> Nat -> List Stmt -> Either Diag Scopes
   loopFix Z _ _ id _ =
     Left (MkDiag KUnproven
@@ -457,3 +464,654 @@ checkProgram (MkProgram funs) =
           Left d => Left d
           Right () => go fs
   in go funs
+
+--------------------------------------------------------------------------------
+-- Unfold lemmas (visible here; checker bodies are opaque elsewhere)
+--------------------------------------------------------------------------------
+
+export
+checkExprLit : (ctx : Ctx) -> (sc : Scopes) -> (id : Nat) ->
+               checkExpr ctx sc (ELit id) = Right sc
+checkExprLit _ _ _ = Refl
+
+export
+checkExprMalloc : (ctx : Ctx) -> (sc : Scopes) -> (id : Nat) -> (args : List Expr) ->
+                  checkExpr ctx sc (EMalloc id args) = checkArgsBorrow ctx sc args
+checkExprMalloc _ _ _ _ = Refl
+
+export
+checkExprVar : (ctx : Ctx) -> (sc : Scopes) -> (id : Nat) -> (n : Place) -> (nm : String) ->
+               checkExpr ctx sc (EVar id n nm) = usePlace sc n id nm
+checkExprVar _ _ _ _ _ = Refl
+
+export
+checkExprCall : (ctx : Ctx) -> (sc : Scopes) -> (id : Nat) -> (callee : String) ->
+                (args : List Expr) ->
+                checkExpr ctx sc (ECall id callee args) = checkCall ctx sc id callee args
+checkExprCall _ _ _ _ _ = Refl
+
+export
+checkExprAsgCopy : (id : Nat) -> (n : Place) -> (nm : String) ->
+                   {ctx : Ctx} -> {sc : Scopes} -> {rhs : Expr} ->
+                   checkExpr ctx sc (EAssign id n nm Copy rhs) = checkExpr ctx sc rhs
+checkExprAsgCopy _ _ _ = Refl
+
+export
+checkExprUse : (ctx : Ctx) -> (sc : Scopes) -> (id : Nat) -> (args : List Expr) ->
+               checkExpr ctx sc (EUse id args) = checkArgsBorrow ctx sc args
+checkExprUse _ _ _ _ = Refl
+
+export
+checkExprUnsup : (ctx : Ctx) -> (sc : Scopes) -> (id : Nat) -> (reason : String) ->
+                 checkExpr ctx sc (EUnsupported id reason) =
+                   Left (MkDiag KUnsupported
+                     ("unsupported construct: " ++ reason)
+                     id "unsupported here" []
+                     "rewrite this using the supported C subset (see README); pagurus rejects what it cannot prove")
+checkExprUnsup _ _ _ _ = Refl
+
+export
+takeLit : (ctx : Ctx) -> (sc : Scopes) -> (id : Nat) ->
+          takeOwner ctx sc (ELit id) = Right (sc, Ghost)
+takeLit _ _ _ = Refl
+
+export
+takeUnsup : (ctx : Ctx) -> (sc : Scopes) -> (id : Nat) -> (reason : String) ->
+            takeOwner ctx sc (EUnsupported id reason) =
+              Left (MkDiag KUnsupported
+                ("unsupported construct: " ++ reason)
+                id "unsupported here" []
+                "rewrite this using the supported C subset (see README); pagurus rejects what it cannot prove")
+takeUnsup _ _ _ _ = Refl
+
+export
+checkArgsBorrowNil : (ctx : Ctx) -> (sc : Scopes) ->
+                     checkArgsBorrow ctx sc [] = Right sc
+checkArgsBorrowNil _ _ = Refl
+
+export
+checkArgsMoveNil : (ctx : Ctx) -> (sc : Scopes) ->
+                   checkArgsMove ctx sc [] = Right sc
+checkArgsMoveNil _ _ = Refl
+
+export
+checkCallBuiltin :
+  {ctx : Ctx} -> {sc : Scopes} -> {nid : Nat} -> {callee : String} ->
+  {args : List Expr} ->
+  isBuiltin callee = True ->
+  checkCall ctx sc nid callee args = checkArgsBorrow ctx sc args
+checkCallBuiltin pb = rewrite pb in Refl
+
+export
+checkCallOpaque :
+  {ctx : Ctx} -> {sc : Scopes} -> {nid : Nat} -> {callee : String} ->
+  {args : List Expr} ->
+  isBuiltin callee = False ->
+  isDefined ctx callee = False ->
+  checkCall ctx sc nid callee args =
+    Left (MkDiag KUnsupported
+      ("unsupported call to `" ++ callee ++ "`: no function body, so pagurus cannot prove the call is safe")
+      nid "called here"
+      []
+      "provide a definition in this translation unit, or avoid passing unique pointers to opaque functions")
+checkCallOpaque pb pd = rewrite pb in rewrite pd in Refl
+
+export
+checkCallBorrow :
+  {ctx : Ctx} -> {sc : Scopes} -> {nid : Nat} -> {callee : String} ->
+  {args : List Expr} ->
+  isBuiltin callee = False ->
+  isDefined ctx callee = True ->
+  isConsuming ctx callee = False ->
+  checkCall ctx sc nid callee args = checkArgsBorrow ctx sc args
+checkCallBorrow pb pd pc = rewrite pb in rewrite pd in rewrite pc in Refl
+
+export
+checkCallConsume :
+  {ctx : Ctx} -> {sc : Scopes} -> {nid : Nat} -> {callee : String} ->
+  {args : List Expr} ->
+  isBuiltin callee = False ->
+  isDefined ctx callee = True ->
+  isConsuming ctx callee = True ->
+  checkCall ctx sc nid callee args = checkArgsMove ctx sc args
+checkCallConsume pb pd pc = rewrite pb in rewrite pd in rewrite pc in Refl
+
+export
+assignPtrLeft :
+  (id : Nat) -> (n : Place) -> (nm : String) ->
+  {ctx : Ctx} -> {sc : Scopes} -> {rhs : Expr} -> {d : Diag} ->
+  takeOwner ctx sc rhs = Left d ->
+  assignPlace ctx sc id n nm Ptr rhs False = Left d
+assignPtrLeft _ _ _ prf = rewrite prf in Refl
+
+export
+assignPtrOwner :
+  {ctx : Ctx} -> {sc, sc1, sc2 : Scopes} -> {id : Nat} -> {n : Place} ->
+  {nm : String} -> {rhs : Expr} ->
+  takeOwner ctx sc rhs = Right (sc1, Owner) ->
+  usePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n id nm = Right sc2 ->
+  assignPlace ctx sc id n nm Ptr rhs False = Right sc2
+assignPtrOwner pT pU = rewrite pT in rewrite pU in Refl
+
+export
+assignPtrUseFail :
+  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {id : Nat} -> {n : Place} ->
+  {nm : String} -> {rhs : Expr} -> {d : Diag} ->
+  takeOwner ctx sc rhs = Right (sc1, Owner) ->
+  usePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n id nm = Left d ->
+  assignPlace ctx sc id n nm Ptr rhs False = Left d
+assignPtrUseFail pT pU = rewrite pT in rewrite pU in Refl
+
+export
+assignPtrGhost :
+  (id : Nat) -> (n : Place) -> (nm : String) ->
+  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {rhs : Expr} ->
+  takeOwner ctx sc rhs = Right (sc1, Ghost) ->
+  assignPlace ctx sc id n nm Ptr rhs False =
+    Right (setPlace n (Pagurus.Status.singleton AEmpty) sc1)
+assignPtrGhost _ _ _ pT = rewrite pT in Refl
+
+export
+checkExprAsgPtrLeft :
+  (id : Nat) -> (n : Place) -> (nm : String) ->
+  {ctx : Ctx} -> {sc : Scopes} -> {rhs : Expr} -> {d : Diag} ->
+  takeOwner ctx sc rhs = Left d ->
+  checkExpr ctx sc (EAssign id n nm Ptr rhs) = Left d
+checkExprAsgPtrLeft _ _ _ prf = rewrite prf in Refl
+
+export
+checkExprAsgPtrOwner :
+  {ctx : Ctx} -> {sc, sc1, sc2 : Scopes} -> {id : Nat} -> {n : Place} ->
+  {nm : String} -> {rhs : Expr} ->
+  takeOwner ctx sc rhs = Right (sc1, Owner) ->
+  usePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n id nm = Right sc2 ->
+  checkExpr ctx sc (EAssign id n nm Ptr rhs) = Right sc2
+checkExprAsgPtrOwner pT pU = rewrite pT in rewrite pU in Refl
+
+export
+checkExprAsgPtrUseFail :
+  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {id : Nat} -> {n : Place} ->
+  {nm : String} -> {rhs : Expr} -> {d : Diag} ->
+  takeOwner ctx sc rhs = Right (sc1, Owner) ->
+  usePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n id nm = Left d ->
+  checkExpr ctx sc (EAssign id n nm Ptr rhs) = Left d
+checkExprAsgPtrUseFail pT pU = rewrite pT in rewrite pU in Refl
+
+export
+checkExprAsgPtrGhost :
+  (id : Nat) -> (n : Place) -> (nm : String) ->
+  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {rhs : Expr} ->
+  takeOwner ctx sc rhs = Right (sc1, Ghost) ->
+  checkExpr ctx sc (EAssign id n nm Ptr rhs) =
+    Right (setPlace n (Pagurus.Status.singleton AEmpty) sc1)
+checkExprAsgPtrGhost _ _ _ pT = rewrite pT in Refl
+
+export
+takeMallocLeft :
+  (mid : Nat) ->
+  {ctx : Ctx} -> {sc : Scopes} -> {args : List Expr} -> {d : Diag} ->
+  checkArgsBorrow ctx sc args = Left d ->
+  takeOwner ctx sc (EMalloc mid args) = Left d
+takeMallocLeft _ prf = rewrite prf in Refl
+
+export
+takeMallocRight :
+  (mid : Nat) ->
+  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {args : List Expr} ->
+  checkArgsBorrow ctx sc args = Right sc1 ->
+  takeOwner ctx sc (EMalloc mid args) = Right (sc1, Owner)
+takeMallocRight _ prf = rewrite prf in Refl
+
+export
+takeAsgCopyLeft :
+  (id : Nat) -> (n : Place) -> (nm : String) ->
+  {ctx : Ctx} -> {sc : Scopes} -> {rhs : Expr} -> {d : Diag} ->
+  checkExpr ctx sc rhs = Left d ->
+  takeOwner ctx sc (EAssign id n nm Copy rhs) = Left d
+takeAsgCopyLeft _ _ _ prf = rewrite prf in Refl
+
+export
+takeAsgCopyRight :
+  (id : Nat) -> (n : Place) -> (nm : String) ->
+  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {rhs : Expr} ->
+  checkExpr ctx sc rhs = Right sc1 ->
+  takeOwner ctx sc (EAssign id n nm Copy rhs) = Right (sc1, Ghost)
+takeAsgCopyRight _ _ _ prf = rewrite prf in Refl
+
+export
+takeAsgPtrLeft :
+  (id : Nat) -> (n : Place) -> (nm : String) ->
+  {ctx : Ctx} -> {sc : Scopes} -> {rhs : Expr} -> {d : Diag} ->
+  takeOwner ctx sc rhs = Left d ->
+  takeOwner ctx sc (EAssign id n nm Ptr rhs) = Left d
+takeAsgPtrLeft _ _ _ prf = rewrite prf in Refl
+
+export
+takeAsgPtrOwner :
+  {ctx : Ctx} -> {sc, sc1, sc2 : Scopes} -> {id : Nat} -> {n : Place} ->
+  {nm : String} -> {rhs : Expr} ->
+  takeOwner ctx sc rhs = Right (sc1, Owner) ->
+  movePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n id nm = Right sc2 ->
+  takeOwner ctx sc (EAssign id n nm Ptr rhs) = Right (sc2, Owner)
+takeAsgPtrOwner pT pM = rewrite pT in rewrite pM in Refl
+
+export
+takeAsgPtrGhost :
+  (id : Nat) -> (n : Place) -> (nm : String) ->
+  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {rhs : Expr} ->
+  takeOwner ctx sc rhs = Right (sc1, Ghost) ->
+  takeOwner ctx sc (EAssign id n nm Ptr rhs) =
+    Right (setPlace n (Pagurus.Status.singleton AEmpty) sc1, Ghost)
+takeAsgPtrGhost _ _ _ pT = rewrite pT in Refl
+
+export
+takeAsgPtrFail :
+  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {id : Nat} -> {n : Place} ->
+  {nm : String} -> {rhs : Expr} -> {d : Diag} ->
+  takeOwner ctx sc rhs = Right (sc1, Owner) ->
+  movePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n id nm = Left d ->
+  takeOwner ctx sc (EAssign id n nm Ptr rhs) = Left d
+takeAsgPtrFail pT pM = rewrite pT in rewrite pM in Refl
+
+export
+takeVarMiss :
+  (ctx : Ctx) -> (nid : Nat) -> (nm : String) ->
+  {sc : Scopes} -> {n : Place} ->
+  lookupPlace n sc = Nothing ->
+  takeOwner ctx sc (EVar nid n nm) = Right (sc, Ghost)
+takeVarMiss _ _ _ prf = rewrite prf in Refl
+
+export
+takeVarJustL :
+  (ctx : Ctx) ->
+  {sc : Scopes} -> {nid : Nat} -> {n : Place} -> {nm : String} ->
+  {st : Status} -> {d : Diag} ->
+  lookupPlace n sc = Just st ->
+  movePlace sc n nid nm = Left d ->
+  takeOwner ctx sc (EVar nid n nm) = Left d
+takeVarJustL _ pLook pM = rewrite pLook in rewrite pM in Refl
+
+export
+takeVarJustR :
+  (ctx : Ctx) ->
+  {sc, sc1 : Scopes} -> {nid : Nat} -> {n : Place} -> {nm : String} ->
+  {st : Status} ->
+  lookupPlace n sc = Just st ->
+  movePlace sc n nid nm = Right sc1 ->
+  takeOwner ctx sc (EVar nid n nm) = Right (sc1, Owner)
+takeVarJustR _ pLook pM = rewrite pLook in rewrite pM in Refl
+
+export
+takeCallLeft :
+  {ctx : Ctx} -> {sc : Scopes} -> {id : Nat} -> {callee : String} ->
+  {args : List Expr} -> {d : Diag} ->
+  checkExpr ctx sc (ECall id callee args) = Left d ->
+  takeOwner ctx sc (ECall id callee args) = Left d
+takeCallLeft prf = rewrite prf in Refl
+
+export
+takeCallRight :
+  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {id : Nat} -> {callee : String} ->
+  {args : List Expr} ->
+  checkExpr ctx sc (ECall id callee args) = Right sc1 ->
+  takeOwner ctx sc (ECall id callee args) = Right (sc1, Ghost)
+takeCallRight prf = rewrite prf in Refl
+
+export
+takeUseLeft :
+  (uid : Nat) ->
+  {ctx : Ctx} -> {sc : Scopes} -> {args : List Expr} -> {d : Diag} ->
+  checkArgsBorrow ctx sc args = Left d ->
+  takeOwner ctx sc (EUse uid args) = Left d
+takeUseLeft _ prf = rewrite prf in Refl
+
+export
+takeUseRight :
+  (uid : Nat) ->
+  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {args : List Expr} ->
+  checkArgsBorrow ctx sc args = Right sc1 ->
+  takeOwner ctx sc (EUse uid args) = Right (sc1, Ghost)
+takeUseRight _ prf = rewrite prf in Refl
+
+export
+checkStmtZero :
+  (ctx : Ctx) -> (sc : Scopes) -> (s : Stmt) ->
+  checkStmt Z ctx sc s =
+    Left (MkDiag KUnproven
+      "analysis fuel exhausted"
+      (stmtId s) "here" []
+      "this is an internal limitation; simplify control flow")
+checkStmtZero _ _ _ = Refl
+
+export
+checkStmtBlock :
+  (fuel : Nat) -> (ctx : Ctx) -> (sc : Scopes) -> (id : Nat) -> (body : List Stmt) ->
+  checkStmt (S fuel) ctx sc (SBlock id body) = checkStmts fuel ctx sc body
+checkStmtBlock _ _ _ _ _ = Refl
+
+export
+checkStmtDeclCopyNone :
+  (fuel : Nat) -> (ctx : Ctx) -> (sc : Scopes) ->
+  (id : Nat) -> (n : Place) -> (nm : String) ->
+  checkStmt (S fuel) ctx sc (SDecl id n nm Copy Nothing) = Right sc
+checkStmtDeclCopyNone _ _ _ _ _ _ = Refl
+
+export
+checkStmtDeclCopyJust :
+  (fuel : Nat) -> (id : Nat) -> (n : Place) -> (nm : String) ->
+  {ctx : Ctx} -> {sc : Scopes} -> {e : Expr} ->
+  checkStmt (S fuel) ctx sc (SDecl id n nm Copy (Just e)) = checkExpr ctx sc e
+checkStmtDeclCopyJust _ _ _ _ = Refl
+
+export
+checkStmtDeclPtrNone :
+  (fuel : Nat) -> (ctx : Ctx) -> (sc : Scopes) ->
+  (id : Nat) -> (n : Place) -> (nm : String) ->
+  checkStmt (S fuel) ctx sc (SDecl id n nm Ptr Nothing) =
+    Right (declarePlace n (Pagurus.Status.singleton AEmpty) sc)
+checkStmtDeclPtrNone _ _ _ _ _ _ = Refl
+
+export
+checkStmtAsgCopy :
+  (fuel : Nat) -> (id : Nat) -> (n : Place) -> (nm : String) ->
+  {ctx : Ctx} -> {sc : Scopes} -> {rhs : Expr} ->
+  checkStmt (S fuel) ctx sc (SAssign id n nm Copy rhs) = checkExpr ctx sc rhs
+checkStmtAsgCopy _ _ _ _ = Refl
+
+export
+checkStmtDrop :
+  (fuel : Nat) -> (ctx : Ctx) -> (sc : Scopes) ->
+  (id : Nat) -> (n : Place) -> (nm : String) ->
+  checkStmt (S fuel) ctx sc (SDrop id n nm) = dropPlace sc n id nm
+checkStmtDrop _ _ _ _ _ _ = Refl
+
+export
+checkStmtCall :
+  (fuel : Nat) -> (ctx : Ctx) -> (sc : Scopes) ->
+  (id : Nat) -> (callee : String) -> (args : List Expr) ->
+  checkStmt (S fuel) ctx sc (SCall id callee args) = checkCall ctx sc id callee args
+checkStmtCall _ _ _ _ _ _ = Refl
+
+export
+checkStmtRetNone :
+  (fuel : Nat) -> (ctx : Ctx) -> (sc : Scopes) -> (id : Nat) ->
+  checkStmt (S fuel) ctx sc (SReturn id Nothing) = Right sc
+checkStmtRetNone _ _ _ _ = Refl
+
+export
+checkStmtRetLit :
+  (fuel : Nat) -> (ctx : Ctx) -> (sc : Scopes) -> (rid : Nat) -> (id : Nat) ->
+  checkStmt (S fuel) ctx sc (SReturn rid (Just (ELit id))) = checkExpr ctx sc (ELit id)
+checkStmtRetLit _ _ _ _ _ = Refl
+
+export
+checkStmtRetMalloc :
+  (fuel : Nat) -> (ctx : Ctx) -> (sc : Scopes) -> (rid : Nat) ->
+  (mid : Nat) -> (args : List Expr) ->
+  checkStmt (S fuel) ctx sc (SReturn rid (Just (EMalloc mid args))) =
+    checkExpr ctx sc (EMalloc mid args)
+checkStmtRetMalloc _ _ _ _ _ _ = Refl
+
+export
+checkStmtRetCall :
+  (fuel : Nat) -> (ctx : Ctx) -> (sc : Scopes) -> (rid : Nat) ->
+  (id : Nat) -> (callee : String) -> (args : List Expr) ->
+  checkStmt (S fuel) ctx sc (SReturn rid (Just (ECall id callee args))) =
+    checkExpr ctx sc (ECall id callee args)
+checkStmtRetCall _ _ _ _ _ _ _ = Refl
+
+export
+checkStmtRetUse :
+  (fuel : Nat) -> (ctx : Ctx) -> (sc : Scopes) -> (rid : Nat) ->
+  (uid : Nat) -> (args : List Expr) ->
+  checkStmt (S fuel) ctx sc (SReturn rid (Just (EUse uid args))) =
+    checkExpr ctx sc (EUse uid args)
+checkStmtRetUse _ _ _ _ _ _ = Refl
+
+export
+checkStmtRetAsg :
+  (fuel : Nat) -> (ctx : Ctx) -> (sc : Scopes) -> (rid : Nat) ->
+  (id : Nat) -> (n : Place) -> (nm : String) -> (ty : Ty) -> (rhs : Expr) ->
+  checkStmt (S fuel) ctx sc (SReturn rid (Just (EAssign id n nm ty rhs))) =
+    checkExpr ctx sc (EAssign id n nm ty rhs)
+checkStmtRetAsg _ _ _ _ _ _ _ _ _ = Refl
+
+export
+checkStmtRetUnsup :
+  (fuel : Nat) -> (ctx : Ctx) -> (sc : Scopes) -> (rid : Nat) ->
+  (id : Nat) -> (reason : String) ->
+  checkStmt (S fuel) ctx sc (SReturn rid (Just (EUnsupported id reason))) =
+    checkExpr ctx sc (EUnsupported id reason)
+checkStmtRetUnsup _ _ _ _ _ _ = Refl
+
+export
+checkStmtExpr :
+  (fuel : Nat) -> (ctx : Ctx) -> (sc : Scopes) -> (id : Nat) -> (e : Expr) ->
+  checkStmt (S fuel) ctx sc (SExpr id e) = checkExpr ctx sc e
+checkStmtExpr _ _ _ _ _ = Refl
+
+export
+checkStmtUnsup :
+  (fuel : Nat) -> (ctx : Ctx) -> (sc : Scopes) -> (id : Nat) -> (reason : String) ->
+  checkStmt (S fuel) ctx sc (SUnsupported id reason) =
+    Left (MkDiag KUnsupported
+      ("unsupported construct: " ++ reason)
+      id "unsupported here" []
+      "rewrite this using the supported C subset (see README); pagurus rejects what it cannot prove")
+checkStmtUnsup _ _ _ _ _ = Refl
+
+export
+checkStmtLoop :
+  (fuel : Nat) -> (ctx : Ctx) -> (sc : Scopes) -> (id : Nat) -> (body : List Stmt) ->
+  checkStmt (S fuel) ctx sc (SLoop id body) = loopFix fuel ctx sc id body
+checkStmtLoop _ _ _ _ _ = Refl
+
+export
+checkStmtsZero :
+  (ctx : Ctx) -> (sc : Scopes) -> (s : Stmt) -> (ss : List Stmt) ->
+  checkStmts Z ctx sc (s :: ss) =
+    Left (MkDiag KUnproven "analysis fuel exhausted" (stmtId s) "here" []
+      "this is an internal limitation; simplify control flow")
+checkStmtsZero _ _ _ _ = Refl
+
+export
+checkStmtsNil :
+  (fuel : Nat) -> (ctx : Ctx) -> (sc : Scopes) ->
+  checkStmts fuel ctx sc [] = Right sc
+checkStmtsNil Z _ _ = Refl
+checkStmtsNil (S _) _ _ = Refl
+
+export
+loopFixZero :
+  (ctx : Ctx) -> (sc : Scopes) -> (id : Nat) -> (body : List Stmt) ->
+  loopFix Z ctx sc id body =
+    Left (MkDiag KUnproven
+      "loop fixpoint fuel exhausted"
+      id "loop here" []
+      "the ownership lattice did not stabilise; simplify the loop")
+loopFixZero _ _ _ _ = Refl
+
+export
+declPtrLeft :
+  (fuel : Nat) -> (id : Nat) -> (n : Place) -> (nm : String) ->
+  {ctx : Ctx} -> {sc : Scopes} -> {e : Expr} -> {d : Diag} ->
+  takeOwner ctx sc e = Left d ->
+  checkStmt (S fuel) ctx sc (SDecl id n nm Ptr (Just e)) = Left d
+declPtrLeft _ _ _ _ prf = rewrite prf in Refl
+
+export
+declPtrOwner :
+  (fuel : Nat) -> (id : Nat) -> (n : Place) -> (nm : String) ->
+  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {e : Expr} ->
+  takeOwner ctx sc e = Right (sc1, Owner) ->
+  checkStmt (S fuel) ctx sc (SDecl id n nm Ptr (Just e)) =
+    Right (declarePlace n (Pagurus.Status.singleton AOwned) sc1)
+declPtrOwner _ _ _ _ prf = rewrite prf in Refl
+
+export
+declPtrGhostEq :
+  (fuel : Nat) -> (id : Nat) -> (n : Place) -> (nm : String) ->
+  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {e : Expr} ->
+  takeOwner ctx sc e = Right (sc1, Ghost) ->
+  checkStmt (S fuel) ctx sc (SDecl id n nm Ptr (Just e)) =
+    Left (MkDiag KUnproven
+      ("cannot prove `" ++ nm ++ "` uniquely owns a heap object")
+      id "declared here"
+      []
+      "initialise unique pointers from malloc or by moving from another unique owner")
+declPtrGhostEq _ _ _ _ prf = rewrite prf in Refl
+
+export
+stmtAsgPtrLeft :
+  (fuel : Nat) -> (id : Nat) -> (n : Place) -> (nm : String) ->
+  {ctx : Ctx} -> {sc : Scopes} -> {rhs : Expr} -> {d : Diag} ->
+  takeOwner ctx sc rhs = Left d ->
+  checkStmt (S fuel) ctx sc (SAssign id n nm Ptr rhs) = Left d
+stmtAsgPtrLeft _ _ _ _ prf = rewrite prf in Refl
+
+export
+stmtAsgPtrOwner :
+  (fuel : Nat) -> (id : Nat) -> (n : Place) -> (nm : String) ->
+  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {rhs : Expr} ->
+  takeOwner ctx sc rhs = Right (sc1, Owner) ->
+  checkStmt (S fuel) ctx sc (SAssign id n nm Ptr rhs) =
+    Right (setPlace n (Pagurus.Status.singleton AOwned) sc1)
+stmtAsgPtrOwner _ _ _ _ prf = rewrite prf in Refl
+
+export
+stmtAsgPtrGhost :
+  (fuel : Nat) -> (id : Nat) -> (n : Place) -> (nm : String) ->
+  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {rhs : Expr} ->
+  takeOwner ctx sc rhs = Right (sc1, Ghost) ->
+  checkStmt (S fuel) ctx sc (SAssign id n nm Ptr rhs) =
+    Right (setPlace n (Pagurus.Status.singleton AEmpty) sc1)
+stmtAsgPtrGhost _ _ _ _ prf = rewrite prf in Refl
+
+export
+retVarLeft :
+  (fuel : Nat) -> (ctx : Ctx) -> (rid : Nat) ->
+  {sc : Scopes} -> {nid : Nat} -> {n : Place} -> {nm : String} -> {d : Diag} ->
+  takeOwner ctx sc (EVar nid n nm) = Left d ->
+  checkStmt (S fuel) ctx sc (SReturn rid (Just (EVar nid n nm))) = Left d
+retVarLeft _ _ _ prf = rewrite prf in Refl
+
+export
+retVarRight :
+  (fuel : Nat) -> (ctx : Ctx) -> (rid : Nat) ->
+  {sc, sc1 : Scopes} -> {nid : Nat} -> {n : Place} -> {nm : String} -> {fl : Flag} ->
+  takeOwner ctx sc (EVar nid n nm) = Right (sc1, fl) ->
+  checkStmt (S fuel) ctx sc (SReturn rid (Just (EVar nid n nm))) = Right sc1
+retVarRight _ _ _ prf = rewrite prf in Refl
+
+export
+argsBorrowLeft :
+  (es : List Expr) ->
+  {ctx : Ctx} -> {sc : Scopes} -> {e : Expr} -> {d : Diag} ->
+  checkExpr ctx sc e = Left d ->
+  checkArgsBorrow ctx sc (e :: es) = Left d
+argsBorrowLeft _ prf = rewrite prf in Refl
+
+export
+argsBorrowRight :
+  (es : List Expr) ->
+  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {e : Expr} ->
+  checkExpr ctx sc e = Right sc1 ->
+  checkArgsBorrow ctx sc (e :: es) = checkArgsBorrow ctx sc1 es
+argsBorrowRight _ prf = rewrite prf in Refl
+
+export
+argsMoveLeft :
+  (es : List Expr) ->
+  {ctx : Ctx} -> {sc : Scopes} -> {e : Expr} -> {d : Diag} ->
+  takeOwner ctx sc e = Left d ->
+  checkArgsMove ctx sc (e :: es) = Left d
+argsMoveLeft _ prf = rewrite prf in Refl
+
+export
+argsMoveRight :
+  (es : List Expr) ->
+  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {e : Expr} -> {fl : Flag} ->
+  takeOwner ctx sc e = Right (sc1, fl) ->
+  checkArgsMove ctx sc (e :: es) = checkArgsMove ctx sc1 es
+argsMoveRight _ prf = rewrite prf in Refl
+
+export
+stmtsConsLeft :
+  (ss : List Stmt) ->
+  {fuel : Nat} -> {ctx : Ctx} -> {sc : Scopes} -> {s : Stmt} -> {d : Diag} ->
+  checkStmt fuel ctx sc s = Left d ->
+  checkStmts (S fuel) ctx sc (s :: ss) = Left d
+stmtsConsLeft _ prf = rewrite prf in Refl
+
+export
+stmtsConsRight :
+  (ss : List Stmt) ->
+  {fuel : Nat} -> {ctx : Ctx} -> {sc, sc1 : Scopes} -> {s : Stmt} ->
+  checkStmt fuel ctx sc s = Right sc1 ->
+  checkStmts (S fuel) ctx sc (s :: ss) = checkStmts fuel ctx sc1 ss
+stmtsConsRight _ prf = rewrite prf in Refl
+
+export
+ifExprLeft :
+  (fuel : Nat) -> (iid : Nat) -> (thn : List Stmt) -> (els : List Stmt) ->
+  {ctx : Ctx} -> {sc : Scopes} -> {cond : Expr} -> {d : Diag} ->
+  checkExpr ctx sc cond = Left d ->
+  checkStmt (S fuel) ctx sc (SIf iid cond thn els) = Left d
+ifExprLeft _ _ _ _ prf = rewrite prf in Refl
+
+export
+ifThenLeft :
+  (iid : Nat) -> (els : List Stmt) ->
+  {fuel : Nat} -> {ctx : Ctx} -> {sc, sc0 : Scopes} ->
+  {cond : Expr} -> {thn : List Stmt} -> {d : Diag} ->
+  checkExpr ctx sc cond = Right sc0 ->
+  checkStmts fuel ctx sc0 thn = Left d ->
+  checkStmt (S fuel) ctx sc (SIf iid cond thn els) = Left d
+ifThenLeft _ _ pC pT = rewrite pC in rewrite pT in Refl
+
+export
+ifElseLeft :
+  (iid : Nat) ->
+  {fuel : Nat} -> {ctx : Ctx} -> {sc, sc0, scT : Scopes} ->
+  {cond : Expr} -> {thn, els : List Stmt} -> {d : Diag} ->
+  checkExpr ctx sc cond = Right sc0 ->
+  checkStmts fuel ctx sc0 thn = Right scT ->
+  checkStmts fuel ctx sc0 els = Left d ->
+  checkStmt (S fuel) ctx sc (SIf iid cond thn els) = Left d
+ifElseLeft _ pC pT pE = rewrite pC in rewrite pT in rewrite pE in Refl
+
+export
+ifFull :
+  (iid : Nat) ->
+  {fuel : Nat} -> {ctx : Ctx} -> {sc, sc0, scT, scE : Scopes} ->
+  {cond : Expr} -> {thn, els : List Stmt} ->
+  checkExpr ctx sc cond = Right sc0 ->
+  checkStmts fuel ctx sc0 thn = Right scT ->
+  checkStmts fuel ctx sc0 els = Right scE ->
+  checkStmt (S fuel) ctx sc (SIf iid cond thn els) = Right (joinScopes scT scE)
+ifFull _ pC pT pE = rewrite pC in rewrite pT in rewrite pE in Refl
+
+export
+loopFixLeft :
+  (lid : Nat) ->
+  {k : Nat} -> {ctx : Ctx} -> {sc : Scopes} -> {bod : List Stmt} -> {d : Diag} ->
+  checkStmts k ctx sc bod = Left d ->
+  loopFix (S k) ctx sc lid bod = Left d
+loopFixLeft _ prf = rewrite prf in Refl
+
+export
+loopFixTrue :
+  {k : Nat} -> {ctx : Ctx} -> {sc, scB : Scopes} -> {lid : Nat} -> {bod : List Stmt} ->
+  checkStmts k ctx sc bod = Right scB ->
+  eqScopes (joinScopes sc scB) sc = True ->
+  loopFix (S k) ctx sc lid bod = Right (joinScopes sc scB)
+loopFixTrue pB pEq = rewrite pB in rewrite pEq in Refl
+
+export
+loopFixFalse :
+  (lid : Nat) ->
+  {k : Nat} -> {ctx : Ctx} -> {sc, scB : Scopes} -> {bod : List Stmt} ->
+  checkStmts k ctx sc bod = Right scB ->
+  eqScopes (joinScopes sc scB) sc = False ->
+  loopFix (S k) ctx sc lid bod = loopFix k ctx (joinScopes sc scB) lid bod
+loopFixFalse _ pB pEq = rewrite pB in rewrite pEq in Refl

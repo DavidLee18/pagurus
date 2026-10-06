@@ -246,6 +246,23 @@ nuoMove nuo eq lookV =
         in replace {p = \s => NoUniqueOwner env s a} scEq
              (nuoMoveSet nuo pL lookV pS)
 
+||| Join cannot introduce a use-safe unique owner of `a`.
+nuoJoin :
+  {env : HEnv} -> {h : Heap} -> {scT, scE : Scopes} -> {a : Addr} ->
+  OverApprox env h scT ->
+  NoUniqueOwner env scT a ->
+  NoUniqueOwner env (joinScopes scT scE) a
+nuoJoin oa nuo p st look lp safe own nb =
+  let (st0 ** lp0) = oa.tracked p (HVPtr a) look
+      (stj ** (lpj, sub)) = joinScopesLookupLeft scT scE p st0 lp0
+      stEq = justInj (trans (sym lpj) lp)
+      sub' = replace {p = \s => SubStatus st0 s} stEq sub
+      nb0 = hasBorrowedDown sub' nb
+      safe0 = unsafeSafeDown sub' safe
+      liveA = oaLive oa p st0 a lp0 look safe0
+      own0 = ownedIfSafeLive oa p a st0 look liveA lp0 safe0 nb0
+  in nuo p st0 look lp0 safe0 own0 nb0
+
 --------------------------------------------------------------------------------
 -- LiveNuo through an accepted body
 --------------------------------------------------------------------------------
@@ -945,8 +962,90 @@ mutual
     noneFrameLNRet ln1 evBody | True =
       restoreOwnLNRet ln1 evBody
 
-  -- The helpers below are defined after the mutual; stubs here keep
-  -- covering of the mutual while those names are resolved.
+  ifThenLN :
+    {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
+    {auto chk : FunsChecked cfuel ctx funs} ->
+    {k : Nat} -> {iid : Nat} -> {cond : Expr} -> {thn, els : List Stmt} ->
+    {env, env0, envS : HEnv} -> {h, h0, hS : Heap} ->
+    {sc, sc1 : Scopes} -> {a : Addr} -> {v : HVal} ->
+    LiveNuo env h sc a ->
+    checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
+    HEvalExpr {funs} env h cond (HROk v env0 h0) ->
+    HEvalStmts {funs} env0 h0 thn (HOk envS hS) ->
+    LiveNuo envS hS sc1 a
+  ifThenLN ln eq evC evT =
+    ifThenLNGo (checkExpr ctx sc cond) Refl ln evC evT eq
+    where
+      ifThenLNGo :
+        (resC : Either Diag Scopes) ->
+        checkExpr ctx sc cond = resC ->
+        LiveNuo env h sc a ->
+        HEvalExpr {funs} env h cond (HROk v env0 h0) ->
+        HEvalStmts {funs} env0 h0 thn (HOk envS hS) ->
+        checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
+        LiveNuo envS hS sc1 a
+      ifThenLNGo (Left d) pC _ _ _ eq0 =
+        void (leftNotRight (trans (sym (ifExprLeft k iid thn els pC)) eq0))
+      ifThenLNGo (Right sc0) pC ln0 evC0 evT0 eq0 =
+        let lnC = exprLN {funs} {chk} ln0 pC evC0
+        in ifThenLNT (checkStmts k ctx sc0 thn) Refl lnC evT0 eq0 pC
+
+      ifThenLNT :
+        {sc0 : Scopes} -> {env0 : HEnv} -> {h0 : Heap} ->
+        (resT : Either Diag Scopes) ->
+        checkStmts k ctx sc0 thn = resT ->
+        LiveNuo env0 h0 sc0 a ->
+        HEvalStmts {funs} env0 h0 thn (HOk envS hS) ->
+        checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
+        checkExpr ctx sc cond = Right sc0 ->
+        LiveNuo envS hS sc1 a
+      ifThenLNT (Left d) pT _ _ eq0 pC =
+        void (leftNotRight (trans (sym (ifThenLeft iid els pC pT)) eq0))
+      ifThenLNT (Right scT) pT lnC evT0 eq0 pC =
+        ifThenLNE (checkStmts k ctx sc0 els) Refl lnC evT0 eq0 pC pT
+
+      ifThenLNE :
+        {sc0, scT : Scopes} -> {env0 : HEnv} -> {h0 : Heap} ->
+        (resE : Either Diag Scopes) ->
+        checkStmts k ctx sc0 els = resE ->
+        LiveNuo env0 h0 sc0 a ->
+        HEvalStmts {funs} env0 h0 thn (HOk envS hS) ->
+        checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
+        checkExpr ctx sc cond = Right sc0 ->
+        checkStmts k ctx sc0 thn = Right scT ->
+        LiveNuo envS hS sc1 a
+      ifThenLNE (Left d) pE _ _ eq0 pC pT =
+        void (leftNotRight (trans (sym (ifElseLeft iid pC pT pE)) eq0))
+      ifThenLNE (Right scE) pE lnC evT0 eq0 pC pT =
+        let lnT = stmtsLN {funs} {chk} {fuel = k} lnC pT evT0
+        in ifThenLNJoin (stmtsEnded thn) (stmtsEnded els) Refl Refl lnT eq0 pC pT pE
+
+      ifThenLNJoin :
+        {sc0, scT, scE : Scopes} ->
+        (et, ee : Bool) ->
+        stmtsEnded thn = et ->
+        stmtsEnded els = ee ->
+        LiveNuo envS hS scT a ->
+        checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
+        checkExpr ctx sc cond = Right sc0 ->
+        checkStmts k ctx sc0 thn = Right scT ->
+        checkStmts k ctx sc0 els = Right scE ->
+        LiveNuo envS hS sc1 a
+      ifThenLNJoin False False pThn pEls lnT eq0 pC pT pE =
+        let scEq = rightInj (trans (sym (ifFull iid pThn pEls pC pT pE)) eq0)
+        in MkLN (oaRewrite scEq (oaJoinLeft lnT.oaLN))
+             (nuoRewrite scEq (nuoJoin lnT.oaLN lnT.nuoLN)) lnT.liveLN
+      ifThenLNJoin True False pThn pEls lnT eq0 pC pT pE =
+        void (stmtsEndedNotHOk pThn evT)
+      ifThenLNJoin False True pThn pEls lnT eq0 pC pT pE =
+        let scEq = rightInj (trans (sym (ifElseEnded iid pThn pEls pC pT pE)) eq0)
+        in MkLN (oaRewrite scEq lnT.oaLN) (nuoRewrite scEq lnT.nuoLN) lnT.liveLN
+      ifThenLNJoin True True pThn pEls lnT eq0 pC pT pE =
+        void (stmtsEndedNotHOk pThn evT)
+
+  -- Remaining helpers (asgPtrLN, declPtrLN, ifElseLN, loopSLN, retJustLN,
+  -- reallocLN, exprsCallConsLN, uniqueOwnLN, ownLivePres, ...) are required
+  -- for covering of stmtLN / exprLN / restoreOwnLN.
 
 heldPtrFalseLift : {0 env : HEnv} -> {0 a, c : Addr} -> {0 p : Place} ->
   heldPtr env a = False ->

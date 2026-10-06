@@ -47,6 +47,7 @@ modules = Pagurus.IR
         , Pagurus.Heap.Return
         , Pagurus.Heap.Expr
         , Pagurus.Heap.Stmt
+        , Pagurus.Heap.Program
         , Pagurus.Heap.Witness
         , Pagurus.Sexp
         , Pagurus.ParseIR

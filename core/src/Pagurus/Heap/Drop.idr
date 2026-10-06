@@ -163,7 +163,7 @@ dropStmtH :
   {sc, sc' : Scopes} -> {env : HEnv} -> {h : Heap} -> {o : HOutcome} ->
   checkStmt (S fuel) ctx sc (SDrop nid n nm) = Right sc' ->
   OverApprox env h sc ->
-  HEvalStmt env h (SDrop nid n nm) o ->
+  HEvalStmt [] env h (SDrop nid n nm) o ->
   HSafeOut o sc'
 dropStmtH fuel ctx nid n nm eq oa (HSDropLive a look live) =
   dropLiveH fuel ctx nid n nm eq oa look live

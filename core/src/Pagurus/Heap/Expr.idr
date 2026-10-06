@@ -25,7 +25,7 @@ mutual
   export
   exprHSafe :
     {ctx : Ctx} -> {e : Expr} -> {env : HEnv} -> {h : Heap} -> {o : HResult} ->
-    HEvalExpr env h e o ->
+    HEvalExpr [] env h e o ->
     (sc, sc' : Scopes) ->
     checkExpr ctx sc e = Right sc' ->
     OverApprox env h sc ->
@@ -45,11 +45,17 @@ mutual
     argsBorrowH evs sc sc' (trans (sym (checkExprUse ctx sc uid args)) eq) oa
   exprHSafe {e = ECall id callee args} (HECallCrash evs) sc sc' eq oa =
     callHSafe evs sc sc' (trans (sym (checkExprCall ctx sc id callee args)) eq) oa
-  exprHSafe {e = ECall id callee args} (HECall env1 h1 evs) sc sc' eq oa =
+  exprHSafe {e = ECall id callee args} (HECall _ env1 h1 evs) sc sc' eq oa =
     callHSafe evs sc sc' (trans (sym (checkExprCall ctx sc id callee args)) eq) oa
-  exprHSafe {e = ECall id callee args} (HEReallocCrash pName evs) sc sc' eq oa =
+  exprHSafe {e = ECall id callee args} (HECallUser _ _ look _ _ _ _ _ _ _ _) sc sc' eq oa =
+    void (emptyFunsNoUser callee look)
+  exprHSafe {e = ECall id callee args} (HECallUserCrash _ _ look _ _ _ _ _ _) sc sc' eq oa =
+    void (emptyFunsNoUser callee look)
+  exprHSafe {e = ECall id callee args} (HECallUserRet _ _ look _ _ _ _ _ _ _ _) sc sc' eq oa =
+    void (emptyFunsNoUser callee look)
+  exprHSafe {e = ECall id callee args} (HEReallocCrash pName _ evs) sc sc' eq oa =
     reallocCallH pName evs sc sc' (trans (sym (checkExprCall ctx sc id callee args)) eq) oa
-  exprHSafe {e = ECall id callee args} (HERealloc pName env1 h1 evs) sc sc' eq oa =
+  exprHSafe {e = ECall id callee args} (HERealloc pName _ env1 h1 evs) sc sc' eq oa =
     reallocAllocH pName evs sc sc' (trans (sym (checkExprCall ctx sc id callee args)) eq) oa
   exprHSafe {e = EAssign id n nm Copy rhs} (HEAsgCrash ev) sc sc' eq oa =
     asgCopyH id n nm (\pE => exprHSafe ev sc sc' pE oa) eq
@@ -68,7 +74,7 @@ mutual
   takeHSafe :
     {ctx : Ctx} -> {e : Expr} -> {env : HEnv} -> {h : Heap} ->
     {o : HResult} ->
-    HEvalExpr env h e o ->
+    HEvalExpr [] env h e o ->
     (sc, sc' : Scopes) -> (flChk : Flag) ->
     takeOwner ctx sc e = Right (sc', flChk) ->
     OverApprox env h sc ->
@@ -94,15 +100,21 @@ mutual
     takeCallCrashH {id} {callee} {args}
       (\sc1, pE => exprHSafe (HECallCrash evs) sc sc1 pE oa)
       eq (checkExpr ctx sc (ECall id callee args)) Refl
-  takeHSafe {e = ECall id callee args} (HECall env1 h1 evs) sc sc' flChk eq oa =
+  takeHSafe {e = ECall id callee args} (HECall unk env1 h1 evs) sc sc' flChk eq oa =
     takeCallOkH {id} {callee} {args}
-      (\sc1, pE => exprHSafe (HECall env1 h1 evs) sc sc1 pE oa)
+      (\sc1, pE => exprHSafe (HECall unk env1 h1 evs) sc sc1 pE oa)
       eq (checkExpr ctx sc (ECall id callee args)) Refl
-  takeHSafe {e = ECall id callee args} (HEReallocCrash pName evs) sc sc' flChk eq oa =
+  takeHSafe {e = ECall id callee args} (HECallUser _ _ look _ _ _ _ _ _ _ _) sc sc' flChk eq oa =
+    void (emptyFunsNoUser callee look)
+  takeHSafe {e = ECall id callee args} (HECallUserCrash _ _ look _ _ _ _ _ _) sc sc' flChk eq oa =
+    void (emptyFunsNoUser callee look)
+  takeHSafe {e = ECall id callee args} (HECallUserRet _ _ look _ _ _ _ _ _ _ _) sc sc' flChk eq oa =
+    void (emptyFunsNoUser callee look)
+  takeHSafe {e = ECall id callee args} (HEReallocCrash pName pMiss evs) sc sc' flChk eq oa =
     takeCallCrashH {id} {callee} {args}
-      (\sc1, pE => exprHSafe (HEReallocCrash pName evs) sc sc1 pE oa)
+      (\sc1, pE => exprHSafe (HEReallocCrash pName pMiss evs) sc sc1 pE oa)
       eq (checkExpr ctx sc (ECall id callee args)) Refl
-  takeHSafe {e = ECall id callee args} (HERealloc pName env1 h1 evs) sc sc' flChk eq oa =
+  takeHSafe {e = ECall id callee args} (HERealloc pName pMiss env1 h1 evs) sc sc' flChk eq oa =
     takeReallocAllocH {id} {callee} pName evs sc sc' eq oa
   takeHSafe {e = EAssign id n nm Copy rhs} (HEAsgCrash ev) sc sc' flChk eq oa =
     takeAsgCopyH id n nm (\pE => exprHSafe ev sc sc' pE oa)
@@ -122,7 +134,7 @@ mutual
   export
   argsBorrowH :
     {ctx : Ctx} -> {es : List Expr} -> {env : HEnv} -> {h : Heap} -> {o : HResult} ->
-    HEvalExprs env h es o ->
+    HEvalExprs [] env h es o ->
     (sc, sc' : Scopes) ->
     checkArgsBorrow ctx sc es = Right sc' ->
     OverApprox env h sc ->
@@ -141,7 +153,7 @@ mutual
   export
   argsMoveH :
     {ctx : Ctx} -> {es : List Expr} -> {env : HEnv} -> {h : Heap} -> {o : HResult} ->
-    HEvalExprs env h es o ->
+    HEvalExprs [] env h es o ->
     (sc, sc' : Scopes) ->
     checkArgsMove ctx sc es = Right sc' ->
     OverApprox env h sc ->
@@ -160,7 +172,7 @@ mutual
   argsModesH :
     {ctx : Ctx} -> {callee : String} -> {es : List Expr} ->
     {modes : List Consume} -> {env : HEnv} -> {h : Heap} -> {o : HResult} ->
-    HEvalExprs env h es o ->
+    HEvalExprs [] env h es o ->
     (sc, sc' : Scopes) ->
     checkArgsModes ctx sc callee es modes = Right sc' ->
     OverApprox env h sc ->
@@ -202,7 +214,7 @@ mutual
   callHSafe :
     {ctx : Ctx} -> {id : Nat} -> {callee : String} -> {args : List Expr} ->
     {env : HEnv} -> {h : Heap} -> {o : HResult} ->
-    HEvalExprs env h args o ->
+    HEvalExprs [] env h args o ->
     (sc, sc' : Scopes) ->
     checkCall ctx sc id callee args = Right sc' ->
     OverApprox env h sc ->
@@ -221,7 +233,7 @@ mutual
 
   reallocExprsH :
     {ctx : Ctx} -> {es : List Expr} -> {env : HEnv} -> {h : Heap} -> {o : HResult} ->
-    HEvalExprs env h es o ->
+    HEvalExprs [] env h es o ->
     (sc, sc' : Scopes) ->
     checkRealloc ctx sc es = Right sc' ->
     OverApprox env h sc ->
@@ -239,7 +251,7 @@ mutual
 
   reallocArgsH :
     {ctx : Ctx} -> {es : List Expr} -> {env : HEnv} -> {h : Heap} -> {o : HResult} ->
-    HEvalReallocArgs env h es o ->
+    HEvalReallocArgs [] env h es o ->
     (sc, sc' : Scopes) ->
     checkRealloc ctx sc es = Right sc' ->
     OverApprox env h sc ->
@@ -259,7 +271,7 @@ mutual
     {ctx : Ctx} -> {id : Nat} -> {callee : String} -> {args : List Expr} ->
     {env : HEnv} -> {h : Heap} -> {o : HResult} ->
     isReallocName callee = True ->
-    HEvalReallocArgs env h args o ->
+    HEvalReallocArgs [] env h args o ->
     (sc, sc' : Scopes) ->
     checkCall ctx sc id callee args = Right sc' ->
     OverApprox env h sc ->
@@ -275,7 +287,7 @@ mutual
         callHSafe (reallocAsExprs evs) sc sc' eq oa
 
   reallocAsExprs :
-    HEvalReallocArgs env h args o -> HEvalExprs env h args o
+    HEvalReallocArgs [] env h args o -> HEvalExprs [] env h args o
   reallocAsExprs HRNil = HEArgsNil
   reallocAsExprs (HRHeadCrash ev) = HEArgsCrash ev
   reallocAsExprs (HRHeadOk v env1 h1 ev evs) = HEArgsCons v env1 h1 ev evs
@@ -284,7 +296,7 @@ mutual
     {ctx : Ctx} -> {id : Nat} -> {callee : String} -> {args : List Expr} ->
     {env : HEnv} -> {h : Heap} -> {env1 : HEnv} -> {h1 : Heap} ->
     isReallocName callee = True ->
-    HEvalReallocArgs env h args (HROk HVNone env1 h1) ->
+    HEvalReallocArgs [] env h args (HROk HVNone env1 h1) ->
     (sc, sc' : Scopes) ->
     checkCall ctx sc id callee args = Right sc' ->
     OverApprox env h sc ->
@@ -297,7 +309,7 @@ mutual
     {env : HEnv} -> {h : Heap} -> {env1 : HEnv} -> {h1 : Heap} ->
     {flChk : Flag} -> {id : Nat} ->
     isReallocName callee = True ->
-    HEvalReallocArgs env h args (HROk HVNone env1 h1) ->
+    HEvalReallocArgs [] env h args (HROk HVNone env1 h1) ->
     (sc, sc' : Scopes) ->
     takeOwner ctx sc (ECall id callee args) = Right (sc', flChk) ->
     OverApprox env h sc ->

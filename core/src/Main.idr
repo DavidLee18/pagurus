@@ -16,6 +16,7 @@ import Pagurus.Heap.Thm
 import Pagurus.Heap
 import Pagurus.Heap.Eval
 import Pagurus.Heap.Stmt
+import Pagurus.Heap.Program
 import Pagurus.Heap.Witness
 import Pagurus.Soundness
 
@@ -58,12 +59,31 @@ keepHeapType = CheckAcceptedNoHeapCrash
 keepHeap : CheckAcceptedNoHeapCrash
 keepHeap = checkAcceptedNoHeapCrash
 
+keepFunType : Type
+keepFunType = CheckFunNoHeapCrash
+
+keepFun : CheckFunNoHeapCrash
+keepFun = checkFunNoHeapCrash
+
+keepProgramType : Type
+keepProgramType = CheckProgramNoHeapCrash
+
+keepProgram : CheckProgramNoHeapCrash
+keepProgram = checkProgramNoHeapCrash
+
 keepHeapWitnesses :
-  ( (o : HOutcome) -> HEvalStmts [] InitHeap SsOk o -> Not (IsHCrash o)
-  , HEvalStmts [] InitHeap SsBad (HCrashOut (FreeFreed 1))
+  ( (o : HOutcome) -> HEvalStmts [] [] InitHeap SsOk o -> Not (IsHCrash o)
+  , HEvalStmts [] [] InitHeap SsBad (HCrashOut (FreeFreed 1))
   , {sc' : Scopes} -> Not (checkStmts 8 EmptyCtx [] SsBad = Right sc')
   )
 keepHeapWitnesses = (mallocFreeNoHeapCrash, doubleFreeHeapCrash, doubleFreeRejected)
+
+keepProgramWitnesses :
+  ( checkProgram EmptyProg = Right ()
+  , (o : HOutcome) -> HEvalStmts [] [] InitHeap [] o -> Not (IsHCrash o)
+  , HEvalExpr [BorrowG] [] InitHeap (ECall 0 "g" []) (HROk HVNone [] InitHeap)
+  )
+keepProgramWitnesses = (emptyProgAccepted, emptyProgNoHeapCrash, userCallRunsBody)
 
 main : IO ()
 main = do
@@ -71,7 +91,10 @@ main = do
   let _ = lemmaStepStatus 0
   let _ = keepSafety
   let _ = keepHeap
+  let _ = keepFun
+  let _ = keepProgram
   let _ = keepHeapWitnesses
+  let _ = keepProgramWitnesses
   args <- getArgs
   case args of
     (_ :: path :: _) =>

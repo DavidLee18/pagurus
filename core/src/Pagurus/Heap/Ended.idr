@@ -14,7 +14,7 @@ mutual
   stmtEndedNotHOk :
     {s : Stmt} -> {env, env' : HEnv} -> {h, h' : Heap} ->
     stmtEnds s = True ->
-    HEvalStmt env h s (HOk env' h') ->
+    HEvalStmt [] env h s (HOk env' h') ->
     Void
   stmtEndedNotHOk {s = SReturn _ _} _ HSRetNone impossible
   stmtEndedNotHOk {s = SReturn _ _} _ (HSRetCrash _) impossible
@@ -37,7 +37,7 @@ mutual
   stmtsEndedNotHOk :
     {ss : List Stmt} -> {env, env' : HEnv} -> {h, h' : Heap} ->
     stmtsEnded ss = True ->
-    HEvalStmts env h ss (HOk env' h') ->
+    HEvalStmts [] env h ss (HOk env' h') ->
     Void
   stmtsEndedNotHOk {ss = []} p _ = void (falseNotTrue p)
   stmtsEndedNotHOk {ss = s :: rest} pEnds (HSConsOk _ _ evS evSS) =

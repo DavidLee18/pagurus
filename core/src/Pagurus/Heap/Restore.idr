@@ -367,6 +367,14 @@ takeLiveNuoContra oa nuo eq look live = go (lookupPlace n sc) Refl
               own = ownedIfSafeLive oa n a st look live pL safe nb
           in nuo n st look pL safe own nb
 
+||| `takeOwner` result: LiveNuo of leftover `a` plus the `HTaken` flag of
+||| the taken value, so Owner-binds can use `bindOwner` instead of a
+||| mismatched `oaBindDead`.
+record TakeLN (fl : Flag) (v : HVal) (env' : HEnv) (h' : Heap) (sc' : Scopes) (a : Addr) where
+  constructor MkTLN
+  lnTLN : LiveNuo env' h' sc' a
+  tkTLN : HTaken fl v env' h' sc'
+
 --------------------------------------------------------------------------------
 -- LiveNuo through an accepted body
 --------------------------------------------------------------------------------
@@ -1151,21 +1159,26 @@ mutual
     LiveNuo env h sc a ->
     takeOwner ctx sc e = Right (sc', fl) ->
     HEvalExpr {funs} env h e (HROk v env' h') ->
-    LiveNuo env' h' sc' a
+    TakeLN fl v env' h' sc' a
   takeLN ln eq HELit {e = ELit id} =
     let scEq = cong fst (rightInj (trans (sym (takeLit ctx sc id)) eq))
-    in MkLN (oaRewrite scEq ln.oaLN) (nuoRewrite scEq ln.nuoLN) ln.liveLN
+        ht = takeLitH id eq ln.oaLN
+    in MkTLN (MkLN (oaRewrite scEq ln.oaLN) (nuoRewrite scEq ln.nuoLN) ln.liveLN)
+         (htTaken ht)
   takeLN ln eq HENull {e = ENull id} =
     let scEq = cong fst (rightInj (trans (sym (takeNull ctx sc id)) eq))
-    in MkLN (oaRewrite scEq ln.oaLN) (nuoRewrite scEq ln.nuoLN) ln.liveLN
+        ht = takeNullH id eq ln.oaLN
+    in MkTLN (MkLN (oaRewrite scEq ln.oaLN) (nuoRewrite scEq ln.nuoLN) ln.liveLN)
+         (htTaken ht)
   takeLN ln eq (HEVarLive b look cl) {e = EVar nid n nm} with (a == b) proof pab
     takeLN ln eq (HEVarLive b look cl) {e = EVar nid n nm} | True =
       void (takeLiveNuoContra ln.oaLN ln.nuoLN eq
         (replace {p = \x => lookupH n env = Just (HVPtr x)}
            (sym (eqNatTrue a b pab)) look) cl)
     takeLN ln eq (HEVarLive b look cl) {e = EVar nid n nm} | False =
-      MkLN (htFromOk (takeVarH ctx nid n nm eq ln.oaLN (HEVarLive b look cl)))
-        (nuoMove ln.nuoLN (takeVarMoveEq eq look) look) ln.liveLN
+      let ht = takeVarH ctx nid n nm eq ln.oaLN (HEVarLive b look cl)
+      in MkTLN (MkLN (htFromOk ht) (nuoMove ln.nuoLN (takeVarMoveEq eq look) look) ln.liveLN)
+           (htTaken ht)
       where
         takeVarMoveEq :
           takeOwner ctx sc (EVar nid n nm) = Right (sc', fl) ->
@@ -1184,8 +1197,9 @@ mutual
               mvGo (Just st) pL | Right sc1 =
                 rewrite sym (cong fst (rightInj (trans (sym (takeVarJustR ctx pL pM)) pT))) in pM
   takeLN ln eq (HEVarNone none) {e = EVar nid n nm} =
-    MkLN (htFromOk (takeVarH ctx nid n nm eq ln.oaLN (HEVarNone none)))
-      (nuoMoveOrGhost ln eq none) ln.liveLN
+    let ht = takeVarH ctx nid n nm eq ln.oaLN (HEVarNone none)
+    in MkTLN (MkLN (htFromOk ht) (nuoMoveOrGhost ln eq none) ln.liveLN)
+         (htTaken ht)
       where
         nuoMoveOrGhost :
           takeOwner ctx sc (EVar nid n nm) = Right (sc', fl) ->
@@ -1206,8 +1220,9 @@ mutual
   takeLN ln eq (HEVarCopy look) {e = EVar nid n nm} =
     void (takeVarCopyContra ctx nid n nm eq ln.oaLN look)
   takeLN ln eq (HEVarMiss miss) {e = EVar nid n nm} =
-    MkLN (htFromOk (takeVarH ctx nid n nm eq ln.oaLN (HEVarMiss miss)))
-      (nuoMiss ln eq miss) ln.liveLN
+    let ht = takeVarH ctx nid n nm eq ln.oaLN (HEVarMiss miss)
+    in MkTLN (MkLN (htFromOk ht) (nuoMiss ln eq miss) ln.liveLN)
+         (htTaken ht)
       where
         nuoMiss :
           takeOwner ctx sc (EVar nid n nm) = Right (sc', fl) ->
@@ -1234,20 +1249,23 @@ mutual
         LiveNuo env h sc a ->
         takeOwner ctx sc (EMalloc mid args) = Right (sc', fl) ->
         HEvalExprs {funs} env h args (HROk HVNone env1 h1) ->
-        LiveNuo env1 (snd (alloc h1)) sc' a
+        TakeLN fl (HVPtr (fst (alloc h1))) env1 (snd (alloc h1)) sc' a
       takeMallocLN ln0 pT evs0 = mGo (checkArgsBorrow ctx sc args) Refl
         where
           mGo : (res : Either Diag Scopes) -> checkArgsBorrow ctx sc args = res ->
-                LiveNuo env1 (snd (alloc h1)) sc' a
+                TakeLN fl (HVPtr (fst (alloc h1))) env1 (snd (alloc h1)) sc' a
           mGo (Left d) pA =
             void (leftNotRight (trans (sym (takeMallocLeft mid pA)) pT))
           mGo (Right sc1) pA =
             let ln1 = exprsBorrowLN {funs} {chk} ln0 pA evs0
                 nf = liveNotFresh h1 ln1.oaLN.wf a ln1.liveLN
                 scEq = cong fst (rightInj (trans (sym (takeMallocRight mid pA)) pT))
-            in MkLN (oaRewrite scEq (oaAlloc ln1.oaLN))
-                 (nuoRewrite scEq ln1.nuoLN)
-                 (trans (allocPresCell h1 a nf) ln1.liveLN)
+                ht = takeMallocOkH mid args (\scX, pX => HROutOk (exprsBorrowLN {funs} {chk} ln0 pX evs0).oaLN)
+                       pT (Right sc1) pA
+            in MkTLN (MkLN (oaRewrite scEq (oaAlloc ln1.oaLN))
+                       (nuoRewrite scEq ln1.nuoLN)
+                       (trans (allocPresCell h1 a nf) ln1.liveLN))
+                 (htTaken ht)
   takeLN ln eq (HEAsgCopy w env1 h1 ev) {e = EAssign id n nm Copy rhs} =
     takeAsgCopyLN ln eq ev
     where
@@ -1255,17 +1273,20 @@ mutual
         LiveNuo env h sc a ->
         takeOwner ctx sc (EAssign id n nm Copy rhs) = Right (sc', fl) ->
         HEvalExpr {funs} env h rhs (HROk w env1 h1) ->
-        LiveNuo env1 h1 sc' a
+        TakeLN fl w env1 h1 sc' a
       takeAsgCopyLN ln0 pT ev0 = cGo (checkExpr ctx sc rhs) Refl
         where
           cGo : (res : Either Diag Scopes) -> checkExpr ctx sc rhs = res ->
-                LiveNuo env1 h1 sc' a
+                TakeLN fl w env1 h1 sc' a
           cGo (Left d) pE =
             void (leftNotRight (trans (sym (takeAsgCopyLeft id n nm pE)) pT))
           cGo (Right scE) pE =
             let ln1 = exprLN {funs} {chk} ln0 pE ev0
                 scEq = cong fst (rightInj (trans (sym (takeAsgCopyRight id n nm pE)) pT))
-            in MkLN (oaRewrite scEq ln1.oaLN) (nuoRewrite scEq ln1.nuoLN) ln1.liveLN
+                ht = takeAsgCopyH id n nm (\pX => HROutOk (exprLN {funs} {chk} ln0 pX ev0).oaLN)
+                       pT (Right scE) pE
+            in MkTLN (MkLN (oaRewrite scEq ln1.oaLN) (nuoRewrite scEq ln1.nuoLN) ln1.liveLN)
+                 (htTaken ht)
   takeLN ln eq (HEUse env1 h1 evs) {e = EUse uid args} =
     takeUseLN ln eq evs
     where
@@ -1273,17 +1294,20 @@ mutual
         LiveNuo env h sc a ->
         takeOwner ctx sc (EUse uid args) = Right (sc', fl) ->
         HEvalExprs {funs} env h args (HROk HVNone env1 h1) ->
-        LiveNuo env1 h1 sc' a
+        TakeLN fl HVNone env1 h1 sc' a
       takeUseLN ln0 pT evs0 = uGo (checkArgsBorrow ctx sc args) Refl
         where
           uGo : (res : Either Diag Scopes) -> checkArgsBorrow ctx sc args = res ->
-                LiveNuo env1 h1 sc' a
+                TakeLN fl HVNone env1 h1 sc' a
           uGo (Left d) pA =
             void (leftNotRight (trans (sym (takeUseLeft uid pA)) pT))
           uGo (Right scA) pA =
             let ln1 = exprsBorrowLN {funs} {chk} ln0 pA evs0
                 scEq = cong fst (rightInj (trans (sym (takeUseRight uid pA)) pT))
-            in MkLN (oaRewrite scEq ln1.oaLN) (nuoRewrite scEq ln1.nuoLN) ln1.liveLN
+                ht = takeUseOkH uid (\scX, pX => HROutOk (exprsBorrowLN {funs} {chk} ln0 pX evs0).oaLN)
+                       pT (Right scA) pA
+            in MkTLN (MkLN (oaRewrite scEq ln1.oaLN) (nuoRewrite scEq ln1.nuoLN) ln1.liveLN)
+                 (htTaken ht)
   takeLN ln eq (HECall unk env1 h1 evs) {e = ECall id callee args} =
     nestedTakeCallLN ln eq (HECall unk env1 h1 evs)
   takeLN ln eq (HECallUser pB f look pDef env1 h1 evs envB hB evBody)

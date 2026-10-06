@@ -945,6 +945,174 @@ lookupHConsMiss : (p, k : Place) -> (v : HVal) -> (xs : HEnv) ->
                   lookupH p ((k, v) :: xs) = lookupH p xs
 lookupHConsMiss p k v xs ne = rewrite ne in Refl
 
+||| Tail of a uniquely-keyed env is still an `OverApprox` of the same
+||| scopes: the head key cannot appear in the tail, so lookups lift.
+export
+oaTailUK :
+  {k : Place} -> {x : HVal} -> {xs : HEnv} -> {h : Heap} -> {sc : Scopes} ->
+  lookupH k xs = Nothing ->
+  OverApprox ((k, x) :: xs) h sc ->
+  OverApprox xs h sc
+oaTailUK {k} {x} {xs} {h} {sc} miss oa = MkOA oa.wf track dead uniq
+  em snm
+  where
+    neFromMiss : {p : Place} -> {v : HVal} ->
+                 lookupH p xs = Just v -> p == k = False
+    neFromMiss {p} look with (p == k) proof pq
+      neFromMiss look | True =
+        void (nothingNotJustH (trans (sym (replace {p = \q => lookupH q xs = Nothing}
+          (sym (eqNatTrue p k pq)) miss)) look))
+      neFromMiss look | False = Refl
+
+    track : (p : Place) -> (v : HVal) -> lookupH p xs = Just v ->
+            (st : Status ** lookupPlace p sc = Just st)
+    track p v look =
+      oa.tracked p v (trans (sym (lookupHConsMiss p k x xs (neFromMiss look))) look)
+
+    dead : (p : Place) -> (st : Status) -> (v : HVal) ->
+           lookupPlace p sc = Just st ->
+           lookupH p xs = Just v ->
+           isDeadTracked h v = True ->
+           unsafeUse st = True
+    dead p st v lp look nl =
+      oa.deadUnsafe p st v lp
+        (trans (sym (lookupHConsMiss p k x xs (neFromMiss look))) look) nl
+
+    uniq : (p, q : Place) -> (a : Addr) ->
+           p == q = False ->
+           lookupH p xs = Just (HVPtr a) ->
+           lookupH q xs = Just (HVPtr a) ->
+           cell h a = Just Live ->
+           (stP : Status) -> lookupPlace p sc = Just stP ->
+           (stQ : Status) -> lookupPlace q sc = Just stQ ->
+           unsafeUse stP = False ->
+           hasOwned stP = True ->
+           hasBorrowed stP = Nothing ->
+           unsafeUse stQ = True
+    uniq p q a ne lp lq live stP lookP stQ lookQ safeP ownP nbP =
+      oa.uniqueLive p q a ne
+        (trans (sym (lookupHConsMiss p k x xs (neFromMiss lp))) lp)
+        (trans (sym (lookupHConsMiss q k x xs (neFromMiss lq))) lq)
+        live stP lookP stQ lookQ safeP ownP nbP
+
+    em : (p : Place) -> lookupPlace p sc = Just [] -> lookupH p xs = Nothing
+    em p lp with (p == k) proof pq
+      em p lp | True =
+        replace {p = \q => lookupH q xs = Nothing}
+          (sym (eqNatTrue p k pq)) miss
+      em p lp | False =
+        trans (sym (lookupHConsMiss p k x xs pq)) (oa.emptyMiss p lp)
+
+    snm : (p : Place) -> (st : Status) ->
+          lookupPlace p sc = Just st ->
+          unsafeUse st = False ->
+          hasOwned st = False ->
+          hasBorrowed st = Nothing ->
+          Either (lookupH p xs = Nothing) (lookupH p xs = Just HVNone)
+    snm p st lp safe ownF nb with (p == k) proof pq
+      snm p st lp safe ownF nb | True =
+        Left (replace {p = \q => lookupH q xs = Nothing}
+                (sym (eqNatTrue p k pq)) miss)
+      snm p st lp safe ownF nb | False =
+        case oa.safeNonOwnerMiss p st lp safe ownF nb of
+          Left missF =>
+            Left (trans (sym (lookupHConsMiss p k x xs pq)) missF)
+          Right none =>
+            Right (trans (sym (lookupHConsMiss p k x xs pq)) none)
+
+liftOwnerHere :
+  {k : Place} -> {x : HVal} -> {xs : HEnv} -> {sc : Scopes} -> {a : Addr} ->
+  lookupH k xs = Nothing ->
+  (p : Place ** st : Status **
+    (lookupH p xs = Just (HVPtr a),
+     lookupPlace p sc = Just st,
+     unsafeUse st = False,
+     hasOwned st = True,
+     hasBorrowed st = Nothing)) ->
+  (p : Place ** st : Status **
+    (lookupH p ((k, x) :: xs) = Just (HVPtr a),
+     lookupPlace p sc = Just st,
+     unsafeUse st = False,
+     hasOwned st = True,
+     hasBorrowed st = Nothing))
+liftOwnerHere {k} {x} {xs} miss (p ** st ** (look, lp, su, own, nb)) with (p == k) proof pq
+  liftOwnerHere miss (p ** st ** (look, lp, su, own, nb)) | True =
+    void (nothingNotJustH (trans (sym (replace {p = \q => lookupH q xs = Nothing}
+      (sym (eqNatTrue p k pq)) miss)) look))
+  liftOwnerHere miss (p ** st ** (look, lp, su, own, nb)) | False =
+    (p ** st ** (trans (lookupHConsMiss p k x xs pq) look, lp, su, own, nb))
+
+trueAnd : (b : Bool) -> True && Delay b = b
+trueAnd True = Refl
+trueAnd False = Refl
+
+||| Under `UniqueKeys` and `OverApprox.tracked`, `noOwnerHere = False` is a
+||| real use-safe unique owner, not an untracked pointer.
+export
+ownerHereWitness :
+  {env : HEnv} -> {h : Heap} -> {sc : Scopes} -> {a : Addr} ->
+  UniqueKeys env ->
+  OverApprox env h sc ->
+  noOwnerHere env sc a = False ->
+  (p : Place ** st : Status **
+    (lookupH p env = Just (HVPtr a),
+     lookupPlace p sc = Just st,
+     unsafeUse st = False,
+     hasOwned st = True,
+     hasBorrowed st = Nothing))
+ownerHereWitness UKNil oa prf = void (trueNotFalse prf)
+ownerHereWitness (UKCons {k} {x = HVNone} {xs} miss uk) oa prf =
+  liftOwnerHere miss (ownerHereWitness uk (oaTailUK miss oa) prf)
+ownerHereWitness (UKCons {k} {x = HVCopy} {xs} miss uk) oa prf =
+  liftOwnerHere miss (ownerHereWitness uk (oaTailUK miss oa) prf)
+ownerHereWitness {a} (UKCons {k} {x = HVPtr b} {xs} miss uk) oa prf =
+  ptrGo (a == b) Refl prf
+  where
+    lookHit : a == b = True ->
+              lookupH k ((k, HVPtr b) :: xs) = Just (HVPtr a)
+    lookHit pab =
+      replace {p = \x => lookupH k ((k, HVPtr b) :: xs) = Just (HVPtr x)}
+        (sym (eqNatTrue a b pab)) (lookupHConsHit k (HVPtr b) xs)
+
+    ptrGo :
+      (eqb : Bool) ->
+      a == b = eqb ->
+      noOwnerHere ((k, HVPtr b) :: xs) sc a = False ->
+      (p : Place ** st : Status **
+        (lookupH p ((k, HVPtr b) :: xs) = Just (HVPtr a),
+         lookupPlace p sc = Just st,
+         unsafeUse st = False,
+         hasOwned st = True,
+         hasBorrowed st = Nothing))
+    ptrGo False pab prfF =
+      liftOwnerHere miss (ownerHereWitness uk (oaTailUK miss oa)
+        (trans (sym (ifFalse pab)) prfF))
+    ptrGo True pab prfF with (lookupPlace k sc) proof lk
+      ptrGo True pab prfF | Nothing =
+        let (_ ** lp) = oa.tracked k (HVPtr a) (lookHit pab)
+        in void (nothingNotJust (trans (sym lk) lp))
+      ptrGo True pab prfF | Just st with (notUniqueSt st) proof pnu
+        ptrGo True pab prfF | Just st | False =
+          let (su, own, nb) = notUniqueStFalse st pnu
+          in (k ** st ** (lookHit pab, lk, su, own, nb))
+        ptrGo True pab prfF | Just st | True =
+          liftOwnerHere miss
+            (ownerHereWitness uk (oaTailUK miss oa)
+              (trans (sym (trans (ifTrueCase pab lk)
+                             (trans (cong (\u => u && Delay (noOwnerHere xs sc a)) pnu)
+                                    (trueAnd (noOwnerHere xs sc a)))))
+                     prfF))
+
+    ifFalse : a == b = False ->
+              noOwnerHere ((k, HVPtr b) :: xs) sc a = noOwnerHere xs sc a
+    ifFalse pab = rewrite pab in Refl
+
+    ifTrueCase : a == b = True ->
+                 lookupPlace k sc = Just st ->
+                 noOwnerHere ((k, HVPtr b) :: xs) sc a =
+                   notUniqueSt st && Delay (noOwnerHere xs sc a)
+    ifTrueCase pab lk = rewrite pab in rewrite lk in Refl
+
 --------------------------------------------------------------------------------
 -- Construct `BindOk` (Nothing = mixed/dead; discharged at the call site)
 --------------------------------------------------------------------------------

@@ -1,3 +1,4 @@
+/* PASS: realloc consumes p and yields a fresh owner; free of the result is OK. */
 void *malloc(unsigned long);
 void *calloc(unsigned long, unsigned long);
 void *realloc(void *, unsigned long);

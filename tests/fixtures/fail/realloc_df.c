@@ -1,3 +1,4 @@
+/* FAIL: realloc consumes p; freeing p afterwards is use-after-move / double-free. */
 void *malloc(unsigned long);
 void *calloc(unsigned long, unsigned long);
 void *realloc(void *, unsigned long);

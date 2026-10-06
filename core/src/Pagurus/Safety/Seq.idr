@@ -48,24 +48,49 @@ seqCrash ss ih eq r (Left _) pS =
 seqCrash ss ih eq r (Right sc1) pS =
   crashScope (ih sc1 pS)
 
-export
-seqOk :
-  (ss : List Stmt) ->
-  {fuel : Nat} -> {ctx : Ctx} -> {sc, sc' : Scopes} -> {c, c1 : CScopes} ->
-  {s : Stmt} -> {o : Outcome} ->
-  (ihS : (sc1 : Scopes) ->
-         checkStmt fuel ctx sc s = Right sc1 ->
-         SafeOut (Ok c1) sc1) ->
-  (ihSS : (sc1 : Scopes) ->
-          checkStmts fuel ctx sc1 ss = Right sc' ->
-          Represents c1 sc1 ->
-          SafeOut o sc') ->
-  checkStmts (S fuel) ctx sc (s :: ss) = Right sc' ->
-  Represents c sc ->
-  (res : Either Diag Scopes) ->
-  checkStmt fuel ctx sc s = res ->
-  SafeOut o sc'
-seqOk ss ihS ihSS eq r (Left _) pS =
-  void (leftNotRight (trans (sym (stmtsConsLeft ss pS)) eq))
-seqOk ss ihS ihSS eq r (Right sc1) pS =
-  ihSS sc1 (trans (sym (stmtsConsRight ss pS)) eq) (fromOk (ihS sc1 pS))
+mutual
+  export
+  seqOk :
+    (ss : List Stmt) ->
+    {fuel : Nat} -> {ctx : Ctx} -> {sc, sc' : Scopes} -> {c, c1 : CScopes} ->
+    {s : Stmt} -> {o : Outcome} ->
+    (ihS : (sc1 : Scopes) ->
+           checkStmt fuel ctx sc s = Right sc1 ->
+           SafeOut (Ok c1) sc1) ->
+    (ihSS : (sc1 : Scopes) ->
+            checkStmts fuel ctx sc1 ss = Right sc' ->
+            Represents c1 sc1 ->
+            SafeOut o sc') ->
+    checkStmts (S fuel) ctx sc (s :: ss) = Right sc' ->
+    Represents c sc ->
+    (res : Either Diag Scopes) ->
+    checkStmt fuel ctx sc s = res ->
+    EvalStmt ctx c s (Ok c1) ->
+    SafeOut o sc'
+  seqOk ss ihS ihSS eq r (Left _) pS _ =
+    void (leftNotRight (trans (sym (stmtsConsLeft ss pS)) eq))
+  seqOk ss ihS ihSS eq r (Right sc1) pS evS =
+    seqOkCont ss ihS ihSS eq r pS (isReturnStmt s) Refl evS
+
+  seqOkCont :
+    (ss : List Stmt) ->
+    {fuel : Nat} -> {ctx : Ctx} -> {sc, sc', sc1 : Scopes} -> {c, c1 : CScopes} ->
+    {s : Stmt} -> {o : Outcome} ->
+    (ihS : (scX : Scopes) ->
+           checkStmt fuel ctx sc s = Right scX ->
+           SafeOut (Ok c1) scX) ->
+    (ihSS : (scX : Scopes) ->
+            checkStmts fuel ctx scX ss = Right sc' ->
+            Represents c1 scX ->
+            SafeOut o sc') ->
+    checkStmts (S fuel) ctx sc (s :: ss) = Right sc' ->
+    Represents c sc ->
+    checkStmt fuel ctx sc s = Right sc1 ->
+    (ret : Bool) ->
+    isReturnStmt s = ret ->
+    EvalStmt ctx c s (Ok c1) ->
+    SafeOut o sc'
+  seqOkCont ss ihS ihSS eq r pS True pRet evS =
+    void (stmtEndedNotOk (isReturnEnds pRet) evS)
+  seqOkCont ss ihS ihSS eq r pS False pRet _ =
+    ihSS sc1 (trans (sym (stmtsConsRight ss pRet pS)) eq) (fromOk (ihS sc1 pS))

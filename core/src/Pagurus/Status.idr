@@ -14,6 +14,10 @@ data Atom : Type where
   ABorrowed : (origin : Nat) -> Atom
   AMoved : (at : Nat) -> Atom
   AFreed : (at : Nat) -> Atom
+  ||| Known null (`0` / `NULL`). `free` of this atom is a defined no-op.
+  ||| Distinct from `AEmpty` (uninitialised): freeing the latter is still
+  ||| rejected.
+  ANull : Atom
 
 public export
 Eq Atom where
@@ -22,6 +26,7 @@ Eq Atom where
   (ABorrowed x) == (ABorrowed y) = x == y
   (AMoved x) == (AMoved y) = x == y
   (AFreed x) == (AFreed y) = x == y
+  ANull == ANull = True
   _ == _ = False
 
 public export
@@ -31,6 +36,7 @@ atomOrdKey AOwned = (1, 0)
 atomOrdKey (ABorrowed n) = (2, n)
 atomOrdKey (AMoved n) = (3, n)
 atomOrdKey (AFreed n) = (4, n)
+atomOrdKey ANull = (5, 0)
 
 public export
 compareAtom : Atom -> Atom -> Ordering
@@ -98,3 +104,9 @@ hasEmpty : Status -> Bool
 hasEmpty [] = False
 hasEmpty (AEmpty :: _) = True
 hasEmpty (_ :: xs) = hasEmpty xs
+
+public export
+hasNull : Status -> Bool
+hasNull [] = False
+hasNull (ANull :: _) = True
+hasNull (_ :: xs) = hasNull xs

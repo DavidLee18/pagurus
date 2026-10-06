@@ -1,3 +1,4 @@
+/* PASS: a loop that always frees then returns does not join Freed back. */
 void *malloc(unsigned long n);
 void *calloc(unsigned long n, unsigned long m);
 void free(void *p);

@@ -64,8 +64,6 @@ declPtrCrash :
   SafeOut (Crash d) sc'
 declPtrCrash fuel id n nm ih eq r (Left _) pT =
   void (leftNotRight (trans (sym (declPtrLeft fuel id n nm pT)) eq))
-declPtrCrash fuel id n nm ih eq r (Right (sc1, Ghost)) pT =
-  void (leftNotRight (trans (sym (declPtrGhostEq fuel id n nm pT)) eq))
 declPtrCrash fuel id n nm ih eq r (Right (sc1, fl1)) pT =
   crashScope (ih sc1 fl1 pT)
 
@@ -86,6 +84,56 @@ declPtrOwn fuel id n nm ih eq r take (Left _) pT =
   void (leftNotRight (trans (sym (declPtrLeft fuel id n nm pT)) eq))
 declPtrOwn fuel id n nm ih eq r take (Right (sc1, Ghost)) pT =
   void (ghostNotOwner (ownerFlagTrue pT r take))
+declPtrOwn fuel id n nm ih eq r take (Right (sc1, Null)) pT =
+  void (nullNotOwner (ownerFlagTrue pT r take))
 declPtrOwn fuel id n nm ih eq r take (Right (sc1, Owner)) pT =
   outRewrite (rightInj (trans (sym (declPtrOwner fuel id n nm pT)) eq))
     (OutOk (reprSetOwned (fromOk (ih sc1 Owner pT))))
+
+export
+declPtrGhost :
+  (fuel : Nat) -> (id : Nat) -> (n : Place) -> (nm : String) ->
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {c, c' : CScopes} -> {e : Expr} ->
+  (ih : (sc1 : Scopes) -> (fl1 : Flag) ->
+        takeOwner ctx sc e = Right (sc1, fl1) ->
+        SafeOut (Ok c') sc1) ->
+  checkStmt (S fuel) ctx sc (SDecl id n nm Ptr (Just e)) = Right sc' ->
+  Represents c sc ->
+  (res : Either Diag (Scopes, Flag)) ->
+  takeOwner ctx sc e = res ->
+  SafeOut (Ok (setC n AEmpty c')) sc'
+declPtrGhost fuel id n nm ih eq r (Left _) pT =
+  void (leftNotRight (trans (sym (declPtrLeft fuel id n nm pT)) eq))
+declPtrGhost fuel id n nm ih eq r (Right (sc1, Ghost)) pT =
+  outRewrite (rightInj (trans (sym (declPtrGhostEq fuel id n nm pT)) eq))
+    (OutOk (reprSetEmpty (fromOk (ih sc1 Ghost pT))))
+declPtrGhost fuel id n nm ih eq r (Right (sc1, Null)) pT =
+  outRewrite (rightInj (trans (sym (declPtrNullEq fuel id n nm pT)) eq))
+    (OutOk (reprSetFitEmpty (fromOk (ih sc1 Null pT))))
+declPtrGhost fuel id n nm ih eq r (Right (sc1, Owner)) pT =
+  outRewrite (rightInj (trans (sym (declPtrOwner fuel id n nm pT)) eq))
+    (OutOk (reprSetFitEmpty (fromOk (ih sc1 Owner pT))))
+
+export
+declPtrNull :
+  (fuel : Nat) -> (id : Nat) -> (n : Place) -> (nm : String) ->
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {c, c' : CScopes} -> {e : Expr} ->
+  (ih : (sc1 : Scopes) -> (fl1 : Flag) ->
+        takeOwner ctx sc e = Right (sc1, fl1) ->
+        SafeOut (Ok c') sc1) ->
+  checkStmt (S fuel) ctx sc (SDecl id n nm Ptr (Just e)) = Right sc' ->
+  Represents c sc ->
+  (res : Either Diag (Scopes, Flag)) ->
+  takeOwner ctx sc e = res ->
+  SafeOut (Ok (setC n ANull c')) sc'
+declPtrNull fuel id n nm ih eq r (Left _) pT =
+  void (leftNotRight (trans (sym (declPtrLeft fuel id n nm pT)) eq))
+declPtrNull fuel id n nm ih eq r (Right (sc1, Ghost)) pT =
+  outRewrite (rightInj (trans (sym (declPtrGhostEq fuel id n nm pT)) eq))
+    (OutOk (reprSetFitNull (fromOk (ih sc1 Ghost pT))))
+declPtrNull fuel id n nm ih eq r (Right (sc1, Null)) pT =
+  outRewrite (rightInj (trans (sym (declPtrNullEq fuel id n nm pT)) eq))
+    (OutOk (reprSetNull (fromOk (ih sc1 Null pT))))
+declPtrNull fuel id n nm ih eq r (Right (sc1, Owner)) pT =
+  outRewrite (rightInj (trans (sym (declPtrOwner fuel id n nm pT)) eq))
+    (OutOk (reprSetFitNull (fromOk (ih sc1 Owner pT))))

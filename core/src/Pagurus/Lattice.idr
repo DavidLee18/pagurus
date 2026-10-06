@@ -36,6 +36,7 @@ eqAtomRefl AOwned = Refl
 eqAtomRefl (ABorrowed n) = eqNatRefl n
 eqAtomRefl (AMoved n) = eqNatRefl n
 eqAtomRefl (AFreed n) = eqNatRefl n
+eqAtomRefl ANull = Refl
 
 export
 eqAtomTrue : (a, b : Atom) -> a == b = True -> a = b
@@ -44,6 +45,7 @@ eqAtomTrue AOwned AOwned Refl = Refl
 eqAtomTrue (ABorrowed x) (ABorrowed y) prf = cong ABorrowed (eqNatTrue x y prf)
 eqAtomTrue (AMoved x) (AMoved y) prf = cong AMoved (eqNatTrue x y prf)
 eqAtomTrue (AFreed x) (AFreed y) prf = cong AFreed (eqNatTrue x y prf)
+eqAtomTrue ANull ANull Refl = Refl
 
 export
 orTrue : {a, b : Bool} -> a || b = True -> Either (a = True) (b = True)
@@ -105,6 +107,7 @@ compareEq AOwned AOwned Refl = Refl
 compareEq (ABorrowed x) (ABorrowed y) prf = cong ABorrowed (cmpNat x y prf)
 compareEq (AMoved x) (AMoved y) prf = cong AMoved (cmpNat x y prf)
 compareEq (AFreed x) (AFreed y) prf = cong AFreed (cmpNat x y prf)
+compareEq ANull ANull Refl = Refl
 
 export
 insertSortedHas : (a : Atom) -> (xs : Status) -> inSet a (insertSorted a xs) = True

@@ -22,6 +22,7 @@ lemmas : (n : Nat) ->
          (stepAtom AOwned Use n = Right AOwned,
           IsLeft (stepAtom (AMoved n) Use n),
           IsLeft (stepAtom AEmpty Use n),
+          stepAtom ANull Drop n = Right ANull,
           join [AOwned] [AEmpty] = [AEmpty, AOwned],
           stepStatus [] Use n = Right [],
           inSet AOwned (join [AOwned] [AEmpty]) = True)
@@ -29,6 +30,7 @@ lemmas n =
   (ownedUseOk n,
    movedUseRejected n n,
    emptyUseRejected n,
+   nullDropOk n,
    joinOwnedEmptyIsBoth,
    stepEmptySetOk Use n,
    joinOverApprox [AOwned] [AEmpty] AOwned (Left Refl))

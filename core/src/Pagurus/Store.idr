@@ -80,6 +80,20 @@ lookupPlaceSetMiss : (n, m : Place) -> (v : Status) -> (sc : Scopes) ->
 lookupPlaceSetMiss = lookupSetMiss
 
 export
+setNameSetName : (n : Place) -> (v, v' : Status) -> (e : Env) ->
+                 setName n v' (setName n v e) = setName n v' e
+setNameSetName n v v' [] = rewrite eqNatRefl n in Refl
+setNameSetName n v v' ((k, x) :: xs) with (n == k) proof p
+  setNameSetName n v v' ((k, x) :: xs) | True = rewrite eqNatRefl n in Refl
+  setNameSetName n v v' ((k, x) :: xs) | False =
+    rewrite p in cong (\ys => (k, x) :: ys) (setNameSetName n v v' xs)
+
+export
+setPlaceSetPlace : (n : Place) -> (v, v' : Status) -> (sc : Scopes) ->
+                   setPlace n v' (setPlace n v sc) = setPlace n v' sc
+setPlaceSetPlace = setNameSetName
+
+export
 declareLookupHit : (n : Place) -> (v : Status) -> (sc : Scopes) ->
                    lookupPlace n (declarePlace n v sc) = Just v
 declareLookupHit = lookupSetHit

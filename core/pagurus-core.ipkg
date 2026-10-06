@@ -15,6 +15,19 @@ modules = Pagurus.IR
         , Pagurus.Conc
         , Pagurus.Soundness
         , Pagurus.Safety
+        , Pagurus.Safety.Lit
+        , Pagurus.Safety.Var
+        , Pagurus.Safety.Args
+        , Pagurus.Safety.Call
+        , Pagurus.Safety.Assign
+        , Pagurus.Safety.Decl
+        , Pagurus.Safety.Drop
+        , Pagurus.Safety.Return
+        , Pagurus.Safety.If
+        , Pagurus.Safety.Loop
+        , Pagurus.Safety.Seq
+        , Pagurus.Safety.Expr
+        , Pagurus.Safety.Stmt
         , Pagurus.Sexp
         , Pagurus.ParseIR
         , Pagurus.Output

@@ -11,6 +11,7 @@ import Pagurus.Status
 import Pagurus.Step
 import Pagurus.Lattice
 import Pagurus.Safety
+import Pagurus.Safety.Stmt
 import Pagurus.Soundness
 
 %default covering
@@ -40,11 +41,16 @@ lemmaStepStatus n =
 keepSafetyType : Type
 keepSafetyType = CheckAcceptedNoOwnershipCrash
 
-covering
+partial
+keepSafety : CheckAcceptedNoOwnershipCrash
+keepSafety = checkAcceptedNoOwnershipCrash
+
+partial
 main : IO ()
 main = do
   let _ = lemmas 0
   let _ = lemmaStepStatus 0
+  let _ = keepSafety
   args <- getArgs
   case args of
     (_ :: path :: _) =>

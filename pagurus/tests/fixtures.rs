@@ -494,3 +494,45 @@ fn cex3_stmt_expr_stays_a_parse_failure() {
         "expected a parse error, got {err}"
     );
 }
+
+/// pg-cex4 programmes that must be rejected. `a1`–`a4` are the
+/// literal-as-null soundness regression; the rest are sound rejects
+/// from that suite's RESULTS.txt.
+const CEX4_FAIL: &[&str] = &[
+    "a1_lit1.c",
+    "a2_free_then_lit.c",
+    "a3_litnocast.c",
+    "a4_strlit.c",
+    "c1_ifnull_df.c",
+    "c2_join_df.c",
+    "r1_realloc_old_df.c",
+    "r2_realloc_self_df.c",
+    "ret1_elsepath_df.c",
+];
+
+#[test]
+fn cex4_literal_null_false_accepts_are_rejected() {
+    for name in [
+        "a1_lit1.c",
+        "a2_free_then_lit.c",
+        "a3_litnocast.c",
+        "a4_strlit.c",
+    ] {
+        let diags = check(&fixture("fail", name));
+        assert!(
+            !diags.is_empty(),
+            "{name} must be rejected (non-null literal is not ANull), got a clean verdict"
+        );
+    }
+}
+
+#[test]
+fn cex4_rejected_programs_stay_rejected() {
+    for name in CEX4_FAIL {
+        let diags = check(&fixture("fail", name));
+        assert!(
+            !diags.is_empty(),
+            "{name} must stay rejected (RESULTS.txt pag_rc=1), got a clean verdict"
+        );
+    }
+}

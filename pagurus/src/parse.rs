@@ -464,7 +464,7 @@ impl<'a> Lowering<'a> {
                             let id = self.alloc_node(expr);
                             vec![Stmt::Expr {
                                 id,
-                                expr: Expr::Lit { id },
+                                expr: Expr::Null { id },
                             }]
                         }
                         [arg] => {
@@ -631,12 +631,16 @@ impl<'a> Lowering<'a> {
     /// explores both `if` branches).
     fn lower_seq(&mut self, expr: &Node<Expression>) -> (Vec<Stmt>, Expr) {
         match &expr.node {
-            Expression::Identifier(id) if id.node.name == "NULL" => (
-                Vec::new(),
-                Expr::Lit {
-                    id: self.alloc_node(expr),
-                },
-            ),
+            Expression::Identifier(_) | Expression::Constant(_) | Expression::StringLiteral(_)
+                if is_null_constant(expr) =>
+            {
+                (
+                    Vec::new(),
+                    Expr::Null {
+                        id: self.alloc_node(expr),
+                    },
+                )
+            }
             Expression::Identifier(id) => {
                 let name = id.node.name.clone();
                 (
@@ -949,7 +953,8 @@ fn collect_defined_names(tu: &lang_c::ast::TranslationUnit) -> HashSet<String> {
 
 /// True for integer constant 0, `(void *)0` after peeling casts, and the
 /// identifier `NULL` (modelled as the ISO C null pointer constant even
-/// without `<stddef.h>`).
+/// without `<stddef.h>`). This is the only gate from C literals onto
+/// `Expr::Null` / `ANull`; a non-null integer or string literal is `Lit`.
 fn is_null_constant(expr: &Node<Expression>) -> bool {
     match &expr.node {
         Expression::Constant(c) => match &c.node {

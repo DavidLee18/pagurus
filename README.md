@@ -45,7 +45,7 @@ To believe a `pagurus` “safe” verdict you have to trust:
 - the **s-expression parser** (`Pagurus.ParseIR` / `Pagurus.Sexp`) and **JSON output** (`Pagurus.Output`) — covering, not total
 - `checkProgram` / `checkFun`, which iterate `checkStmts` over function bodies but are not themselves the theorem
 - `malloc`/`calloc` as modelled (fresh unique owner; no heap object identity)
-- `free` as `SDrop` on a variable; **`free(0)` / `free((void*)0)` / `free(NULL)`** lowering to a no-op `Lit` (ISO C `free(NULL)`). A pointer known to be null (`p = 0` / `p = NULL`) is atom `ANull`; `free` of that atom is a no-op. Uninitialised pointers stay `AEmpty` and `free` of them is still rejected.
+- `free` as `SDrop` on a variable; **`free(0)` / `free((void*)0)` / `free(NULL)`** lowering to a no-op `Null` IR node (ISO C `free(NULL)`). A pointer known to be null (`p = 0` / `p = NULL`) is atom `ANull`; `free` of that atom is a no-op. Non-null literals (`1`, `"hi"`, `(int*)1`) are `Lit` / Ghost / `AEmpty`, not `ANull`. Uninitialised pointers stay `AEmpty` and `free` of them is still rejected.
 - `realloc` (prototype, not defined in this unit) as consume-first-argument plus a fresh owner. Failure is not modelled: the checker assumes success (a later `free` of the original pointer is rejected). A definition of `realloc` in the unit is summarised like any other function.
 - syntactic consuming summaries (`isConsuming`) as a fixpoint over callee syntax, not a proved interprocedural semantics — **callee bodies are not run**
 - that `SReturn` **ends the path**: remaining statements on that path are not checked and do not appear in `EvalStmts`. An `if` branch that always returns is dropped from the join so it does not poison the continuation. A loop body that always returns keeps the entry environment (zero-iteration exit).
@@ -156,7 +156,7 @@ Modelled:
 - Local variables; nested blocks
 - Pointer types (`T *`) vs copy types (`int`, …)
 - `malloc`/`calloc` (fresh unique owner), `realloc` (consume first argument, fresh owner; assumes success), and `free` (drop), only when they are **not** defined in this file
-- `free(0)`, `free((void *)0)`, and `free(NULL)` are accepted as a defined no-op (ISO C `free(NULL)`). A pointer assigned `0` or `NULL` is tracked as known-null; `free` of it is a no-op. Uninitialised pointers are not null.
+- `free(0)`, `free((void *)0)`, and `free(NULL)` are accepted as a defined no-op (ISO C `free(NULL)`). A pointer assigned `0` or `NULL` is tracked as known-null; `free` of it is a no-op. Uninitialised pointers are not null. Non-null literals (including `(int*)1` and string literals) are not modelled as null; `free` of a pointer holding one is rejected.
 - Assignment, including chained assignment as a move of the unique owner
 - Calls: borrowing vs consuming, summarised from callee bodies
 - `return`, `if`/`else`
@@ -191,7 +191,7 @@ Join is **union of possible atoms**. `Owned ⊔ Empty` is `{Owned, Empty}`: a la
 
 1. A `T *` local is a **unique owner**, not a C-style copyable address.
 2. `malloc`/`calloc` produce a fresh owner. `realloc` consumes its first argument and produces a fresh owner (success is assumed).
-3. Assigning one owning pointer to another **moves**; the source may not be used afterwards. Assigning `0`/`NULL` makes the destination known-null; `free` of a known-null pointer is a no-op.
+3. Assigning one owning pointer to another **moves**; the source may not be used afterwards. Assigning `0`/`NULL` makes the destination known-null; `free` of a known-null pointer is a no-op. Assigning a non-null literal does not make the destination null.
 4. `free(p)` **consumes** `p` unless `p` is known-null. A later `free(p)` of a non-null consumed pointer is a **double free**; any other use is **use after free**.
 5. Integers (and other non-pointer types) are **copied**, not moved, and are not tracked as owners.
 6. Passing a pointer to a non-consuming function is a **borrow** (a use). Passing it to a consuming function is a **move**.

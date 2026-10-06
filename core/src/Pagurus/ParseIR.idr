@@ -42,6 +42,10 @@ mutual
     case natOf id of
       Left e => Left e
       Right n => Right (ELit n)
+  parseExpr (Lst (Atom "null" :: id :: [])) =
+    case natOf id of
+      Left e => Left e
+      Right n => Right (ENull n)
   parseExpr (Lst (Atom "malloc" :: id :: args)) =
     case natOf id of
       Left e => Left e

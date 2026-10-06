@@ -90,6 +90,7 @@ mutual
   movedInExpr p (ECall _ _ args) = movedInExprs p args
   movedInExpr p (EUse _ args) = movedInExprs p args
   movedInExpr _ (ELit _) = False
+  movedInExpr _ (ENull _) = False
   movedInExpr _ (EUnsupported _ _) = False
 
   movedInExprs : Place -> List Expr -> Bool
@@ -188,10 +189,11 @@ isReturnStmt (SReturn _ _) = True
 isReturnStmt _ = False
 
 ||| Whether `takeOwner` produced a unique owner (`Owner`), a known null
-||| (`Null`, from a literal `0` / `NULL`), or another non-owner (`Ghost`).
-||| `Ghost` must not be treated as null: a non-consuming call that happens
-||| to return a heap pointer would otherwise make `free` a no-op and hide
-||| a double free.
+||| (`Null`, only from `ENull`: `0` / `NULL` / `(void*)0`), or another
+||| non-owner (`Ghost`, including `ELit`). `Ghost` must not be treated as
+||| null: a non-null integer/string literal, or a non-consuming call that
+||| happens to return a heap pointer, would otherwise make `free` a no-op
+||| and hide a double free.
 public export
 data Flag = Owner | Ghost | Null
 
@@ -338,6 +340,7 @@ mutual
   export
   checkExpr : Ctx -> Scopes -> Expr -> Either Diag Scopes
   checkExpr ctx sc (ELit _) = Right sc
+  checkExpr ctx sc (ENull _) = Right sc
   checkExpr ctx sc (EMalloc _ args) = checkArgsBorrow ctx sc args
   checkExpr ctx sc (EVar id n nm) = usePlace sc n id nm
   checkExpr ctx sc (ECall id callee args) = checkCall ctx sc id callee args
@@ -349,7 +352,10 @@ mutual
   export
   takeOwner : Ctx -> Scopes -> Expr -> Either Diag (Scopes, Flag)
   takeOwner ctx sc (EMalloc _ args) = mapToOwner (checkArgsBorrow ctx sc args)
-  takeOwner _ sc (ELit _) = Right (sc, Null)
+  ||| Non-null literals are not owners (Ghost → AEmpty on store).
+  takeOwner _ sc (ELit _) = Right (sc, Ghost)
+  ||| Only the null pointer constant is `ANull`.
+  takeOwner _ sc (ENull _) = Right (sc, Null)
   takeOwner _ sc (EVar id n nm) = takeVarFrom sc id n nm (lookupPlace n sc)
   takeOwner ctx sc (EAssign id n nm ty rhs) =
     case ty of
@@ -550,6 +556,11 @@ checkExprLit : (ctx : Ctx) -> (sc : Scopes) -> (id : Nat) ->
 checkExprLit _ _ _ = Refl
 
 export
+checkExprNull : (ctx : Ctx) -> (sc : Scopes) -> (id : Nat) ->
+                checkExpr ctx sc (ENull id) = Right sc
+checkExprNull _ _ _ = Refl
+
+export
 checkExprMalloc : (ctx : Ctx) -> (sc : Scopes) -> (id : Nat) -> (args : List Expr) ->
                   checkExpr ctx sc (EMalloc id args) = checkArgsBorrow ctx sc args
 checkExprMalloc _ _ _ _ = Refl
@@ -587,8 +598,13 @@ checkExprUnsup _ _ _ _ = Refl
 
 export
 takeLit : (ctx : Ctx) -> (sc : Scopes) -> (id : Nat) ->
-          takeOwner ctx sc (ELit id) = Right (sc, Null)
+          takeOwner ctx sc (ELit id) = Right (sc, Ghost)
 takeLit _ _ _ = Refl
+
+export
+takeNull : (ctx : Ctx) -> (sc : Scopes) -> (id : Nat) ->
+           takeOwner ctx sc (ENull id) = Right (sc, Null)
+takeNull _ _ _ = Refl
 
 export
 takeUnsup : (ctx : Ctx) -> (sc : Scopes) -> (id : Nat) -> (reason : String) ->
@@ -1009,6 +1025,12 @@ checkStmtRetLit :
   (fuel : Nat) -> (ctx : Ctx) -> (sc : Scopes) -> (rid : Nat) -> (id : Nat) ->
   checkStmt (S fuel) ctx sc (SReturn rid (Just (ELit id))) = checkExpr ctx sc (ELit id)
 checkStmtRetLit _ _ _ _ _ = Refl
+
+export
+checkStmtRetNull :
+  (fuel : Nat) -> (ctx : Ctx) -> (sc : Scopes) -> (rid : Nat) -> (id : Nat) ->
+  checkStmt (S fuel) ctx sc (SReturn rid (Just (ENull id))) = checkExpr ctx sc (ENull id)
+checkStmtRetNull _ _ _ _ _ = Refl
 
 export
 checkStmtRetMalloc :

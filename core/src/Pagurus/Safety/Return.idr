@@ -54,6 +54,20 @@ retLitSafe fuel ctx rid id ih eq r =
   in outAsRet so
 
 export
+retNullSafe :
+  (fuel : Nat) -> (ctx : Ctx) -> (rid : Nat) -> (id : Nat) ->
+  {sc, sc' : Scopes} -> {c : CScopes} ->
+  (ih : checkExpr ctx sc (ENull id) = Right sc' ->
+        Represents c sc ->
+        SafeOut (Ok c) sc') ->
+  checkStmt (S fuel) ctx sc (SReturn rid (Just (ENull id))) = Right sc' ->
+  Represents c sc ->
+  SafeOut (Returned c) sc'
+retNullSafe fuel ctx rid id ih eq r =
+  let so = ih (trans (sym (checkStmtRetNull fuel ctx sc rid id)) eq) r
+  in outAsRet so
+
+export
 retMallocSafe :
   (fuel : Nat) -> (ctx : Ctx) -> (rid : Nat) -> (mid : Nat) ->
   (args : List Expr) ->

@@ -150,6 +150,7 @@ mutual
   public export
   data EvalExpr : Ctx -> CScopes -> Expr -> Outcome -> Type where
     EvLit : EvalExpr ctx c (ELit _) (Ok c)
+    EvNull : EvalExpr ctx c (ENull _) (Ok c)
     EvMalloc : EvalExprs ctx c args o -> EvalExpr ctx c (EMalloc _ args) o
     EvVarUse : ActOn Use c n nid o -> EvalExpr ctx c (EVar nid n nm) o
     EvUnsupE : {d : Diag} -> d = unsupDiag nid reason ->
@@ -189,7 +190,8 @@ mutual
   data TakeOwnerE : Ctx -> CScopes -> Expr -> Outcome -> Flag -> Type where
     TakeMalloc : EvalExprs ctx c args o ->
                  TakeOwnerE ctx c (EMalloc _ args) o Owner
-    TakeLit : TakeOwnerE ctx c (ELit _) (Ok c) Null
+    TakeLit : TakeOwnerE ctx c (ELit _) (Ok c) Ghost
+    TakeNull : TakeOwnerE ctx c (ENull _) (Ok c) Null
     TakeVarMiss :
       lookupC n c = Nothing ->
       TakeOwnerE ctx c (EVar nid n nm) (Ok c) Ghost
@@ -322,6 +324,7 @@ mutual
     EvRetVar : (o : Outcome) -> ActOn Move c n nid o ->
                EvalStmt ctx c (SReturn _ (Just (EVar nid n nm))) (asReturned o)
     EvRetLit : EvalStmt ctx c (SReturn _ (Just (ELit _))) (Returned c)
+    EvRetNull : EvalStmt ctx c (SReturn _ (Just (ENull _))) (Returned c)
     EvRetMalloc : (o : Outcome) -> EvalExprs ctx c args o ->
                   EvalStmt ctx c (SReturn _ (Just (EMalloc _ args))) (asReturned o)
     EvRetCall : (o : Outcome) -> EvalCall ctx c nid callee args o ->

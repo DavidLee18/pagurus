@@ -87,6 +87,8 @@ mutual
     retVarSafe k ctx rid nid n nm eq r act (takeOwner ctx sc (EVar nid n nm)) Refl
   stmtSafe {s = SReturn rid (Just (ELit id))} EvRetLit (S k) sc sc' eq r =
     retLitSafe k ctx rid id (litSafe id) eq r
+  stmtSafe {s = SReturn rid (Just (ENull id))} EvRetNull (S k) sc sc' eq r =
+    retNullSafe k ctx rid id (nullSafe id) eq r
   stmtSafe {s = SReturn rid (Just (EMalloc mid args))} (EvRetMalloc o evs) (S k) sc sc' eq r =
     retMallocSafe k ctx rid mid args
       (\pE, r0, ev0 => exprSafe {e = EMalloc mid args} ev0 sc sc' pE r0) eq r evs

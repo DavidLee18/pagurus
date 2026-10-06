@@ -28,6 +28,7 @@ mutual
     Represents c sc ->
     SafeOut oE sc'
   exprSafe {e = ELit id} EvLit sc sc' eq r = litSafe id eq r
+  exprSafe {e = ENull id} EvNull sc sc' eq r = nullSafe id eq r
   exprSafe {e = EMalloc mid args} (EvMalloc evs) sc sc' eq r =
     argsBorrowSafe evs sc sc' (trans (sym (checkExprMalloc ctx sc mid args)) eq) r
   exprSafe {e = EVar nid n nm} (EvVarUse act) sc sc' eq r =
@@ -68,6 +69,7 @@ mutual
     Represents c sc ->
     SafeOut oT sc'
   takeSafe {e = ELit id} TakeLit sc sc' flChk eq r = takeLitSafe id eq r
+  takeSafe {e = ENull id} TakeNull sc sc' flChk eq r = takeNullSafe id eq r
   takeSafe {e = EMalloc mid args} (TakeMalloc evs) sc sc' flChk eq r with (checkArgsBorrow ctx sc args) proof pA
     takeSafe {e = EMalloc mid args} (TakeMalloc evs) sc sc' flChk eq r | Left _ =
       void (leftNotRight (trans (sym (takeMallocLeft mid pA)) eq))

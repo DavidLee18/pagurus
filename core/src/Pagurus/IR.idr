@@ -24,7 +24,10 @@ Eq Ty where
 public export
 data Expr : Type where
   EVar : (id : Nat) -> (place : Place) -> (name : String) -> Expr
+  ||| Non-null literal (integer, string, sizeof, dummy residual). Ghost.
   ELit : (id : Nat) -> Expr
+  ||| Null pointer constant: `0`, `(void*)0`, `NULL`.
+  ENull : (id : Nat) -> Expr
   EMalloc : (id : Nat) -> (args : List Expr) -> Expr
   ECall : (id : Nat) -> (callee : String) -> (args : List Expr) -> Expr
   EAssign : (id : Nat) -> (place : Place) -> (name : String) -> (ty : Ty) -> (rhs : Expr) -> Expr
@@ -35,6 +38,7 @@ public export
 exprId : Expr -> Nat
 exprId (EVar id _ _) = id
 exprId (ELit id) = id
+exprId (ENull id) = id
 exprId (EMalloc id _) = id
 exprId (ECall id _ _) = id
 exprId (EAssign id _ _ _ _) = id

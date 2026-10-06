@@ -1001,6 +1001,7 @@ retStmtNotOk :
 retStmtNotOk EvRetNone Refl impossible
 retStmtNotOk (EvRetVar o _) eq = asReturnedNotOk {o} eq
 retStmtNotOk EvRetLit Refl impossible
+retStmtNotOk EvRetNull Refl impossible
 retStmtNotOk (EvRetMalloc o _) eq = asReturnedNotOk {o} eq
 retStmtNotOk (EvRetCall o _) eq = asReturnedNotOk {o} eq
 retStmtNotOk (EvRetUse o _) eq = asReturnedNotOk {o} eq

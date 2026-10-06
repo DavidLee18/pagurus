@@ -2129,6 +2129,14 @@ mutual
                 (trans (sym (checkExprCall ctx sc id callee args)) pE))) eq))
           in ownerCase ev scEq flEq ln1
 
+        callNotCopyV :
+          HEvalExpr {funs} env h (ECall id callee args)
+            (HROk HVCopy env' h') -> Void
+        callNotCopyV (HECall _ _ _ _) impossible
+        callNotCopyV (HECallUser _ _ _ _ _ _ _ _ _ _) impossible
+        callNotCopyV (HECallUserRet _ _ _ _ _ _ _ _ _ _) impossible
+        callNotCopyV (HERealloc _ _ _ _ _) impossible
+
         ||| Inspect `v` first so matching `HECall` / `HERealloc` refines the
         ||| eval result instead of fighting the parent `v`.
         ownerCase :
@@ -2174,15 +2182,7 @@ mutual
                            (sym (hvPtrInj {x = fst (alloc h1)} {y = b} Refl))
                            (HOwnLive (allocCell h1) (inHandAlloc ln1.oaLN)))))
           ownerCase ev0 scEq flEq ln1 | HVCopy =
-            void (callNotCopy ev0)
-            where
-              callNotCopy :
-                HEvalExpr {funs} env h (ECall id callee args)
-                  (HROk HVCopy env' h') -> Void
-                callNotCopy (HECall _ _ _ _) impossible
-                callNotCopy (HECallUser _ _ _ _ _ _ _ _ _ _) impossible
-                callNotCopy (HECallUserRet _ _ _ _ _ _ _ _ _ _) impossible
-                callNotCopy (HERealloc _ _ _ _ _) impossible
+            void (callNotCopyV ev0)
 
   reallocTakeLN :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->

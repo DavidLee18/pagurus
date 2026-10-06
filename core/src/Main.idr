@@ -12,6 +12,11 @@ import Pagurus.Step
 import Pagurus.Lattice
 import Pagurus.Safety
 import Pagurus.Safety.Stmt
+import Pagurus.Heap.Thm
+import Pagurus.Heap
+import Pagurus.Heap.Eval
+import Pagurus.Heap.Stmt
+import Pagurus.Heap.Witness
 import Pagurus.Soundness
 
 %default covering
@@ -47,11 +52,26 @@ keepSafetyType = CheckAcceptedNoOwnershipCrash
 keepSafety : CheckAcceptedNoOwnershipCrash
 keepSafety = checkAcceptedNoOwnershipCrash
 
+keepHeapType : Type
+keepHeapType = CheckAcceptedNoHeapCrash
+
+keepHeap : CheckAcceptedNoHeapCrash
+keepHeap = checkAcceptedNoHeapCrash
+
+keepHeapWitnesses :
+  ( (o : HOutcome) -> HEvalStmts [] InitHeap SsOk o -> Not (IsHCrash o)
+  , HEvalStmts [] InitHeap SsBad (HCrashOut (FreeFreed 1))
+  , {sc' : Scopes} -> Not (checkStmts 8 EmptyCtx [] SsBad = Right sc')
+  )
+keepHeapWitnesses = (mallocFreeNoHeapCrash, doubleFreeHeapCrash, doubleFreeRejected)
+
 main : IO ()
 main = do
   let _ = lemmas 0
   let _ = lemmaStepStatus 0
   let _ = keepSafety
+  let _ = keepHeap
+  let _ = keepHeapWitnesses
   args <- getArgs
   case args of
     (_ :: path :: _) =>

@@ -110,6 +110,28 @@ compareEq (AFreed x) (AFreed y) prf = cong AFreed (cmpNat x y prf)
 compareEq ANull ANull Refl = Refl
 
 export
+insertSortedNotNil : (a : Atom) -> (xs : Status) -> Not (insertSorted a xs = [])
+insertSortedNotNil a [] Refl impossible
+insertSortedNotNil a (x :: xs) prf with (compareAtom a x)
+  insertSortedNotNil a (x :: xs) prf | LT = absurdNil prf
+    where
+      absurdNil : Not (a :: x :: xs = [])
+      absurdNil Refl impossible
+  insertSortedNotNil a (x :: xs) prf | EQ = absurdNil prf
+    where
+      absurdNil : Not (x :: xs = [])
+      absurdNil Refl impossible
+  insertSortedNotNil a (x :: xs) prf | GT = absurdNil prf
+    where
+      absurdNil : Not (x :: insertSorted a xs = [])
+      absurdNil Refl impossible
+
+export
+joinNotNil : (xs, ys : Status) -> Not (xs = []) -> Not (join xs ys = [])
+joinNotNil [] ys ne = void (ne Refl)
+joinNotNil (x :: xs) ys _ = insertSortedNotNil x (join xs ys)
+
+export
 insertSortedHas : (a : Atom) -> (xs : Status) -> inSet a (insertSorted a xs) = True
 insertSortedHas a [] = rewrite eqAtomRefl a in Refl
 insertSortedHas a (x :: xs) with (compareAtom a x) proof p

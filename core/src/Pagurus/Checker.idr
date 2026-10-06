@@ -352,9 +352,9 @@ mutual
   export
   takeOwner : Ctx -> Scopes -> Expr -> Either Diag (Scopes, Flag)
   takeOwner ctx sc (EMalloc _ args) = mapToOwner (checkArgsBorrow ctx sc args)
-  ||| Non-null literals are not owners (Ghost → AEmpty on store).
+  -- Non-null literals are not owners (Ghost → AEmpty on store).
   takeOwner _ sc (ELit _) = Right (sc, Ghost)
-  ||| Only the null pointer constant is `ANull`.
+  -- Only the null pointer constant is `ANull`.
   takeOwner _ sc (ENull _) = Right (sc, Null)
   takeOwner _ sc (EVar id n nm) = takeVarFrom sc id n nm (lookupPlace n sc)
   takeOwner ctx sc (EAssign id n nm ty rhs) =

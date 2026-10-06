@@ -8,14 +8,16 @@
 ||| are desugared by the frontend to `cond; Loop[body; cond]` (and the
 ||| do-while analogue) so the exiting condition evaluation is an ordinary
 ||| statement the theorem sees. Calls do not run callee bodies; they
-||| borrow or move arguments according to `isConsuming`. Prototype
+||| borrow or move each argument according to the callee's per-parameter
+||| consume summary (`Never` borrows; `May`/`Always` move). Prototype
 ||| `realloc` consumes its first argument and yields a fresh owner.
 ||| `SReturn` produces `Returned` and does not run the remaining
 ||| statement list.
 |||
 ||| Expression evaluation follows `checkExpr` (uses). Taking an owner
-||| follows `takeOwner` (moves). Calls follow `checkCall`: builtins and
-||| non-consuming callees borrow their arguments; consuming callees move.
+||| follows `takeOwner` (moves). Calls follow `checkCall`: builtins borrow
+||| their arguments; defined callees use `funModes`; extra arguments beyond
+||| the summary are moved.
 module Pagurus.Conc
 
 import Pagurus.IR
@@ -254,6 +256,40 @@ mutual
       EvalExprs ctx c1 es o ->
       ReallocArgs ctx c (e :: es) o
 
+  ||| Per-argument evaluation matching `checkArgsModes`. Extra arguments
+  ||| (empty remaining mode list) are moved.
+  public export
+  data EvalModes : Ctx -> CScopes -> List Expr -> List Consume -> Outcome -> Type where
+    ModesNil : EvalModes ctx c [] modes (Ok c)
+    ModesBorrowCrash :
+      doesConsume m = False ->
+      EvalExpr ctx c e (Crash d) ->
+      EvalModes ctx c (e :: es) (m :: ms) (Crash d)
+    ModesBorrowCons :
+      (c1 : CScopes) ->
+      doesConsume m = False ->
+      EvalExpr ctx c e (Ok c1) ->
+      EvalModes ctx c1 es ms o ->
+      EvalModes ctx c (e :: es) (m :: ms) o
+    ModesMoveCrash :
+      doesConsume m = True ->
+      TakeOwnerE ctx c e (Crash d) fl ->
+      EvalModes ctx c (e :: es) (m :: ms) (Crash d)
+    ModesMoveCons :
+      (c1 : CScopes) ->
+      doesConsume m = True ->
+      TakeOwnerE ctx c e (Ok c1) fl ->
+      EvalModes ctx c1 es ms o ->
+      EvalModes ctx c (e :: es) (m :: ms) o
+    ModesExtraCrash :
+      TakeOwnerE ctx c e (Crash d) fl ->
+      EvalModes ctx c (e :: es) [] (Crash d)
+    ModesExtraCons :
+      (c1 : CScopes) ->
+      TakeOwnerE ctx c e (Ok c1) fl ->
+      EvalModes ctx c1 es [] o ->
+      EvalModes ctx c (e :: es) [] o
+
   public export
   data EvalCall : Ctx -> CScopes -> Nat -> String -> List Expr -> Outcome -> Type where
     CallBuiltin : isBuiltin callee = True ->
@@ -270,15 +306,9 @@ mutual
                  isDefined ctx callee = False ->
                  d = opaqueCallDiag nid callee ->
                  EvalCall ctx c nid callee args (Crash d)
-    CallBorrow : isBuiltin callee = False ->
-                 isDefined ctx callee = True ->
-                 isConsuming ctx callee = False ->
-                 EvalExprs ctx c args o ->
-                 EvalCall ctx c nid callee args o
-    CallConsume : isBuiltin callee = False ->
+    CallDefined : isBuiltin callee = False ->
                   isDefined ctx callee = True ->
-                  isConsuming ctx callee = True ->
-                  TakeOwners ctx c args o ->
+                  EvalModes ctx c args (funModes ctx callee) o ->
                   EvalCall ctx c nid callee args o
 
   public export

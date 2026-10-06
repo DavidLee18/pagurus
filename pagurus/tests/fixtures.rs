@@ -129,6 +129,18 @@ fn pass_realloc_ok_is_clean() {
 }
 
 #[test]
+fn pass_per_arg_consume_is_clean() {
+    for name in [
+        "wrap_free_first.c",
+        "wrap_free_second.c",
+        "wrap_free_middle.c",
+    ] {
+        let diags = check(&fixture("pass", name));
+        assert!(diags.is_empty(), "{name} must be accepted, got {diags:?}");
+    }
+}
+
+#[test]
 fn fail_use_after_move() {
     let path = fixture("fail", "use_after_move.c");
     let diags = check(&path);
@@ -288,6 +300,32 @@ fn fail_pointer_param_consume() {
 }
 
 #[test]
+fn fail_consume2_same_names_the_argument() {
+    let path = fixture("fail", "consume2_same.c");
+    let diags = check(&path);
+    let hit = diags
+        .iter()
+        .find(|d| ownership_crash(d))
+        .expect("expected ownership error on c2(p,p)");
+    let text = normalize(&hit.to_string(), &path);
+    assert!(
+        text.contains("argument `p` is consumed by `c2`"),
+        "diagnostic must name the consumed argument, got:\n{text}"
+    );
+}
+
+#[test]
+fn fail_wrap_free_first_df_stays_rejected() {
+    let diags = check(&fixture("fail", "wrap_free_first_df.c"));
+    assert!(
+        diags.iter().any(|d| d.kind == DiagnosticKind::UseAfterMove
+            || d.kind == DiagnosticKind::DoubleFree
+            || d.kind == DiagnosticKind::UseAfterFree),
+        "free of the Always-consumed first argument must be rejected, got {diags:?}"
+    );
+}
+
+#[test]
 fn fail_unsupported_goto() {
     let path = fixture("fail", "unsupported_goto.c");
     let diags = check(&path);
@@ -428,6 +466,7 @@ const CEX3_PASS: &[&str] = &[
     "two_sinks.c",
     "null_after_free.c",
     "realloc_ok.c",
+    "wrap_free_first.c",
 ];
 
 /// pg-cex3 programmes rejected by the checker at c3de693 (`pag_rc=1`).
@@ -455,7 +494,9 @@ const CEX3_FAIL: &[&str] = &[
     "unary_addr.c",
     "variadic_consume.c",
     "wrap_cond_free.c",
-    "wrap_free_first.c",
+    "wrap_free_first_df.c",
+    "wrap_free_first_alias.c",
+    "wrap_maybe_use.c",
     "wrap_move_then_free.c",
     "wrap_myfree_twice.c",
     "wrap_of_wrapper.c",

@@ -2,5 +2,5 @@ void *malloc(unsigned long);
 void *calloc(unsigned long, unsigned long);
 void *realloc(void *, unsigned long);
 void free(void *);
-void ff(void*a,void*b){free(a);}
-int main(void){int*p=malloc(4);int*q=malloc(4);ff(p,q);free(q);return 0;}
+void fs(void*a,void*b){free(b);}
+int main(void){int*p=malloc(4);int*q=malloc(4);fs(p,q);free(p);return 0;}

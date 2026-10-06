@@ -163,6 +163,44 @@ mutual
       eq r (takeOwner ctx sc e) Refl
 
   export
+  argsModesSafe :
+    {ctx : Ctx} -> {callee : String} -> {es : List Expr} ->
+    {modes : List Consume} -> {c : CScopes} -> {oM : Outcome} ->
+    EvalModes ctx c es modes oM ->
+    (sc, sc' : Scopes) ->
+    checkArgsModes ctx sc callee es modes = Right sc' ->
+    Represents c sc ->
+    SafeOut oM sc'
+  argsModesSafe ModesNil sc sc' eq r = argsModesNil eq r
+  argsModesSafe (ModesBorrowCrash {e} {es} {m} {ms} pc ev) sc sc' eq r =
+    argsModesBorrowCrash es ms pc
+      (\sc1, pE => exprSafe {e} ev sc sc1 pE r)
+      eq r (checkExpr ctx sc e) Refl
+  argsModesSafe (ModesBorrowCons {e} {es} {m} {ms} c1 pc evE evEs) sc sc' eq r =
+    argsModesBorrowCons es ms pc
+      (\sc1, pE => exprSafe {e} evE sc sc1 pE r)
+      (\sc1, pEs, r1 => argsModesSafe {es} {modes = ms} evEs sc1 sc' pEs r1)
+      eq r (checkExpr ctx sc e) Refl
+  argsModesSafe (ModesMoveCrash {e} {es} {m} {ms} pc take) sc sc' eq r =
+    argsModesMoveCrash es ms pc
+      (\sc1, fl1, pT => takeSafe {e} take sc sc1 fl1 pT r)
+      eq r (takeOwner ctx sc e) Refl
+  argsModesSafe (ModesMoveCons {e} {es} {m} {ms} c1 pc take evs) sc sc' eq r =
+    argsModesMoveCons es ms pc
+      (\sc1, fl1, pT => takeSafe {e} take sc sc1 fl1 pT r)
+      (\sc1, pEs, r1 => argsModesSafe {es} {modes = ms} evs sc1 sc' pEs r1)
+      eq r (takeOwner ctx sc e) Refl
+  argsModesSafe (ModesExtraCrash {e} {es} take) sc sc' eq r =
+    argsModesExtraCrash es
+      (\sc1, fl1, pT => takeSafe {e} take sc sc1 fl1 pT r)
+      eq r (takeOwner ctx sc e) Refl
+  argsModesSafe (ModesExtraCons {e} {es} c1 take evs) sc sc' eq r =
+    argsModesExtraCons es
+      (\sc1, fl1, pT => takeSafe {e} take sc sc1 fl1 pT r)
+      (\sc1, pEs, r1 => argsModesSafe {es} {modes = []} evs sc1 sc' pEs r1)
+      eq r (takeOwner ctx sc e) Refl
+
+  export
   callSafe :
     {ctx : Ctx} -> {id : Nat} -> {callee : String} -> {args : List Expr} ->
     {c : CScopes} -> {oC : Outcome} ->
@@ -179,10 +217,10 @@ mutual
   callSafe {oC = Returned _} (CallOpaque _ _ _ _) sc sc' eq r impossible
   callSafe {oC = Crash _} (CallOpaque pb pr pd _) sc sc' eq r =
     void (callOpaqueContra pb pr pd eq)
-  callSafe (CallBorrow pb pd pc evs) sc sc' eq r =
-    callBorrowSafe (\prf, rep, more => argsBorrowSafe more sc sc' prf rep) pb pd pc eq r evs
-  callSafe (CallConsume pb pd pc evs) sc sc' eq r =
-    callConsumeSafe (\prf, rep, more => argsMoveSafe more sc sc' prf rep) pb pd pc eq r evs
+  callSafe (CallDefined pb pd evs) sc sc' eq r =
+    callDefinedSafe
+      (\prf, rep, more => argsModesSafe more sc sc' prf rep)
+      pb pd eq r evs
 
   export
   reallocArgsSafe :

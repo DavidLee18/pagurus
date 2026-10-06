@@ -1,6 +1,8 @@
 # pagurus
 
-`pagurus` is a **total Idris 2 checker** for unique-ownership mistakes in C, **verified under the documented model and assumptions**. If the core accepts an IR programme, no represented concrete execution is a use-after-move, use-after-free, or double-free (`CheckAcceptedNoOwnershipCrash`). Version 1 flags those three errors on a deliberately small C subset. It accepts a program only when the Idris 2 core's checker returns success; anything it cannot model or prove is rejected.
+`pagurus` is a **total Idris 2 checker** for unique-ownership mistakes in a small C subset, **verified under the documented model and assumptions**. The proved result is **intraprocedural**: if `checkStmts` accepts a statement list, no represented `EvalStmts` execution of that list is a use-after-move, use-after-free, or double-free (`CheckAcceptedNoOwnershipCrash`). The operational model is instrumented — it reuses `stepAtom` on per-place atoms and the syntactic consuming summaries; there is **no heap or address model**. Version 1 flags those three errors. It accepts a program only when the Idris 2 core returns success; anything it cannot model or prove is rejected.
+
+A mutation that accepted a second `free` in the `stepAtom` Drop rule would still type-check the theorem: `CheckAcceptedNoOwnershipCrash` is relative to `stepAtom`, `Eval*`, and `isConsuming`. Correctness of the per-atom rules therefore rests on `Step.idr`, the small lemmas in `Soundness.idr`, and the fixture suite, not on the end-to-end inhabitant alone.
 
 It is a from-scratch rewrite inspired by [CORAL](https://github.com/tiagodusilva/coral) (C Ownership with Rust-like Analysis and Lifetimes). It is **not** a port of CORAL’s Clava/TypeScript implementation.
 
@@ -29,21 +31,25 @@ C source  --(Rust lang-c)-->  IR + span map  --(s-expression)-->  pagurus-core (
 Rust CLI  <-- render diagnostics with source spans ----------------
 ```
 
-1. **Idris 2 core (total checker + proved theorem).** Owns the IR, the abstract ownership state (a set of atoms), the move/borrow/drop transfer function, path-sensitive join, loop fixpoints, and the checker. Places are interned `Nat`s (decidable equality). Local lemmas about `stepStatus`, join, store update, and `Represents` preservation are machine-checked, as is the end-to-end theorem `CheckAcceptedNoOwnershipCrash`.
-2. **Untrusted shell (Rust).** Parses C, lowers it to IR, serialises that IR, spawns `pagurus-core` as a **separate executable** (no FFI), and renders diagnostics. Rust **never** overrides the core: a program is accepted only when the core prints `{"verdict":"safe"}`.
-3. **Soundness-first lowering.** Constructs the frontend or core cannot model become an `Unsupported` IR node. Statements are never silently dropped; the analyser never assumes that an opaque call or an unmodelled join is safe.
+1. **Idris 2 core (total checker + proved theorem).** Owns the IR, the abstract ownership state (a set of atoms), the move/borrow/drop transfer function, path-sensitive join, loop fixpoints, and `checkStmts` / `checkStmt`. Places are interned `Nat`s (decidable equality). Local lemmas about `stepStatus`, join, store update, and `Represents` preservation are machine-checked, as is `CheckAcceptedNoOwnershipCrash` for `checkStmts` on a statement list. `checkProgram` / `checkFun` (the whole-unit driver) are **not** covered by that theorem.
+2. **Rust shell.** Parses C with lang-c (`parse_preprocessed`, no system preprocessor), lowers it to IR, serialises s-expressions, spawns `pagurus-core` as a **separate executable** (no FFI), parses the core’s JSON, and renders diagnostics. Rust never turns a core reject into a “safe” verdict; a missing or crashing core is a failure, not acceptance. The shell **is** in the trusted base for a “safe” verdict: the theorem is about the IR the frontend emitted, not about C.
+3. **Lowering.** Constructs the frontend cannot model become an `Unsupported` IR node (opaque calls, `goto`/`switch`/`break`/`continue`, …). Empty `;` and labels are omitted. `while`/`for`/`do-while` are desugared so the condition is an IR statement on the exit path (`cond; Loop[body; cond]`). The analyser does not assume an opaque call or an unmodelled join is safe.
 
 ### Trusted computing base
 
 To believe a `pagurus` “safe” verdict you have to trust:
 
 - Idris 2 **0.8.0** and Chez Scheme, which execute `pagurus-core`
-- the Idris core modules `Pagurus.IR`, `Pagurus.Status`, `Pagurus.Step`, `Pagurus.Checker`, the operational model in `Pagurus.Conc`, and the lemmas in `Pagurus.Soundness` / `Pagurus.Safety` / `Pagurus.Lattice` / `Pagurus.Safety.*`
-- that the Rust frontend emitted IR that matches the C you care about (this lowering is *not* proved; see assumptions)
-- `malloc`/`calloc`/`free` as modelled (fresh unique owner / consume)
-- syntactic consuming summaries (`isConsuming`) as a fixpoint over callee bodies, not a proved interprocedural semantics
+- the Idris core modules `Pagurus.IR`, `Pagurus.Status`, **`Pagurus.Step`** (crash classification — UAM/UAF/DF — comes from `stepAtom`), `Pagurus.Checker`, the operational model in `Pagurus.Conc`, and the lemmas in `Pagurus.Soundness` / `Pagurus.Safety` / `Pagurus.Lattice` / `Pagurus.Safety.*`
+- the **lang-c** C parser (`parse_preprocessed`, no preprocessor / no `#include` expansion) and the Rust lowering to IR
+- the **s-expression parser** (`Pagurus.ParseIR` / `Pagurus.Sexp`) and **JSON output** (`Pagurus.Output`) — covering, not total
+- `checkProgram` / `checkFun`, which iterate `checkStmts` over function bodies but are not themselves the theorem
+- `malloc`/`calloc` as modelled (fresh unique owner; no heap object identity)
+- `free` as `SDrop` on a variable; **`free(0)` / `free((void*)0)` lowering** to a no-op `Lit` (ISO C `free(NULL)`); `free(NULL)` as an identifier is rejected
+- syntactic consuming summaries (`isConsuming`) as a fixpoint over callee syntax, not a proved interprocedural semantics — **callee bodies are not run**
+- that `SReturn` does **not** end execution: statements after `return` are still checked and still appear in `EvalStmts`
 
-You do **not** have to trust the Rust analyser for acceptance: if the core rejects, Rust reports that rejection; if the core is missing or crashes, the result is a failure, not safety.
+If the core rejects, Rust reports that rejection; if the core is missing or crashes, the result is a failure, not safety. A “safe” verdict still depends on the trusted base above.
 
 ## What is proved vs assumed
 
@@ -76,13 +82,17 @@ These are real proofs (`Refl` or induction), compiled into `pagurus-core`:
 - **`nilSafe` / `fuelRejectsCons` / `unsupportedRejected` / `loopZSafe` / `retNoneSafe` / `declCopyNoneSafe` / `declPtrNoneSafe` / `declPtrNonePres`**: empty lists, fuel-0, unsupported, zero-iteration loops, `return;`, and uninitialized decls.
 - **`ownerFlagTrue`**: a concrete `TakeOwnerE` that produces `Owner` implies the checker's `Flag` is `Owner` (Ghost vs Owner cannot be confused on that path).
 - **Unfold equations** (`takeMallocLeft`/`Right`, `assignPtrLeft`/`Owner`/`Ghost`, `declPtrLeft`/`Owner`, `stmtAsgPtrLeft`/`Owner`/`Ghost`, `ifFull`, `loopFixLeft`/`False`, …): first-order checker eliminators reduce `rewrite prf in Refl` without casing on `Either`.
-- **`CheckAcceptedNoOwnershipCrash`**: if `checkStmts fuel` accepts, no concrete `EvalStmts` from a represented store is UAM/UAF/DF (fuel exhaustion is a rejection). The inhabitant `checkAcceptedNoOwnershipCrash` in `Pagurus.Safety.Stmt` is a **total** function: per-kind case lemmas plus a syntax-index dispatcher. Computed diagnostics on unsupported/opaque nodes are equality proofs in `Pagurus.Conc` so Idris 2 0.8.0 can see exhaustiveness.
+- **`CheckAcceptedNoOwnershipCrash`**: if `checkStmts fuel` accepts a statement list, no concrete `EvalStmts` from a represented store is UAM/UAF/DF (fuel exhaustion is a rejection). This is **not** a theorem about `checkProgram`/`checkFun`, about C, or about a heap. The inhabitant `checkAcceptedNoOwnershipCrash` in `Pagurus.Safety.Stmt` is a **total** function: per-kind case lemmas plus a syntax-index dispatcher. Computed diagnostics on unsupported/opaque nodes are equality proofs in `Pagurus.Conc` so Idris 2 0.8.0 can see exhaustiveness.
 
 ### Stated, not proved
 
-- **Rust C→IR lowering is faithful** for the modelled fragment (including interned places) and emits `Unsupported` for everything else. This is not a theorem about C11.
-- **`malloc`/`calloc` return a fresh unique owner.** Allocation failure, custom allocators, and aliasing through integer casts are not modelled.
-- **Function summaries** (which callees consume their pointer arguments) are a syntactic fixpoint, not a proved interprocedural semantics.
+- **Rust C→IR lowering is faithful** for the modelled fragment (including interned places) and emits `Unsupported` for everything else. This is not a theorem about C11. The lowering **is** trusted for a “safe” verdict.
+- **`malloc`/`calloc` return a fresh unique owner.** Allocation failure, custom allocators, and aliasing through integer casts are not modelled. There is no heap: two `malloc`s are two `AOwned` atoms on (possibly different) places, not addresses.
+- **Function summaries** (which callees consume their pointer arguments) are a syntactic fixpoint, not a proved interprocedural semantics. Callee bodies are not interpreted.
+- **`stepAtom` is the crash classifier.** A wrong `Drop`/`Use` case there can make the theorem true of a bogus model. The fixtures and the small lemmas in `Pagurus.Soundness` are what pin those cases down.
+- **`return` does not end the statement list** in either the checker or `Eval`.
+- **Opaque calls** (no body in the unit; including a hand-written IR `(call free …)` when `free` is not a defined user function) are unsupported, not treated as a plain use.
+- **`goto`, `switch`, `break`, and `continue` are rejected** as unsupported.
 
 The IR parser, JSON printer, and CLI (`Main.idr`) are covering, not total.
 
@@ -147,7 +157,7 @@ Modelled:
 - Assignment, including chained assignment as a move of the unique owner
 - Calls: borrowing vs consuming, summarised from callee bodies
 - `return`, `if`/`else`
-- `while` / `do` / `for`, including `for`-init declarations, via a Kleene join (not “walk once”)
+- `while` / `do` / `for`, including `for`-init declarations, via a Kleene join (not “walk once”). C loops are lowered as `cond; Loop[body; cond]` (do-while: `body; cond; Loop[body; cond]`) so the exiting condition evaluation is in the IR the theorem covers.
 - Integer arithmetic as ordinary uses of copy values
 
 Rejected with an **unsupported construct** diagnostic (never assumed safe):
@@ -170,7 +180,7 @@ A pointer parameter is **not** assumed `Owned`. If the function’s body (or a c
 
 ### Loops and joins
 
-Join is **union of possible atoms**. `Owned ⊔ Empty` is `{Owned, Empty}`: a later `free` is unproven if the pointer might be empty; a later use is use-after-free if it might be `Freed`. Loops iterate this join to a fixpoint. A loop that `free`s a unique owner is typically rejected, because a second iteration cannot be disproved.
+Join is **union of possible atoms**. `Owned ⊔ Empty` is `{Owned, Empty}`: a later `free` is unproven if the pointer might be empty; a later use is use-after-free if it might be `Freed`. Loops iterate this join to a fixpoint. A loop that `free`s a unique owner is typically rejected, because a second iteration cannot be disproved. `SLoop` itself is zero or more executions of its body; the frontend puts the C condition *before* the loop and *at the end* of the body so a 0-iteration `SLoop` still sits after one condition evaluation.
 
 ## Ownership rules (v1)
 

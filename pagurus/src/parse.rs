@@ -1,7 +1,9 @@
 //! Lower `lang-c` C11 AST into the core IR.
 //!
-//! Anything that cannot be modelled is an `Unsupported` node. Statements are
-//! never silently dropped.
+//! Anything that cannot be modelled is an `Unsupported` node. Empty `;`
+//! statements and labels are omitted; everything else is either modelled or
+//! rejected. `while`/`for`/`do-while` are desugared so the condition is an
+//! IR statement on the exit path (`cond; Loop[body; cond]`).
 
 use std::collections::{HashMap, HashSet};
 
@@ -297,26 +299,28 @@ impl<'a> Lowering<'a> {
                 }]
             }
             Statement::While(w) => {
-                let mut body = vec![Stmt::Expr {
-                    id: self.alloc_node(&w.node.expression),
-                    expr: self.lower_expr(&w.node.expression),
-                }];
-                body.extend(self.lower_statement(&w.node.statement));
-                vec![Stmt::Loop {
+                // C: cond; while (true) { body; cond; } with exit after cond.
+                // `SLoop` is 0+ of its body, so the header cond is required.
+                let mut out = vec![self.lower_as_expr_stmt(&w.node.expression)];
+                let mut loop_body = self.lower_statement(&w.node.statement);
+                loop_body.push(self.lower_as_expr_stmt(&w.node.expression));
+                out.push(Stmt::Loop {
                     id: self.alloc_node(stmt),
-                    body,
-                }]
+                    body: loop_body,
+                });
+                out
             }
             Statement::DoWhile(w) => {
-                let mut body = self.lower_statement(&w.node.statement);
-                body.push(Stmt::Expr {
-                    id: self.alloc_node(&w.node.expression),
-                    expr: self.lower_expr(&w.node.expression),
-                });
-                vec![Stmt::Loop {
+                // C: body; cond; Loop[body; cond]
+                let mut out = self.lower_statement(&w.node.statement);
+                out.push(self.lower_as_expr_stmt(&w.node.expression));
+                let mut loop_body = self.lower_statement(&w.node.statement);
+                loop_body.push(self.lower_as_expr_stmt(&w.node.expression));
+                out.push(Stmt::Loop {
                     id: self.alloc_node(stmt),
-                    body,
-                }]
+                    body: loop_body,
+                });
+                out
             }
             Statement::For(for_stmt) => {
                 self.push_scope();
@@ -336,16 +340,16 @@ impl<'a> Lowering<'a> {
                         ));
                     }
                 }
-                let mut loop_body = Vec::new();
+                // `for (init; cond; step) s` ≡ init; cond; Loop[s; step; cond]
                 if let Some(cond) = &for_stmt.node.condition {
-                    loop_body.push(Stmt::Expr {
-                        id: self.alloc_node(cond),
-                        expr: self.lower_expr(cond),
-                    });
+                    prefix.push(self.lower_as_expr_stmt(cond));
                 }
-                loop_body.extend(self.lower_statement(&for_stmt.node.statement));
+                let mut loop_body = self.lower_statement(&for_stmt.node.statement);
                 if let Some(step) = &for_stmt.node.step {
                     loop_body.extend(self.lower_expr_stmt(step));
+                }
+                if let Some(cond) = &for_stmt.node.condition {
+                    loop_body.push(self.lower_as_expr_stmt(cond));
                 }
                 let loop_stmt = Stmt::Loop {
                     id: self.alloc_node(stmt),
@@ -373,6 +377,13 @@ impl<'a> Lowering<'a> {
                 vec![self.unsupported_stmt(stmt.span, "switch is not modelled")]
             }
             _ => vec![self.unsupported_stmt(stmt.span, "this statement form is not modelled")],
+        }
+    }
+
+    fn lower_as_expr_stmt(&mut self, expr: &Node<Expression>) -> Stmt {
+        Stmt::Expr {
+            id: self.alloc_node(expr),
+            expr: self.lower_expr(expr),
         }
     }
 

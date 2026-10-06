@@ -24,7 +24,6 @@ modules = Pagurus.IR
         , Pagurus.Safety.Drop
         , Pagurus.Safety.Return
         , Pagurus.Safety.If
-        , Pagurus.Safety.Loop
         , Pagurus.Safety.Seq
         , Pagurus.Safety.Expr
         , Pagurus.Safety.Stmt

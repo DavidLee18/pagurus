@@ -186,6 +186,61 @@ fn fail_loop_free_then_use() {
     );
 }
 
+fn ownership_crash(d: &pagurus::Diagnostic) -> bool {
+    matches!(
+        d.kind,
+        DiagnosticKind::UseAfterMove | DiagnosticKind::UseAfterFree | DiagnosticKind::DoubleFree
+    )
+}
+
+#[test]
+fn fail_while_cond_consume() {
+    let path = fixture("fail", "while_cond_consume.c");
+    let diags = check(&path);
+    let hit = diags
+        .iter()
+        .find(|d| ownership_crash(d))
+        .expect("expected ownership error: while must evaluate consume(p) on exit");
+    let text = normalize(&hit.to_string(), &path);
+    assert_golden("while_cond_consume.txt", &text);
+}
+
+#[test]
+fn fail_for_cond_consume() {
+    let path = fixture("fail", "for_cond_consume.c");
+    let diags = check(&path);
+    let hit = diags
+        .iter()
+        .find(|d| ownership_crash(d))
+        .expect("expected ownership error: for must evaluate consume(p) on exit");
+    let text = normalize(&hit.to_string(), &path);
+    assert_golden("for_cond_consume.txt", &text);
+}
+
+#[test]
+fn fail_for_step_free() {
+    let path = fixture("fail", "for_step_free.c");
+    let diags = check(&path);
+    let hit = diags
+        .iter()
+        .find(|d| ownership_crash(d))
+        .expect("expected ownership error after for-step free");
+    let text = normalize(&hit.to_string(), &path);
+    assert_golden("for_step_free.txt", &text);
+}
+
+#[test]
+fn fail_dowhile_control() {
+    let path = fixture("fail", "dowhile_control.c");
+    let diags = check(&path);
+    let hit = diags
+        .iter()
+        .find(|d| ownership_crash(d))
+        .expect("expected ownership error on do-while consume");
+    let text = normalize(&hit.to_string(), &path);
+    assert_golden("dowhile_control.txt", &text);
+}
+
 #[test]
 fn fail_pointer_param_consume() {
     let diags = check(&fixture("fail", "pointer_param_consume.c"));

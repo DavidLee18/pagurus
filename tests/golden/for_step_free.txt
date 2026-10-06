@@ -1,0 +1,11 @@
+error[double_free]: double free of `p`
+  --> for_step_free.c:11:10
+   |
+11 |     free(p);
+   |          ^ freed here again
+note: first freed here
+  --> for_step_free.c:7:29
+   |
+ 7 |     for (i = 0; i < 1; free(p)) {
+   |                             ^ first freed here
+help: this pointer was already consumed by free; do not free it a second time

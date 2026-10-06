@@ -1,8 +1,15 @@
 ||| Concrete ownership stores and the model's operational semantics.
 |||
 ||| Places are interned `Nat`s. The store is a single environment: unique
-||| place ids make a scope stack unnecessary. Executions may take either
-||| branch of an `if` and may unroll a loop any finite number of times.
+||| place ids make a scope stack unnecessary. There is no heap or address
+||| model: `ActOn` reuses `stepAtom` on a per-place atom. Executions may
+||| take either branch of an `if` and may unroll an `SLoop` any finite
+||| number of times, including zero (`EvLoopZ`). C `while`/`for`/`do-while`
+||| are desugared by the frontend to `cond; Loop[body; cond]` (and the
+||| do-while analogue) so the exiting condition evaluation is an ordinary
+||| statement the theorem sees. Calls do not run callee bodies; they
+||| borrow or move arguments according to `isConsuming`. `SReturn` does
+||| not stop the remaining statement list.
 |||
 ||| Expression evaluation follows `checkExpr` (uses). Taking an owner
 ||| follows `takeOwner` (moves). Calls follow `checkCall`: builtins and
@@ -120,10 +127,10 @@ unsupDiag nid reason =
 
 public export
 opaqueCallDiag : Nat -> String -> Diag
-opaqueCallDiag id callee =
+opaqueCallDiag nid callee =
   MkDiag KUnsupported
     ("unsupported call to `" ++ callee ++ "`: no function body, so pagurus cannot prove the call is safe")
-    id "called here"
+    nid "called here"
     []
     "provide a definition in this translation unit, or avoid passing unique pointers to opaque functions"
 
@@ -136,21 +143,21 @@ mutual
     EvUnsupE : {d : Diag} -> d = unsupDiag nid reason ->
                EvalExpr ctx c (EUnsupported nid reason) (Crash d)
     EvUseAll : EvalExprs ctx c args o -> EvalExpr ctx c (EUse _ args) o
-    EvCallE : EvalCall ctx c id callee args o ->
-              EvalExpr ctx c (ECall id callee args) o
+    EvCallE : EvalCall ctx c nid callee args o ->
+              EvalExpr ctx c (ECall nid callee args) o
     EvAsgCopy : EvalExpr ctx c rhs o ->
-                EvalExpr ctx c (EAssign id n nm Copy rhs) o
+                EvalExpr ctx c (EAssign nid n nm Copy rhs) o
     EvAsgPtrCrash : TakeOwnerE ctx c rhs (Crash d) fl ->
-                    EvalExpr ctx c (EAssign id n nm Ptr rhs) (Crash d)
+                    EvalExpr ctx c (EAssign nid n nm Ptr rhs) (Crash d)
     EvAsgPtrOwn :
       (c1 : CScopes) ->
       TakeOwnerE ctx c rhs (Ok c1) Owner ->
-      ActOn Use (setC n AOwned c1) n id o ->
-      EvalExpr ctx c (EAssign id n nm Ptr rhs) o
+      ActOn Use (setC n AOwned c1) n nid o ->
+      EvalExpr ctx c (EAssign nid n nm Ptr rhs) o
     EvAsgPtrEmpty :
       (c1 : CScopes) ->
       TakeOwnerE ctx c rhs (Ok c1) Ghost ->
-      EvalExpr ctx c (EAssign id n nm Ptr rhs) (Ok (setC n AEmpty c1))
+      EvalExpr ctx c (EAssign nid n nm Ptr rhs) (Ok (setC n AEmpty c1))
 
   public export
   data EvalExprs : Ctx -> CScopes -> List Expr -> Outcome -> Type where
@@ -178,20 +185,20 @@ mutual
       ActOn Move c n nid (Crash d) ->
       TakeOwnerE ctx c (EVar nid n nm) (Crash d) Owner
     TakeAsgCopy : EvalExpr ctx c rhs o ->
-                  TakeOwnerE ctx c (EAssign id n nm Copy rhs) o Ghost
+                  TakeOwnerE ctx c (EAssign nid n nm Copy rhs) o Ghost
     TakeAsgPtrCrash : TakeOwnerE ctx c rhs (Crash d) fl ->
-                      TakeOwnerE ctx c (EAssign id n nm Ptr rhs) (Crash d) Owner
+                      TakeOwnerE ctx c (EAssign nid n nm Ptr rhs) (Crash d) Owner
     TakeAsgPtrOwn :
       (c1 : CScopes) ->
       TakeOwnerE ctx c rhs (Ok c1) Owner ->
-      ActOn Move (setC n AOwned c1) n id o ->
-      TakeOwnerE ctx c (EAssign id n nm Ptr rhs) o Owner
+      ActOn Move (setC n AOwned c1) n nid o ->
+      TakeOwnerE ctx c (EAssign nid n nm Ptr rhs) o Owner
     TakeAsgPtrEmpty :
       (c1 : CScopes) ->
       TakeOwnerE ctx c rhs (Ok c1) Ghost ->
-      TakeOwnerE ctx c (EAssign id n nm Ptr rhs) (Ok (setC n AEmpty c1)) Ghost
-    TakeCall : EvalCall ctx c id callee args o ->
-               TakeOwnerE ctx c (ECall id callee args) o Ghost
+      TakeOwnerE ctx c (EAssign nid n nm Ptr rhs) (Ok (setC n AEmpty c1)) Ghost
+    TakeCall : EvalCall ctx c nid callee args o ->
+               TakeOwnerE ctx c (ECall nid callee args) o Ghost
     TakeUse : EvalExprs ctx c args o ->
               TakeOwnerE ctx c (EUse _ args) o Ghost
     TakeUnsup : {d : Diag} -> d = unsupDiag nid reason ->
@@ -212,38 +219,38 @@ mutual
   data EvalCall : Ctx -> CScopes -> Nat -> String -> List Expr -> Outcome -> Type where
     CallBuiltin : isBuiltin callee = True ->
                   EvalExprs ctx c args o ->
-                  EvalCall ctx c id callee args o
+                  EvalCall ctx c nid callee args o
     CallOpaque : {d : Diag} ->
                  isBuiltin callee = False ->
                  isDefined ctx callee = False ->
-                 d = opaqueCallDiag id callee ->
-                 EvalCall ctx c id callee args (Crash d)
+                 d = opaqueCallDiag nid callee ->
+                 EvalCall ctx c nid callee args (Crash d)
     CallBorrow : isBuiltin callee = False ->
                  isDefined ctx callee = True ->
                  isConsuming ctx callee = False ->
                  EvalExprs ctx c args o ->
-                 EvalCall ctx c id callee args o
+                 EvalCall ctx c nid callee args o
     CallConsume : isBuiltin callee = False ->
                   isDefined ctx callee = True ->
                   isConsuming ctx callee = True ->
                   TakeOwners ctx c args o ->
-                  EvalCall ctx c id callee args o
+                  EvalCall ctx c nid callee args o
 
   public export
   data EvalStmt : Ctx -> CScopes -> Stmt -> Outcome -> Type where
     EvDrop : ActOn Drop c n nid o -> EvalStmt ctx c (SDrop nid n nm) o
     EvStmtAsgCopy : EvalExpr ctx c rhs o ->
-                    EvalStmt ctx c (SAssign id n nm Copy rhs) o
+                    EvalStmt ctx c (SAssign nid n nm Copy rhs) o
     EvStmtAsgPtrCrash : TakeOwnerE ctx c rhs (Crash d) fl ->
-                        EvalStmt ctx c (SAssign id n nm Ptr rhs) (Crash d)
+                        EvalStmt ctx c (SAssign nid n nm Ptr rhs) (Crash d)
     EvStmtAsgPtrOwn :
       (c1 : CScopes) ->
       TakeOwnerE ctx c rhs (Ok c1) Owner ->
-      EvalStmt ctx c (SAssign id n nm Ptr rhs) (Ok (setC n AOwned c1))
+      EvalStmt ctx c (SAssign nid n nm Ptr rhs) (Ok (setC n AOwned c1))
     EvStmtAsgPtrEmpty :
       (c1 : CScopes) ->
       TakeOwnerE ctx c rhs (Ok c1) Ghost ->
-      EvalStmt ctx c (SAssign id n nm Ptr rhs) (Ok (setC n AEmpty c1))
+      EvalStmt ctx c (SAssign nid n nm Ptr rhs) (Ok (setC n AEmpty c1))
     EvDeclCopyNone : EvalStmt ctx c (SDecl _ _ _ Copy Nothing) (Ok c)
     EvDeclPtrNone : EvalStmt ctx c (SDecl _ p _ Ptr Nothing) (Ok (setC p AEmpty c))
     EvDeclCopy : EvalExpr ctx c e o ->
@@ -254,20 +261,20 @@ mutual
       (c' : CScopes) ->
       TakeOwnerE ctx c e (Ok c') Owner ->
       EvalStmt ctx c (SDecl _ p _ Ptr (Just e)) (Ok (setC p AOwned c'))
-    EvCallS : EvalCall ctx c id callee args o ->
-              EvalStmt ctx c (SCall id callee args) o
+    EvCallS : EvalCall ctx c nid callee args o ->
+              EvalStmt ctx c (SCall nid callee args) o
     EvRetNone : EvalStmt ctx c (SReturn _ Nothing) (Ok c)
     EvRetVar : ActOn Move c n nid o ->
                EvalStmt ctx c (SReturn _ (Just (EVar nid n nm))) o
     EvRetLit : EvalStmt ctx c (SReturn _ (Just (ELit _))) (Ok c)
     EvRetMalloc : EvalExprs ctx c args o ->
                   EvalStmt ctx c (SReturn _ (Just (EMalloc _ args))) o
-    EvRetCall : EvalCall ctx c id callee args o ->
-                EvalStmt ctx c (SReturn _ (Just (ECall id callee args))) o
+    EvRetCall : EvalCall ctx c nid callee args o ->
+                EvalStmt ctx c (SReturn _ (Just (ECall nid callee args))) o
     EvRetUse : EvalExprs ctx c args o ->
                EvalStmt ctx c (SReturn _ (Just (EUse _ args))) o
-    EvRetAsg : EvalExpr ctx c (EAssign id n nm ty rhs) o ->
-               EvalStmt ctx c (SReturn _ (Just (EAssign id n nm ty rhs))) o
+    EvRetAsg : EvalExpr ctx c (EAssign nid n nm sty rhs) o ->
+               EvalStmt ctx c (SReturn _ (Just (EAssign nid n nm sty rhs))) o
     EvRetUnsup : {d : Diag} -> d = unsupDiag nid reason ->
                  EvalStmt ctx c (SReturn _ (Just (EUnsupported nid reason))) (Crash d)
     EvExprS : EvalExpr ctx c e o -> EvalStmt ctx c (SExpr _ e) o
@@ -286,6 +293,8 @@ mutual
       EvalExpr ctx c cond (Ok c0) ->
       EvalStmts ctx c0 els o ->
       EvalStmt ctx c (SIf _ cond _ els) o
+    ||| Zero iterations of the loop body. C `while`/`for` still evaluate
+    ||| the condition once: that is a statement *before* this constructor.
     EvLoopZ : EvalStmt ctx c (SLoop _ _) (Ok c)
     EvLoopS :
       (c1 : CScopes) ->

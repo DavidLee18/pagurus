@@ -151,8 +151,11 @@ isConsuming : Ctx -> String -> Bool
 isConsuming ctx n = elem n ctx.consuming
 
 public export
+||| `malloc`/`calloc` only. `free` is `SDrop` in the C lowering; a
+||| hand-written `(call free …)` is not a builtin use — it is opaque
+||| (unsupported) unless a user function of that name is defined.
 isBuiltin : String -> Bool
-isBuiltin n = n == "malloc" || n == "calloc" || n == "free"
+isBuiltin n = n == "malloc" || n == "calloc"
 
 ||| Whether `takeOwner` produced a unique owner (`Owner`) or a non-owner
 ||| (`Ghost`, e.g. a literal or an untracked name).

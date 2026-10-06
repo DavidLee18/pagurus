@@ -1432,18 +1432,21 @@ nuoConsBorrow {fid} {n} nuo p st look lp safe own nb with (natEqDec p n)
       safe own nb
 
 ||| `noOwnerHere` of the bound frame decides whether `a` is uniquely owned.
+||| `Right` carries `noOwnerHere = False` so `ownerHereWitness` of the
+||| frame (`bindFrameUK`) can name the unique owner.
 export
 nuoBind :
   {fid : Nat} -> {h : Heap} ->
   {ps : List Param} -> {ms : List Consume} -> {vs : List HVal} ->
   BindOk fid h ps ms vs ->
   (a : Addr) ->
-  Either (NoUniqueOwner (bindFrame ps vs) (bindParams fid ps ms) a) ()
+  Either (NoUniqueOwner (bindFrame ps vs) (bindParams fid ps ms) a)
+         (noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = False)
 nuoBind {fid} {ps} {ms} {vs} _ a with
     (noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a) proof pno
   nuoBind {fid} {ps} {ms} {vs} _ a | True =
     Left (noOwnerSound (bindFrame ps vs) (bindParams fid ps ms) a pno)
-  nuoBind _ a | False = Right ()
+  nuoBind _ a | False = Right pno
 
 ||| Rebind `n` to `v` at `st'`: if the new binding is a use-safe unique owner
 ||| of `a`, `contra` must void that (e.g. `NoUniqueOwner` of the old env).

@@ -1,6 +1,6 @@
 # pagurus
 
-`pagurus` is a **total Idris 2 checker** for unique-ownership mistakes in a small C subset, **verified under the documented model and assumptions**. The proved result is **intraprocedural**: if `checkStmts` accepts a statement list, no represented `EvalStmts` execution of that list is a use-after-move, use-after-free, or double-free (`CheckAcceptedNoOwnershipCrash`). The operational model is instrumented — it reuses `stepAtom` on per-place atoms and the syntactic consuming summaries; there is **no heap or address model**. Version 1 flags those three errors. It accepts a program only when the Idris 2 core returns success; anything it cannot model or prove is rejected.
+`pagurus` is a **total Idris 2 checker** for unique-ownership mistakes in a small C subset. What is **verified** is the `checkStmts` theorem (`CheckAcceptedNoOwnershipCrash`): if that function accepts a statement list, no represented `EvalStmts` execution of that list is a use-after-move, use-after-free, or double-free. The operational model is instrumented — it reuses `stepAtom` on per-place atoms and the syntactic consuming summaries; there is **no heap or address model**. Version 1 flags those three errors. A C program is accepted only when the Idris 2 core returns success on the IR the frontend emitted. The **Rust lowering is trusted** for a “safe” verdict: it is an allowlist (unmodelled forms become `Unsupported`) and has been adversarially tested against a suite of short-circuit, pointer-update, and allocator-masquerade repros; it is not itself a theorem. Constructs the allowlist does not model are rejected as unsupported; a gap in the allowlist is a soundness bug in the trusted frontend, not in the Idris proof.
 
 A mutation that accepted a second `free` in the `stepAtom` Drop rule would still type-check the theorem: `CheckAcceptedNoOwnershipCrash` is relative to `stepAtom`, `Eval*`, and `isConsuming`. Correctness of the per-atom rules therefore rests on `Step.idr`, the small lemmas in `Soundness.idr`, and the fixture suite, not on the end-to-end inhabitant alone.
 
@@ -152,21 +152,23 @@ Modelled:
 - Function definitions (and prototypes, which cannot be called unless a definition is in the same unit)
 - Local variables; nested blocks
 - Pointer types (`T *`) vs copy types (`int`, …)
-- `malloc` / `calloc` (fresh unique owner) and `free` (drop)
+- `malloc` / `calloc` (fresh unique owner) and `free` (drop), only when they are **not** defined in this file
 - `free(0)` and `free((void *)0)` are accepted as a defined no-op (ISO C `free(NULL)`). **`free(NULL)` is rejected conservatively** because the identifier `NULL` is not expanded without a preprocessor / `<stddef.h>`; it is treated as `free` of a variable named `NULL`.
 - Assignment, including chained assignment as a move of the unique owner
 - Calls: borrowing vs consuming, summarised from callee bodies
 - `return`, `if`/`else`
 - `while` / `do` / `for`, including `for`-init declarations, via a Kleene join (not “walk once”). C loops are lowered as `cond; Loop[body; cond]` (do-while: `body; cond; Loop[body; cond]`) so the exiting condition evaluation is in the IR the theorem covers.
-- Integer arithmetic as ordinary uses of copy values
+- `&&` / `||` as `SIf` so the right-hand side is conditional (C short-circuit)
+- Integer arithmetic and `++`/`--`/compound assignment on **copy** values as ordinary uses
 
 Rejected with an **unsupported construct** diagnostic (never assumed safe):
 
-- `goto`, `switch`, `break`, `continue`
-- pointer arithmetic, subscript, dereference, address-of, member access
-- comma operator, ternary
+- `goto`, `switch`, `break`, `continue`, inline assembly
+- pointer arithmetic, subscript, `++`/`--` and compound assignment on pointer-typed places, dereference, address-of, member access
+- comma operator, ternary, compound literals, GNU statement-expressions, `_Generic`, `offsetof`, `va_arg`
 - arrays, globals that are not function declarations
 - calls to functions with no body in this translation unit
+- a `malloc`/`calloc`/`free` **defined in this translation unit** (not treated as the synthetic allocator)
 - assignment through a non-variable place
 - `free` of a non-variable that is not the constant `0`
 

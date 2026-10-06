@@ -150,10 +150,10 @@ public export
 isConsuming : Ctx -> String -> Bool
 isConsuming ctx n = elem n ctx.consuming
 
-public export
 ||| `malloc`/`calloc` only. `free` is `SDrop` in the C lowering; a
 ||| hand-written `(call free …)` is not a builtin use — it is opaque
 ||| (unsupported) unless a user function of that name is defined.
+public export
 isBuiltin : String -> Bool
 isBuiltin n = n == "malloc" || n == "calloc"
 

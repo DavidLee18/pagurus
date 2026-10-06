@@ -290,3 +290,69 @@ fn fail_free_null_identifier_is_rejected() {
         "expected conservative rejection of free(NULL) as an identifier"
     );
 }
+
+/// Programs from the pg-cex2 adversarial suite that must stay accepted.
+const CEX2_PASS: &[&str] = &[
+    "safe_dowhile_use.c",
+    "safe_for_use.c",
+    "safe_nested_loops.c",
+    "safe_while_int.c",
+    "safe_while_ptr_use.c",
+    "safe_while_realloc.c",
+];
+
+/// Programs from the pg-cex2 suite that must be rejected (false accepts,
+/// already-rejected bugs, and conservative false rejects such as
+/// `return_mid_loop_safe` / `sc_and_consume_safe`).
+const CEX2_FAIL: &[&str] = &[
+    "break_stmt.c",
+    "comma_cond.c",
+    "comma_for_header.c",
+    "cond_assign_consume.c",
+    "continue_for.c",
+    "elseif_consume.c",
+    "for_empty_cond_return.c",
+    "for_empty_init_cond_df.c",
+    "for_empty_step_df.c",
+    "goto_stmt.c",
+    "if_noelse_consume.c",
+    "nested_for_inner_cond.c",
+    "nested_inner_cond.c",
+    "nested_outer_cond.c",
+    "ptr_compound_alias.c",
+    "ptr_increment_free.c",
+    "return_consume_df.c",
+    "return_mid_loop_safe.c",
+    "sc_and_assign_move.c",
+    "sc_and_consume_safe.c",
+    "sc_and_reinit.c",
+    "sc_decl_reinit.c",
+    "sc_or_consume_df.c",
+    "sc_or_reinit.c",
+    "sc_while_reinit.c",
+    "switch_stmt.c",
+    "ternary_consume.c",
+    "tu_malloc.c",
+];
+
+#[test]
+fn cex2_safe_programs_are_accepted() {
+    for name in CEX2_PASS {
+        let diags = check(&fixture("pass", name));
+        assert!(
+            diags.is_empty(),
+            "{name} must stay accepted, got {diags:?}"
+        );
+    }
+}
+
+#[test]
+fn cex2_false_accepts_and_rejects_are_rejected() {
+    for name in CEX2_FAIL {
+        let diags = check(&fixture("fail", name));
+        assert!(
+            !diags.is_empty(),
+            "{name} must be rejected, got a clean verdict"
+        );
+    }
+}

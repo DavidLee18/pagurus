@@ -19,6 +19,7 @@ public export
 data IsLeft : Either a b -> Type where
   ItIsLeft : {0 x : a} -> IsLeft (Left x)
 
+export
 rightInj : Right x = Right y -> x = y
 rightInj Refl = Refl
 

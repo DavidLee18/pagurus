@@ -29,7 +29,7 @@ C source  --(Rust lang-c)-->  IR + span map  --(s-expression)-->  pagurus-core (
 Rust CLI  <-- render diagnostics with source spans ----------------
 ```
 
-1. **Idris 2 core (total checker + lemmas).** Owns the IR, the abstract ownership state (a set of atoms), the move/borrow/drop transfer function, path-sensitive join, loop fixpoints, and the checker. The checker returns either `Right ()` or a structured diagnostic with node ids, labels, and a help string. Local lemmas about `stepStatus` and join are machine-checked; the end-to-end theorem is stated as a type with no inhabitant (see below).
+1. **Idris 2 core (total checker + lemmas).** Owns the IR, the abstract ownership state (a set of atoms), the move/borrow/drop transfer function, path-sensitive join, loop fixpoints, and the checker. Places are interned `Nat`s (decidable equality). Local lemmas about `stepStatus`, join, store update, and `Represents` preservation are machine-checked; the full end-to-end theorem is not yet an inhabitant of `CheckAcceptedNoOwnershipCrash` (see below).
 2. **Untrusted shell (Rust).** Parses C, lowers it to IR, serialises that IR, spawns `pagurus-core` as a **separate executable** (no FFI), and renders diagnostics. Rust **never** overrides the core: a program is accepted only when the core prints `{"verdict":"safe"}`.
 3. **Soundness-first lowering.** Constructs the frontend or core cannot model become an `Unsupported` IR node. Statements are never silently dropped; the analyser never assumes that an opaque call or an unmodelled join is safe.
 
@@ -41,7 +41,7 @@ To believe a `pagurus` “safe” verdict you have to trust:
 - the Idris core modules `Pagurus.IR`, `Pagurus.Status`, `Pagurus.Step`, `Pagurus.Checker`, the operational model in `Pagurus.Conc`, and the lemmas in `Pagurus.Soundness` / `Pagurus.Safety` / `Pagurus.Lattice`
 - that the Rust frontend emitted IR that matches the C you care about (this lowering is *not* proved; see assumptions)
 - `malloc`/`calloc`/`free` as modelled (fresh unique owner / consume)
-- the named theorem type `CheckAcceptedNoOwnershipCrash` (the missing end-to-end proof; no inhabitant is provided)
+- the named theorem type `CheckAcceptedNoOwnershipCrash` (full `Eval` induction not yet completed; Drop/nil/unsupported/fuel cases are proved)
 
 You do **not** have to trust the Rust analyser for acceptance: if the core rejects, Rust reports that rejection; if the core is missing or crashes, the result is a failure, not safety.
 
@@ -65,18 +65,20 @@ These are real proofs (`Refl` or induction), compiled into `pagurus-core`:
 - **`joinContainsLeft` / `joinContainsRight` / `joinOverApprox`**: join is union; every atom of each operand is in the join (`Owned ⊔ Empty = {Empty, Owned}`, not optimistic `{Owned}`).
 - Membership is the structurally recursive `inSet` (not `Prelude.elem`).
 
-**Concrete actions (`Pagurus.Safety`, `Pagurus.Conc`)**
+**Stores (`Pagurus.Store`, `Pagurus.Safety`)**
 
-- `Pagurus.Conc` defines a concrete store (`CScopes`), a `Represents` relation, `ActOn`, and big-step `EvalStmt`/`EvalStmts` (both branches of `if`; any finite number of loop unrollings). Ownership crashes are UAM/UAF/DF only (`KUnsupported` / `KUnproven` are not hits).
-- **`actOnSound`**: if `stepStatus` succeeded on a representing abstract status, a concrete `ActOn` cannot be UAM/UAF/DF.
-- **`dropSafe` / `moveSafe` / `useSafe`**: the corresponding checker primitives inherit that local guarantee.
-- **`kleenePostfix`**: if `xs ⊔ ys = xs`, then `ys ⊑ xs`. This is the status-level postfixpoint `loopFix` relies on.
+- Places are interned `Nat`s (`Place`), so equality is `natEqDec`.
+- **`lookupSetHit` / `lookupSetMiss` / `deleteGone` / `deletePres`**: environment update lemmas.
+- **`joinEnvLookupLeft` / `joinEnvLookupRight` / `kleenePostfixEnv`**: join over-approximates each operand pointwise on places (the lift of `kleenePostfix` to `Scopes`, which *are* environments).
+- **`reprMiss` / `reprSet` / `reprSetMiss` / `reprJoinLeft` / `reprJoinRight`**: `Represents` is preserved by store update and by joining an extra abstract environment; a concrete store cannot hold a place the abstract environment does not track.
+- **`actOnSound` / `actOnPres`**: a represented `ActOn` cannot be UAM/UAF/DF if the abstract step succeeded, and a successful `Ok` updates preserve `Represents`.
+- **`usePlaceSafe` / `usePlacePres` / `movePlaceSafe` / `movePlacePres` / `dropSafe` / `dropPres` / `dropStmtSafe`**: the corresponding checker operations are locally sound.
+- **`nilSafe` / `fuelRejectsCons` / `unsupportedRejected` / `loopZSafe` / `retNoneSafe` / `declCopyNoneSafe` / `declPtrNoneSafe` / `declPtrNonePres`**: empty lists, fuel-0, unsupported, zero-iteration loops, `return;`, and uninitialized decls.
 
 ### Stated, not proved
 
-- **`CheckAcceptedNoOwnershipCrash`** (`Pagurus.Safety`): *if `checkStmts` accepts, no concrete `EvalStmts` from a represented store is UAM/UAF/DF*. This is a **type**, not a proof (Idris 2 0.8.0 has no `postulate` keyword; we do not fake an inhabitant). Closing it in Idris 2 0.8.0 needs propositional `String` equality (compiler primitive; no induction on strings), `Represents` preservation through `setPlace`/`joinScopes`/`declarePlace`, and a mutual induction of the whole checker against `Eval` including fuel. Until that proof exists, do not call pagurus verified.
-- **Lifting `kleenePostfix` from `Status` to `Scopes`**: `loopFix` joins whole environments; the status lemma is proved, the environment-level lemma is not.
-- **Rust C→IR lowering is faithful** for the modelled fragment and emits `Unsupported` for everything else. This is not a theorem about C11.
+- **`CheckAcceptedNoOwnershipCrash`**: *if `checkStmts fuel` accepts, no concrete `EvalStmts` from a represented store is UAM/UAF/DF* (fuel exhaustion is a rejection). The type is stated; inhabitants exist for Drop, empty lists, fuel-0, unsupported, loop-Z, `return;`, and uninitialized `Copy`/`Ptr` decls. Remaining constructors (assignment, initialized decl, call, if, loop unroll, sequential `EvConsOk` of mixed statements) still need the same `actOnSound`+`reprSet` argument, one constructor at a time. Until that induction is finished, do not call pagurus verified.
+- **Rust C→IR lowering is faithful** for the modelled fragment (including interned places) and emits `Unsupported` for everything else. This is not a theorem about C11.
 - **`malloc`/`calloc` return a fresh unique owner.** Allocation failure, custom allocators, and aliasing through integer casts are not modelled.
 - **Function summaries** (which callees consume their pointer arguments) are a syntactic fixpoint, not a proved interprocedural semantics.
 
@@ -139,7 +141,7 @@ Modelled:
 - Local variables; nested blocks
 - Pointer types (`T *`) vs copy types (`int`, …)
 - `malloc` / `calloc` (fresh unique owner) and `free` (drop)
-- `free(0)` and `free((void *)0)` as a defined no-op (ISO C `free(NULL)`). The identifier `NULL` is **not** rewritten (there is no `#include`); `free(NULL)` is therefore **rejected conservatively** (treated as `free` of a variable named `NULL`).
+- `free(0)` and `free((void *)0)` are accepted as a defined no-op (ISO C `free(NULL)`). **`free(NULL)` is rejected conservatively** because the identifier `NULL` is not expanded without a preprocessor / `<stddef.h>`; it is treated as `free` of a variable named `NULL`.
 - Assignment, including chained assignment as a move of the unique owner
 - Calls: borrowing vs consuming, summarised from callee bodies
 - `return`, `if`/`else`

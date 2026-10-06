@@ -35,6 +35,8 @@ struct Lowering<'a> {
     next_id: u32,
     spans: HashMap<u32, SrcSpan>,
     pointers: Vec<HashSet<String>>,
+    place_scopes: Vec<HashMap<String, u32>>,
+    next_place: u32,
 }
 
 impl<'a> Lowering<'a> {
@@ -45,6 +47,8 @@ impl<'a> Lowering<'a> {
             next_id: 1,
             spans: HashMap::new(),
             pointers: vec![HashSet::new()],
+            place_scopes: vec![HashMap::new()],
+            next_place: 0,
         }
     }
 
@@ -70,12 +74,32 @@ impl<'a> Lowering<'a> {
         }
     }
 
+    fn intern_place(&mut self, name: &str) -> u32 {
+        let id = self.next_place;
+        self.next_place += 1;
+        if let Some(scope) = self.place_scopes.last_mut() {
+            scope.insert(name.to_string(), id);
+        }
+        id
+    }
+
+    fn lookup_place(&mut self, name: &str) -> u32 {
+        for scope in self.place_scopes.iter().rev() {
+            if let Some(&id) = scope.get(name) {
+                return id;
+            }
+        }
+        self.intern_place(name)
+    }
+
     fn push_scope(&mut self) {
         self.pointers.push(HashSet::new());
+        self.place_scopes.push(HashMap::new());
     }
 
     fn pop_scope(&mut self) {
         self.pointers.pop();
+        self.place_scopes.pop();
     }
 
     fn unsupported_expr(&mut self, span: Span, reason: impl Into<String>) -> Expr {
@@ -204,18 +228,21 @@ impl<'a> Lowering<'a> {
         if has_array(&decl.node) {
             return Some(Param {
                 id: self.alloc_node(decl),
+                place: self.intern_place(&name),
                 name,
                 ty: Ty::Copy,
             });
         }
+        let ty = if is_pointer_declarator(&decl.node) {
+            Ty::Pointer
+        } else {
+            Ty::Copy
+        };
         Some(Param {
             id: self.alloc_node(decl),
+            place: self.intern_place(&name),
             name,
-            ty: if is_pointer_declarator(&decl.node) {
-                Ty::Pointer
-            } else {
-                Ty::Copy
-            },
+            ty,
         })
     }
 
@@ -371,8 +398,9 @@ impl<'a> Lowering<'a> {
                             }]
                         }
                         [arg] => match self.lower_expr(arg) {
-                            Expr::Var { id, name } => vec![Stmt::Drop {
+                            Expr::Var { id, place, name } => vec![Stmt::Drop {
                                 id,
+                                place,
                                 name,
                             }],
                             _ => vec![self.unsupported_stmt(
@@ -409,6 +437,7 @@ impl<'a> Lowering<'a> {
                 if let Expression::Identifier(id) = &bin.node.lhs.node {
                     vec![Stmt::Assign {
                         id: self.alloc_node(expr),
+                        place: self.lookup_place(&id.node.name),
                         name: id.node.name.clone(),
                         rhs: self.lower_expr(&bin.node.rhs),
                     }]
@@ -464,6 +493,7 @@ impl<'a> Lowering<'a> {
         if ty == Ty::Pointer {
             self.declare_pointer(name.clone());
         }
+        let place = self.intern_place(&name);
         let init_expr = match &init.node.initializer {
             Some(Node {
                 node: Initializer::Expression(expr),
@@ -478,6 +508,7 @@ impl<'a> Lowering<'a> {
         };
         Some(Stmt::Decl {
             id: self.alloc_node(init),
+            place,
             name,
             ty,
             init: init_expr,
@@ -486,10 +517,14 @@ impl<'a> Lowering<'a> {
 
     fn lower_expr(&mut self, expr: &Node<Expression>) -> Expr {
         match &expr.node {
-            Expression::Identifier(id) => Expr::Var {
-                id: self.alloc_node(expr),
-                name: id.node.name.clone(),
-            },
+            Expression::Identifier(id) => {
+                let name = id.node.name.clone();
+                Expr::Var {
+                    id: self.alloc_node(expr),
+                    place: self.lookup_place(&name),
+                    name,
+                }
+            }
             Expression::Constant(_) | Expression::StringLiteral(_) => Expr::Lit {
                 id: self.alloc_node(expr),
             },
@@ -542,9 +577,11 @@ impl<'a> Lowering<'a> {
                 let op = &bin.node.operator.node;
                 if matches!(op, BinaryOperator::Assign) {
                     if let Expression::Identifier(id) = &bin.node.lhs.node {
+                        let name = id.node.name.clone();
                         return Expr::Assign {
                             id: self.alloc_node(expr),
-                            name: id.node.name.clone(),
+                            place: self.lookup_place(&name),
+                            name,
                             rhs: Box::new(self.lower_expr(&bin.node.rhs)),
                         };
                     }

@@ -11,6 +11,7 @@ modules = Pagurus.IR
         , Pagurus.Step
         , Pagurus.Lattice
         , Pagurus.Checker
+        , Pagurus.Store
         , Pagurus.Conc
         , Pagurus.Soundness
         , Pagurus.Safety

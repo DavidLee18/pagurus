@@ -31,10 +31,13 @@ tyOf _ = Left "expected ty ptr|copy"
 
 mutual
   parseExpr : Sexp -> Either String Expr
-  parseExpr (Lst (Atom "var" :: id :: Atom name :: [])) =
+  parseExpr (Lst (Atom "var" :: id :: place :: Atom name :: [])) =
     case natOf id of
       Left e => Left e
-      Right n => Right (EVar n name)
+      Right n =>
+        case natOf place of
+          Left e => Left e
+          Right p => Right (EVar n p name)
   parseExpr (Lst (Atom "lit" :: id :: [])) =
     case natOf id of
       Left e => Left e
@@ -53,13 +56,16 @@ mutual
         case parseExprs args of
           Left e => Left e
           Right as => Right (ECall n callee as)
-  parseExpr (Lst (Atom "assign-e" :: id :: Atom name :: rhs :: [])) =
+  parseExpr (Lst (Atom "assign-e" :: id :: place :: Atom name :: rhs :: [])) =
     case natOf id of
       Left e => Left e
       Right n =>
-        case parseExpr rhs of
+        case natOf place of
           Left e => Left e
-          Right e => Right (EAssign n name e)
+          Right p =>
+            case parseExpr rhs of
+              Left e => Left e
+              Right e => Right (EAssign n p name e)
   parseExpr (Lst (Atom "use" :: id :: args)) =
     case natOf id of
       Left e => Left e
@@ -92,34 +98,46 @@ mutual
         case parseStmtList body of
           Left e => Left e
           Right ss => Right (SBlock n ss)
-  parseStmt (Lst (Atom "decl" :: id :: Atom name :: ty :: [])) =
+  parseStmt (Lst (Atom "decl" :: id :: place :: Atom name :: ty :: [])) =
     case natOf id of
       Left e => Left e
       Right n =>
-        case tyOf ty of
+        case natOf place of
           Left e => Left e
-          Right t => Right (SDecl n name t Nothing)
-  parseStmt (Lst (Atom "decl" :: id :: Atom name :: ty :: init :: [])) =
-    case natOf id of
-      Left e => Left e
-      Right n =>
-        case tyOf ty of
-          Left e => Left e
-          Right t =>
-            case parseExpr init of
+          Right p =>
+            case tyOf ty of
               Left e => Left e
-              Right e => Right (SDecl n name t (Just e))
-  parseStmt (Lst (Atom "assign" :: id :: Atom name :: rhs :: [])) =
+              Right t => Right (SDecl n p name t Nothing)
+  parseStmt (Lst (Atom "decl" :: id :: place :: Atom name :: ty :: init :: [])) =
     case natOf id of
       Left e => Left e
       Right n =>
-        case parseExpr rhs of
+        case natOf place of
           Left e => Left e
-          Right e => Right (SAssign n name e)
-  parseStmt (Lst (Atom "drop" :: id :: Atom name :: [])) =
+          Right p =>
+            case tyOf ty of
+              Left e => Left e
+              Right t =>
+                case parseExpr init of
+                  Left e => Left e
+                  Right e => Right (SDecl n p name t (Just e))
+  parseStmt (Lst (Atom "assign" :: id :: place :: Atom name :: rhs :: [])) =
     case natOf id of
       Left e => Left e
-      Right n => Right (SDrop n name)
+      Right n =>
+        case natOf place of
+          Left e => Left e
+          Right p =>
+            case parseExpr rhs of
+              Left e => Left e
+              Right e => Right (SAssign n p name e)
+  parseStmt (Lst (Atom "drop" :: id :: place :: Atom name :: [])) =
+    case natOf id of
+      Left e => Left e
+      Right n =>
+        case natOf place of
+          Left e => Left e
+          Right p => Right (SDrop n p name)
   parseStmt (Lst (Atom "call" :: id :: Atom callee :: args)) =
     case natOf id of
       Left e => Left e
@@ -189,13 +207,16 @@ mutual
           Right ss => Right (st :: ss)
 
 parseParam : Sexp -> Either String Param
-parseParam (Lst (Atom "param" :: id :: Atom name :: ty :: [])) =
+parseParam (Lst (Atom "param" :: id :: place :: Atom name :: ty :: [])) =
   case natOf id of
     Left e => Left e
     Right n =>
-      case tyOf ty of
+      case natOf place of
         Left e => Left e
-        Right t => Right (MkParam n name t)
+        Right p =>
+          case tyOf ty of
+            Left e => Left e
+            Right t => Right (MkParam n p name t)
 parseParam _ = Left "invalid param"
 
 parseParams : List Sexp -> Either String (List Param)

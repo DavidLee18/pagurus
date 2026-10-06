@@ -1,4 +1,7 @@
 //! Serialise the IR as the s-expression language the Idris core parses.
+//!
+//! Place identities are interned `Nat`s assigned by the frontend (one id
+//! per binding). The original spelling is kept beside the id for messages.
 
 use crate::hir::{Expr, Function, Param, Stmt, Ty, Unit};
 
@@ -25,7 +28,13 @@ fn emit_fun(out: &mut String, fun: &Function) {
 }
 
 fn emit_param(out: &mut String, p: &Param) {
-    out.push_str(&format!(" (param {} {} {})", p.id, p.name, ty_atom(p.ty)));
+    out.push_str(&format!(
+        " (param {} {} {} {})",
+        p.id,
+        p.place,
+        p.name,
+        ty_atom(p.ty)
+    ));
 }
 
 fn ty_atom(ty: Ty) -> &'static str {
@@ -54,21 +63,32 @@ fn emit_stmt(out: &mut String, stmt: &Stmt) {
             }
             out.push(')');
         }
-        Stmt::Decl { id, name, ty, init } => {
-            out.push_str(&format!("(decl {id} {name} {}", ty_atom(*ty)));
+        Stmt::Decl {
+            id,
+            place,
+            name,
+            ty,
+            init,
+        } => {
+            out.push_str(&format!("(decl {id} {place} {name} {}", ty_atom(*ty)));
             if let Some(e) = init {
                 out.push(' ');
                 emit_expr(out, e);
             }
             out.push(')');
         }
-        Stmt::Assign { id, name, rhs } => {
-            out.push_str(&format!("(assign {id} {name} "));
+        Stmt::Assign {
+            id,
+            place,
+            name,
+            rhs,
+        } => {
+            out.push_str(&format!("(assign {id} {place} {name} "));
             emit_expr(out, rhs);
             out.push(')');
         }
-        Stmt::Drop { id, name } => {
-            out.push_str(&format!("(drop {id} {name})"));
+        Stmt::Drop { id, place, name } => {
+            out.push_str(&format!("(drop {id} {place} {name})"));
         }
         Stmt::Call { id, callee, args } => {
             out.push_str(&format!("(call {id} {callee}"));
@@ -118,7 +138,9 @@ fn emit_stmt(out: &mut String, stmt: &Stmt) {
 
 fn emit_expr(out: &mut String, expr: &Expr) {
     match expr {
-        Expr::Var { id, name } => out.push_str(&format!("(var {id} {name})")),
+        Expr::Var { id, place, name } => {
+            out.push_str(&format!("(var {id} {place} {name})"));
+        }
         Expr::Lit { id } => out.push_str(&format!("(lit {id})")),
         Expr::Malloc { id, args } => {
             out.push_str(&format!("(malloc {id}"));
@@ -136,8 +158,13 @@ fn emit_expr(out: &mut String, expr: &Expr) {
             }
             out.push(')');
         }
-        Expr::Assign { id, name, rhs } => {
-            out.push_str(&format!("(assign-e {id} {name} "));
+        Expr::Assign {
+            id,
+            place,
+            name,
+            rhs,
+        } => {
+            out.push_str(&format!("(assign-e {id} {place} {name} "));
             emit_expr(out, rhs);
             out.push(')');
         }

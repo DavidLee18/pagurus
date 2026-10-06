@@ -13,6 +13,7 @@ pub enum Ty {
 #[derive(Debug, Clone)]
 pub struct Param {
     pub id: u32,
+    pub place: u32,
     pub name: String,
     pub ty: Ty,
 }
@@ -41,17 +42,20 @@ pub enum Stmt {
     },
     Decl {
         id: u32,
+        place: u32,
         name: String,
         ty: Ty,
         init: Option<Expr>,
     },
     Assign {
         id: u32,
+        place: u32,
         name: String,
         rhs: Expr,
     },
     Drop {
         id: u32,
+        place: u32,
         name: String,
     },
     Call {
@@ -104,6 +108,7 @@ impl Stmt {
 pub enum Expr {
     Var {
         id: u32,
+        place: u32,
         name: String,
     },
     Lit {
@@ -120,6 +125,7 @@ pub enum Expr {
     },
     Assign {
         id: u32,
+        place: u32,
         name: String,
         rhs: Box<Expr>,
     },

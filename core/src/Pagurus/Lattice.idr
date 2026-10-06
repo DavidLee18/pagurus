@@ -18,6 +18,17 @@ eqNatTrue : (x, y : Nat) -> x == y = True -> x = y
 eqNatTrue Z Z Refl = Refl
 eqNatTrue (S x) (S y) prf = cong S (eqNatTrue x y prf)
 
+||| Decidable equality for interned places.
+export
+natEqDec : (x, y : Nat) -> Either (x = y) (x == y = False)
+natEqDec Z Z = Left Refl
+natEqDec Z (S _) = Right Refl
+natEqDec (S _) Z = Right Refl
+natEqDec (S x) (S y) =
+  case natEqDec x y of
+    Left p => Left (cong S p)
+    Right p => Right p
+
 export
 eqAtomRefl : (a : Atom) -> a == a = True
 eqAtomRefl AEmpty = Refl
@@ -51,6 +62,17 @@ andTrue {a = True} {b = True} Refl = (Refl, Refl)
 export
 falseNotTrue : Not (False = True)
 falseNotTrue Refl impossible
+
+export
+eqNatFalse : (x, y : Nat) -> x == y = False -> Not (x = y)
+eqNatFalse x x ne Refl = falseNotTrue (trans (sym ne) (eqNatRefl x))
+
+export
+eqNatSym : (x, y : Nat) -> x == y = y == x
+eqNatSym Z Z = Refl
+eqNatSym Z (S _) = Refl
+eqNatSym (S _) Z = Refl
+eqNatSym (S x) (S y) = eqNatSym x y
 
 ||| Structurally recursive membership.
 public export

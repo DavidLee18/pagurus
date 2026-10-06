@@ -598,7 +598,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} bok evs veq pMode
           (HEArgsCons v envX hX evE evEs) veq0 pM oaC pno =
         skipExtra rec evE evEs (consTailEq veq0) pM oaC
           (skipPtrExtraGo fid id pl nm ps0 HVCopy vs0 a
-            (\eq => copyNotPtrA (trans (sym ptrArgCopy) eq)) pno)
+            (\eq => noneNotPtrA (trans (sym ptrArgCopy) eq)) pno)
       go (BOPtrExtraCopy rec) HEArgsNil veq0 _ _ _ =
         void (nilNotCons (sym veq0))
       go (BOPtrBothMiss {id} {pl} {nm} {ps = ps0} rec) HEArgsNil veq0 pM oaC pno =
@@ -2009,8 +2009,13 @@ mutual
                     stepGo (Left d) pSt =
                       void (leftNotRight (trans (sym (movePlaceJustL pL pSt)) pMv))
                     stepGo (Right stN) pSt =
-                      nuoRewrite (cong fst (rightInj (trans (sym (takeVarJustR ctx pL pMv)) pT)))
-                        (nuoSetPlaceMiss {st' = stN} ln.nuoLN (lookNotPtrMiss missV))
+                      let scEqM = rightInj (trans (sym (movePlaceJust pL pSt)) pMv)
+                          nuoS = replace {p = \s => NoUniqueOwner env s a}
+                                   (sym scEqM)
+                                   (nuoSetPlaceMiss {st' = stN} ln.nuoLN
+                                      (lookNotPtrMiss missV))
+                      in nuoRewrite (cong fst (rightInj
+                           (trans (sym (takeVarJustR ctx pL pMv)) pT))) nuoS
   takeLN ln eq HEUnsup {e = EUnsupported nid reason} =
     void (takeUnsupContraH nid reason eq)
   takeLN ln eq (HEMalloc env1 h1 evs) {e = EMalloc mid args} =
@@ -2140,9 +2145,9 @@ mutual
         callNotCopyV evC = copyGo evC Refl
           where
             copyGo :
-              {v0 : HVal} ->
+              {v0 : HVal} -> {envX : HEnv} -> {hX : Heap} ->
               HEvalExpr {funs} env h (ECall id callee args)
-                (HROk v0 env' h') ->
+                (HROk v0 envX hX) ->
               v0 = HVCopy -> Void
             copyGo (HECall _ _ _ _) Refl impossible
             copyGo (HECallUser _ _ _ _ _ _ _ _ _ _) Refl impossible

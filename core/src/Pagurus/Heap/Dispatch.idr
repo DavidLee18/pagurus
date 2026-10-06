@@ -608,8 +608,27 @@ mutual
         pBdyP = replace {p = \sc0 => checkStmts cfuel ctx sc0 f.body = Right scB}
                   (paramScopesEq ctx f) pBdy
         out = stmtsHSafe {funs} {chk} evBody cfuel (paramScopes ctx f) scB pBdy oaF
+        leftoverSafe = uniqueOwnFrom pB eq oa bok evs
     in restoreCaller oa1 (hOutWf out)
-         (restoreFromBind {funs} oa1 oaBind bok pBdyP evBody)
+         (restoreFromBind {funs} oa1 oaBind bok leftoverSafe pBdyP evBody)
+    where
+      uniqueOwnFrom :
+        isBuiltinName callee = False ->
+        checkCall ctx sc id callee args = Right sc' ->
+        OverApprox env h sc ->
+        BindOk f.id h1 f.params (funModes ctx f.name) (collectArgVals evs) ->
+        (evs0 : HEvalExprs {funs} env h args (HROk HVNone env1 h1)) ->
+        LeftoverSafeFreed env1 h1 hB sc' f.id f.params (funModes ctx f.name)
+          (collectArgVals evs0)
+      uniqueOwnFrom pB0 eq0 oa0 bok0 evs0 with (isDefined ctx callee) proof pd
+        uniqueOwnFrom pB0 eq0 oa0 bok0 evs0 | True =
+          uniqueOwnCall {funs} {hB} oa0 eq0
+            (replace {p = \b => b = False} (builtinEq callee) pB0) pd
+            bok0 evs0 Refl
+        uniqueOwnFrom pB0 eq0 oa0 bok0 evs0 | False with (isRealloc callee) proof pr
+          uniqueOwnFrom pB0 eq0 oa0 bok0 evs0 | False | False =
+            void (callOpaqueContraH
+              (replace {p = \b => b = False} (builtinEq callee) pB0) pr pd eq0)
   userCallBound {funs} {chk} {ctx} (Left pd) pB f look pDef evs evBody eq oa oa1 Nothing =
     userCallNone {funs} (replace {p = \b => b = False} (builtinEq callee) pB) pd eq evBody oa1
   userCallBound {funs} {chk} {ctx} (Right (pr, pd)) pB f look pDef evs evBody eq oa oa1 Nothing =
@@ -792,7 +811,26 @@ mutual
         out = stmtsHSafe {funs} {chk} evBody cfuel (paramScopes ctx f) scB pBdy oaF
         pBdyP = replace {p = \sc0 => checkStmts cfuel ctx sc0 f.body = Right scB}
                   (paramScopesEq ctx f) pBdy
-    in restoreCaller oa1 (hRetWf out) (restoreFromBindRet {funs} oa1 oaBind bok pBdyP evBody)
+        leftoverSafe = uniqueOwnRet pB eq oa bok evs
+    in restoreCaller oa1 (hRetWf out) (restoreFromBindRet {funs} oa1 oaBind bok leftoverSafe pBdyP evBody)
+    where
+      uniqueOwnRet :
+        isBuiltinName callee = False ->
+        checkCall ctx sc id callee args = Right sc' ->
+        OverApprox env h sc ->
+        BindOk f.id h1 f.params (funModes ctx f.name) (collectArgVals evs) ->
+        (evs0 : HEvalExprs {funs} env h args (HROk HVNone env1 h1)) ->
+        LeftoverSafeFreed env1 h1 hB sc' f.id f.params (funModes ctx f.name)
+          (collectArgVals evs0)
+      uniqueOwnRet pB0 eq0 oa0 bok0 evs0 with (isDefined ctx callee) proof pd
+        uniqueOwnRet pB0 eq0 oa0 bok0 evs0 | True =
+          uniqueOwnCall {funs} {hB} oa0 eq0
+            (replace {p = \b => b = False} (builtinEq callee) pB0) pd
+            bok0 evs0 Refl
+        uniqueOwnRet pB0 eq0 oa0 bok0 evs0 | False with (isRealloc callee) proof pr
+          uniqueOwnRet pB0 eq0 oa0 bok0 evs0 | False | False =
+            void (callOpaqueContraH
+              (replace {p = \b => b = False} (builtinEq callee) pB0) pr pd eq0)
   retBound {funs} {chk} {ctx} pB f look pDef evs evBody eq oa oa1 Nothing =
     retNoneId evBody oa1
 

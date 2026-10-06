@@ -877,6 +877,13 @@ noOwnerHere ((p, HVPtr b) :: xs) sc a =
     else noOwnerHere xs sc a
 
 export
+noOwnerHereConsOther :
+  (pl : Place) -> (b, a : Addr) -> (env : HEnv) -> (sc : Scopes) ->
+  a == b = False ->
+  noOwnerHere ((pl, HVPtr b) :: env) sc a = noOwnerHere env sc a
+noOwnerHereConsOther pl b a env sc ne = rewrite ne in Refl
+
+export
 noOwnerSound :
   (env : HEnv) -> (sc : Scopes) -> (a : Addr) ->
   noOwnerHere env sc a = True ->

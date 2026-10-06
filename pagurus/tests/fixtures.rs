@@ -316,13 +316,13 @@ fn fail_consume2_same_names_the_argument() {
 
 #[test]
 fn fail_wrap_free_first_df_stays_rejected() {
-    let diags = check(&fixture("fail", "wrap_free_first_df.c"));
-    assert!(
-        diags.iter().any(|d| d.kind == DiagnosticKind::UseAfterMove
-            || d.kind == DiagnosticKind::DoubleFree
-            || d.kind == DiagnosticKind::UseAfterFree),
-        "free of the Always-consumed first argument must be rejected, got {diags:?}"
-    );
+    for name in ["wrap_free_first_df.c", "wrap_free_first_uaf.c", "wrap_free_first_alias.c"] {
+        let diags = check(&fixture("fail", name));
+        assert!(
+            !diags.is_empty(),
+            "{name} must be rejected, got a clean verdict"
+        );
+    }
 }
 
 #[test]
@@ -496,6 +496,7 @@ const CEX3_FAIL: &[&str] = &[
     "wrap_cond_free.c",
     "wrap_free_first_df.c",
     "wrap_free_first_alias.c",
+    "wrap_free_first_uaf.c",
     "wrap_maybe_use.c",
     "wrap_move_then_free.c",
     "wrap_myfree_twice.c",

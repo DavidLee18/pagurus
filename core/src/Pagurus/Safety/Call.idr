@@ -1,4 +1,4 @@
-||| Call-site cases (builtin / opaque / borrow / consume).
+||| Call-site cases (builtin / opaque / defined / realloc).
 module Pagurus.Safety.Call
 
 import Pagurus.IR
@@ -40,40 +40,21 @@ callOpaqueContra pb pr pd eq =
   leftNotRight (trans (sym (checkCallOpaque pb pr pd)) eq)
 
 export
-callBorrowSafe :
+callDefinedSafe :
   {ctx : Ctx} -> {sc, sc' : Scopes} -> {c : CScopes} ->
   {nid : Nat} -> {callee : String} -> {args : List Expr} -> {o : Outcome} ->
-  (ih : checkArgsBorrow ctx sc args = Right sc' ->
+  (ih : checkArgsModes ctx sc callee args (funModes ctx callee) = Right sc' ->
         Represents c sc ->
-        EvalExprs ctx c args o ->
+        EvalModes ctx c args (funModes ctx callee) o ->
         SafeOut o sc') ->
   isBuiltin callee = False ->
   isDefined ctx callee = True ->
-  isConsuming ctx callee = False ->
   checkCall ctx sc nid callee args = Right sc' ->
   Represents c sc ->
-  EvalExprs ctx c args o ->
+  EvalModes ctx c args (funModes ctx callee) o ->
   SafeOut o sc'
-callBorrowSafe ih pb pd pc eq r evs =
-  ih (trans (sym (checkCallBorrow pb pd pc)) eq) r evs
-
-export
-callConsumeSafe :
-  {ctx : Ctx} -> {sc, sc' : Scopes} -> {c : CScopes} ->
-  {nid : Nat} -> {callee : String} -> {args : List Expr} -> {o : Outcome} ->
-  (ih : checkArgsMove ctx sc args = Right sc' ->
-        Represents c sc ->
-        TakeOwners ctx c args o ->
-        SafeOut o sc') ->
-  isBuiltin callee = False ->
-  isDefined ctx callee = True ->
-  isConsuming ctx callee = True ->
-  checkCall ctx sc nid callee args = Right sc' ->
-  Represents c sc ->
-  TakeOwners ctx c args o ->
-  SafeOut o sc'
-callConsumeSafe ih pb pd pc eq r evs =
-  ih (trans (sym (checkCallConsume pb pd pc)) eq) r evs
+callDefinedSafe ih pb pd eq r evs =
+  ih (trans (sym (checkCallDefined pb pd)) eq) r evs
 
 export
 callReallocSafe :

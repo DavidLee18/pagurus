@@ -77,10 +77,6 @@ public export
 eqScopes : Scopes -> Scopes -> Bool
 eqScopes = eqEnv
 
-unionNames : List String -> List String -> List String
-unionNames [] ys = ys
-unionNames (x :: xs) ys = if elem x ys then unionNames xs ys else x :: unionNames xs ys
-
 mutual
   ||| True when `p` is used as a unique-owner rvalue (move/return), not a borrow.
   movedInExpr : Place -> Expr -> Bool
@@ -97,59 +93,66 @@ mutual
   movedInExprs _ [] = False
   movedInExprs p (e :: es) = movedInExpr p e || movedInExprs p es
 
-mutual
-  consumesInStmt : List String -> Place -> Stmt -> Bool
-  consumesInStmt consuming p (SBlock _ body) = consumesInStmts consuming p body
-  consumesInStmt _ p (SDecl _ _ _ _ (Just e)) = movedInExpr p e
-  consumesInStmt _ _ (SDecl _ _ _ _ Nothing) = False
-  consumesInStmt _ p (SAssign _ _ _ _ e) = movedInExpr p e
-  consumesInStmt _ p (SDrop _ q _) = p == q
-  consumesInStmt consuming p (SCall _ callee args) =
-    movedInExprs p args && (elem callee consuming || callee == "realloc")
-  consumesInStmt _ p (SReturn _ (Just e)) = movedInExpr p e
-  consumesInStmt _ _ (SReturn _ Nothing) = False
-  consumesInStmt consuming p (SIf _ _ t e) =
-    consumesInStmts consuming p t || consumesInStmts consuming p e
-  consumesInStmt consuming p (SLoop _ body) = consumesInStmts consuming p body
-  consumesInStmt consuming p (SExpr _ (ECall _ callee args)) =
-    movedInExprs p args && (elem callee consuming || callee == "realloc")
-  consumesInStmt _ p (SExpr _ (EAssign _ _ _ _ rhs)) = movedInExpr p rhs
-  consumesInStmt _ _ (SExpr _ _) = False
-  consumesInStmt _ _ (SUnsupported _ _) = False
+||| Per-parameter consume summary. `May` is the join of Always and Never
+||| (consumed on some path). Call sites treat `May` as a move.
+public export
+data Consume = Never | May | Always
 
-  consumesInStmts : List String -> Place -> List Stmt -> Bool
-  consumesInStmts _ _ [] = False
-  consumesInStmts consuming p (s :: ss) =
-    consumesInStmt consuming p s || consumesInStmts consuming p ss
+public export
+Eq Consume where
+  Never == Never = True
+  May == May = True
+  Always == Always = True
+  _ == _ = False
 
-||| A function consumes a pointer parameter if it drops it, moves it, or
-||| passes it to a known consuming callee.
-funConsumes : List String -> Fun -> Bool
-funConsumes consuming f =
-  any (\p => p.ty == Ptr && consumesInStmts consuming p.place f.body) f.params
+||| True when a call-site argument must be moved (Always or May).
+public export
+doesConsume : Consume -> Bool
+doesConsume Never = False
+doesConsume May = True
+doesConsume Always = True
 
-||| Iterate consuming-callee names to a fixpoint (finite set of function names).
-summarise : Nat -> List Fun -> List String -> List String
-summarise Z _ acc = acc
-summarise (S k) funs acc =
-  let defs = filter (\f => f.defined) funs
-      next = mapMaybe (\f => if funConsumes acc f then Just f.name else Nothing) defs
-      merged = unionNames acc next
-  in if length merged == length acc then acc else summarise k funs merged
+||| Extra arguments beyond the summarised parameter list are treated as
+||| consumed (variadic / unknown tail). Empty list therefore heads at Always.
+public export
+consumeHead : List Consume -> Consume
+consumeHead [] = Always
+consumeHead (m :: _) = m
+
+public export
+consumeTail : List Consume -> List Consume
+consumeTail [] = []
+consumeTail (_ :: ms) = ms
 
 public export
 record Ctx where
   constructor MkCtx
-  consuming : List String
+  ||| Per defined function, one `Consume` per parameter (Copy params are Never).
+  summaries : List (String, List Consume)
   defined : List String
 
 public export
 isDefined : Ctx -> String -> Bool
 isDefined ctx n = elem n ctx.defined
 
+lookupNamed : List (String, List Consume) -> String -> Maybe (List Consume)
+lookupNamed [] _ = Nothing
+lookupNamed ((n, ms) :: xs) k = if n == k then Just ms else lookupNamed xs k
+
+lookupNamedList : List (String, List Consume) -> String -> List Consume
+lookupNamedList acc n = case lookupNamed acc n of
+  Nothing => []
+  Just ms => ms
+
+||| Parameter consume modes of a defined function; `[]` if unknown.
+public export
+funModes : Ctx -> String -> List Consume
+funModes ctx n = lookupNamedList ctx.summaries n
+
+||| True when any parameter of `n` is May or Always.
 public export
 isConsuming : Ctx -> String -> Bool
-isConsuming ctx n = elem n ctx.consuming
+isConsuming ctx n = any doesConsume (funModes ctx n)
 
 ||| `malloc`/`calloc` only. `free` is `SDrop` in the C lowering; a
 ||| hand-written `(call free …)` is not a builtin use — it is opaque
@@ -188,6 +191,131 @@ isReturnStmt : Stmt -> Bool
 isReturnStmt (SReturn _ _) = True
 isReturnStmt _ = False
 
+joinConsume : Consume -> Consume -> Consume
+joinConsume Never x = x
+joinConsume May Never = May
+joinConsume May _ = May
+joinConsume Always Never = Always
+joinConsume Always May = May
+joinConsume Always Always = Always
+
+||| Sequential composition: a must-consume on either side is Always.
+seqConsume : Consume -> Consume -> Consume
+seqConsume Always _ = Always
+seqConsume Never rest = rest
+seqConsume May Always = Always
+seqConsume May _ = May
+
+||| A loop body may run zero times, so Always inside a loop is only May.
+loopWeaken : Consume -> Consume
+loopWeaken Never = Never
+loopWeaken _ = May
+
+||| Modes of a callee during summarising. Unknown names are all-Never
+||| (least fixpoint). Prototype `realloc` consumes its first argument.
+calleeModes : List (String, List Consume) -> String -> List Consume
+calleeModes acc callee =
+  case lookupNamed acc callee of
+    Nothing => if callee == "realloc" then [Always] else []
+    Just ms => ms
+
+||| During summarising, a missing mode is Never (not yet known to consume).
+sumHead : List Consume -> Consume
+sumHead [] = Never
+sumHead (m :: _) = m
+
+asConsume : Bool -> Consume
+asConsume True = Always
+asConsume False = Never
+
+mutual
+  consumeInExpr : List (String, List Consume) -> Place -> Expr -> Consume
+  consumeInExpr _ _ (EVar _ _ _) = Never
+  consumeInExpr _ p (EAssign _ _ _ _ rhs) = asConsume (movedInExpr p rhs)
+  consumeInExpr _ _ (EMalloc _ _) = Never
+  consumeInExpr acc p (ECall _ callee args) = consumeInArgs acc p callee args
+  consumeInExpr _ _ (EUse _ _) = Never
+  consumeInExpr _ _ (ELit _) = Never
+  consumeInExpr _ _ (ENull _) = Never
+  consumeInExpr _ _ (EUnsupported _ _) = Never
+
+  consumeInArgs : List (String, List Consume) -> Place -> String -> List Expr -> Consume
+  consumeInArgs acc p callee args = consumeInArgsGo p args (calleeModes acc callee)
+
+  consumeInArgsGo : Place -> List Expr -> List Consume -> Consume
+  consumeInArgsGo _ [] _ = Never
+  consumeInArgsGo p (e :: es) modes =
+    let here = if doesConsume (sumHead modes) && movedInExpr p e then Always else Never
+    in seqConsume here (consumeInArgsGo p es (consumeTail modes))
+
+  consumeInStmt : List (String, List Consume) -> Place -> Stmt -> Consume
+  consumeInStmt acc p (SBlock _ body) = consumeInStmts acc p body
+  consumeInStmt _ p (SDecl _ _ _ _ (Just e)) = asConsume (movedInExpr p e)
+  consumeInStmt _ _ (SDecl _ _ _ _ Nothing) = Never
+  consumeInStmt _ p (SAssign _ _ _ _ e) = asConsume (movedInExpr p e)
+  consumeInStmt _ p (SDrop _ q _) = if p == q then Always else Never
+  consumeInStmt acc p (SCall _ callee args) = consumeInArgs acc p callee args
+  consumeInStmt acc p (SReturn _ (Just e)) =
+    seqConsume (asConsume (movedInExpr p e)) (consumeInExpr acc p e)
+  consumeInStmt _ _ (SReturn _ Nothing) = Never
+  consumeInStmt acc p (SIf _ cond t e) =
+    seqConsume (consumeInExpr acc p cond)
+      (joinConsume (consumeInStmts acc p t) (consumeInStmts acc p e))
+  consumeInStmt acc p (SLoop _ body) = loopWeaken (consumeInStmts acc p body)
+  consumeInStmt acc p (SExpr _ e) = consumeInExpr acc p e
+  consumeInStmt _ _ (SUnsupported _ _) = Never
+
+  consumeInStmts : List (String, List Consume) -> Place -> List Stmt -> Consume
+  consumeInStmts _ _ [] = Never
+  consumeInStmts acc p (s :: ss) =
+    if stmtEnds s
+      then consumeInStmt acc p s
+      else seqConsume (consumeInStmt acc p s) (consumeInStmts acc p ss)
+
+paramModes : List (String, List Consume) -> Fun -> List Consume
+paramModes acc f =
+  map (\p => if p.ty == Copy then Never else consumeInStmts acc p.place f.body) f.params
+
+eqConsumes : List Consume -> List Consume -> Bool
+eqConsumes [] [] = True
+eqConsumes (x :: xs) (y :: ys) = x == y && eqConsumes xs ys
+eqConsumes _ _ = False
+
+eqNamedModes : List (String, List Consume) -> List (String, List Consume) -> Bool
+eqNamedModes [] [] = True
+eqNamedModes ((n, ms) :: xs) ((n2, ms2) :: ys) =
+  n == n2 && eqConsumes ms ms2 && eqNamedModes xs ys
+eqNamedModes _ _ = False
+
+joinModes : List Consume -> List Consume -> List Consume
+joinModes [] ys = ys
+joinModes xs [] = xs
+joinModes (x :: xs) (y :: ys) = joinConsume x y :: joinModes xs ys
+
+||| Least fixpoint of per-parameter consume modes over defined functions.
+summarise : Nat -> List Fun -> List (String, List Consume) -> List (String, List Consume)
+summarise Z _ acc = acc
+summarise (S k) funs acc =
+  let defs = filter (\f => f.defined) funs
+      next = map (\f => (f.name, joinModes (lookupNamedList acc f.name) (paramModes acc f))) defs
+  in if eqNamedModes next acc then acc else summarise k funs next
+
+paramStatus : Consume -> Nat -> Status
+paramStatus Never fid = Pagurus.Status.singleton (ABorrowed fid)
+paramStatus May _ = Pagurus.Status.singleton AOwned
+paramStatus Always _ = Pagurus.Status.singleton AOwned
+
+bindParams : Nat -> List Param -> List Consume -> Env
+bindParams _ [] _ = []
+bindParams fid (p :: ps) [] =
+  case p.ty of
+    Ptr => (p.place, Pagurus.Status.singleton (ABorrowed fid)) :: bindParams fid ps []
+    Copy => bindParams fid ps []
+bindParams fid (p :: ps) (m :: ms) =
+  case p.ty of
+    Ptr => (p.place, paramStatus m fid) :: bindParams fid ps ms
+    Copy => bindParams fid ps ms
+
 ||| Whether `takeOwner` produced a unique owner (`Owner`), a known null
 ||| (`Null`, only from `ENull`: `0` / `NULL` / `(void*)0`), or another
 ||| non-owner (`Ghost`, including `ELit`). `Ghost` must not be treated as
@@ -205,6 +333,27 @@ withName n d =
     KDoubleFree => { message := "double free of `" ++ n ++ "`" } d
     KUseAfterFree => { message := "use of freed value `" ++ n ++ "`" } d
     _ => { message := d.message ++ " `" ++ n ++ "`" } d
+
+exprArgName : Expr -> String
+exprArgName (EVar _ _ nm) = nm
+exprArgName (EAssign _ _ nm _ _) = nm
+exprArgName _ = "this argument"
+
+||| Rewrite a failed consuming-argument diagnostic so it names the callee
+||| and the argument.
+public export
+nameConsumedArg : String -> Expr -> Diag -> Diag
+nameConsumedArg callee e d =
+  let nm = exprArgName e in
+    { help :=
+        "argument `" ++ nm ++ "` is consumed by `" ++ callee ++
+        "` (always, or on some path); the caller must not use it afterwards"
+    } d
+
+public export
+mapDiscardFlag : Either Diag (Scopes, Flag) -> Either Diag Scopes
+mapDiscardFlag (Left d) = Left d
+mapDiscardFlag (Right (sc, _)) = Right sc
 
 public export
 usePlace : Scopes -> Place -> Nat -> String -> Either Diag Scopes
@@ -395,6 +544,25 @@ mutual
   checkArgsMove ctx sc (e :: es) = argsMoveFrom ctx es (takeOwner ctx sc e)
 
   public export
+  argAction : Bool -> Ctx -> Scopes -> Expr -> Either Diag Scopes
+  argAction False ctx sc e = checkExpr ctx sc e
+  argAction True ctx sc e = mapDiscardFlag (takeOwner ctx sc e)
+
+  public export
+  argsModesFrom : Bool -> String -> Expr -> Ctx -> List Expr -> List Consume ->
+                  Either Diag Scopes -> Either Diag Scopes
+  argsModesFrom True callee e _ _ _ (Left d) = Left (nameConsumedArg callee e d)
+  argsModesFrom False _ _ _ _ _ (Left d) = Left d
+  argsModesFrom _ callee _ ctx es ms (Right sc') = checkArgsModes ctx sc' callee es ms
+
+  export
+  checkArgsModes : Ctx -> Scopes -> String -> List Expr -> List Consume -> Either Diag Scopes
+  checkArgsModes _ sc _ [] _ = Right sc
+  checkArgsModes ctx sc callee (e :: es) modes =
+    argsModesFrom (doesConsume (consumeHead modes)) callee e ctx es (consumeTail modes)
+      (argAction (doesConsume (consumeHead modes)) ctx sc e)
+
+  public export
   reallocOwner : Bool -> Either Diag Scopes -> Either Diag (Scopes, Flag)
   reallocOwner True r = mapToOwner r
   reallocOwner False r = mapToGhost r
@@ -415,9 +583,7 @@ mutual
     if isBuiltin callee
       then checkArgsBorrow ctx sc args
       else if isDefined ctx callee
-        then if isConsuming ctx callee
-          then checkArgsMove ctx sc args
-          else checkArgsBorrow ctx sc args
+        then checkArgsModes ctx sc callee args (funModes ctx callee)
         else if isRealloc callee
           then checkRealloc ctx sc args
           else Left (MkDiag KUnsupported
@@ -519,15 +685,7 @@ checkFun : Nat -> Ctx -> Fun -> Either Diag ()
 checkFun fuel ctx f =
   if not f.defined then Right ()
   else
-    let paramEnv : Env =
-          mapMaybe (\p => case p.ty of
-                       Ptr =>
-                         Just (p.place,
-                           if isConsuming ctx f.name
-                             then Pagurus.Status.singleton AOwned
-                             else Pagurus.Status.singleton (ABorrowed f.id))
-                       Copy => Nothing) f.params
-        sc = paramEnv
+    let sc = bindParams f.id f.params (funModes ctx f.name)
     in case checkStmts fuel ctx sc f.body of
          Left d => Left d
          Right _ => Right ()
@@ -536,8 +694,8 @@ export
 checkProgram : Program -> Either Diag ()
 checkProgram (MkProgram funs) =
   let defs = map (\f => f.name) (filter (\f => f.defined) funs)
-      consuming = summarise 32 funs []
-      ctx = MkCtx consuming defs
+      summaries = summarise 32 funs []
+      ctx = MkCtx summaries defs
       go : List Fun -> Either Diag ()
       go [] = Right ()
       go (f :: fs) =
@@ -626,6 +784,41 @@ checkArgsMoveNil : (ctx : Ctx) -> (sc : Scopes) ->
 checkArgsMoveNil _ _ = Refl
 
 export
+checkArgsModesNil : (ctx : Ctx) -> (sc : Scopes) -> (callee : String) ->
+                    (modes : List Consume) ->
+                    checkArgsModes ctx sc callee [] modes = Right sc
+checkArgsModesNil _ _ _ _ = Refl
+
+export
+consumeHeadCons : (m : Consume) -> (ms : List Consume) -> consumeHead (m :: ms) = m
+consumeHeadCons _ _ = Refl
+
+export
+consumeTailCons : (m : Consume) -> (ms : List Consume) -> consumeTail (m :: ms) = ms
+consumeTailCons _ _ = Refl
+
+export
+consumeHeadNil : consumeHead [] = Always
+consumeHeadNil = Refl
+
+export
+doesConsumeAlways : doesConsume Always = True
+doesConsumeAlways = Refl
+
+export
+doesConsumeNever : doesConsume Never = False
+doesConsumeNever = Refl
+
+export
+mapDiscardFlagLeft : {d : Diag} -> mapDiscardFlag (Left d) = Left d
+mapDiscardFlagLeft = Refl
+
+export
+mapDiscardFlagRight : {sc : Scopes} -> {fl : Flag} ->
+                      mapDiscardFlag (Right (sc, fl)) = Right sc
+mapDiscardFlagRight = Refl
+
+export
 checkReallocNil : (ctx : Ctx) -> (sc : Scopes) ->
                   checkRealloc ctx sc [] = Right sc
 checkReallocNil _ _ = Refl
@@ -680,24 +873,14 @@ checkCallRealloc :
 checkCallRealloc pb pr pd = rewrite pb in rewrite pd in rewrite pr in Refl
 
 export
-checkCallBorrow :
+checkCallDefined :
   {ctx : Ctx} -> {sc : Scopes} -> {nid : Nat} -> {callee : String} ->
   {args : List Expr} ->
   isBuiltin callee = False ->
   isDefined ctx callee = True ->
-  isConsuming ctx callee = False ->
-  checkCall ctx sc nid callee args = checkArgsBorrow ctx sc args
-checkCallBorrow pb pd pc = rewrite pb in rewrite pd in rewrite pc in Refl
-
-export
-checkCallConsume :
-  {ctx : Ctx} -> {sc : Scopes} -> {nid : Nat} -> {callee : String} ->
-  {args : List Expr} ->
-  isBuiltin callee = False ->
-  isDefined ctx callee = True ->
-  isConsuming ctx callee = True ->
-  checkCall ctx sc nid callee args = checkArgsMove ctx sc args
-checkCallConsume pb pd pc = rewrite pb in rewrite pd in rewrite pc in Refl
+  checkCall ctx sc nid callee args =
+    checkArgsModes ctx sc callee args (funModes ctx callee)
+checkCallDefined pb pd = rewrite pb in rewrite pd in Refl
 
 export
 assignPtrLeft :
@@ -1236,6 +1419,94 @@ argsMoveRight :
   takeOwner ctx sc e = Right (sc1, fl) ->
   checkArgsMove ctx sc (e :: es) = checkArgsMove ctx sc1 es
 argsMoveRight _ prf = rewrite prf in Refl
+
+export
+argsModesLeft :
+  (es : List Expr) ->
+  {ctx : Ctx} -> {sc : Scopes} -> {e : Expr} -> {callee : String} ->
+  {modes : List Consume} -> {d : Diag} ->
+  argAction (doesConsume (consumeHead modes)) ctx sc e = Left d ->
+  checkArgsModes ctx sc callee (e :: es) modes =
+    argsModesFrom (doesConsume (consumeHead modes)) callee e ctx es (consumeTail modes) (Left d)
+argsModesLeft _ prf = rewrite prf in Refl
+
+export
+argsModesRight :
+  (es : List Expr) ->
+  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {e : Expr} -> {callee : String} ->
+  {modes : List Consume} ->
+  argAction (doesConsume (consumeHead modes)) ctx sc e = Right sc1 ->
+  checkArgsModes ctx sc callee (e :: es) modes =
+    argsModesFrom (doesConsume (consumeHead modes)) callee e ctx es (consumeTail modes) (Right sc1)
+argsModesRight _ prf = rewrite prf in Refl
+
+export
+argsModesFromRight :
+  {cons : Bool} -> {callee : String} -> {e : Expr} ->
+  {ctx : Ctx} -> {es : List Expr} -> {ms : List Consume} -> {sc1 : Scopes} ->
+  argsModesFrom cons callee e ctx es ms (Right sc1) =
+    checkArgsModes ctx sc1 callee es ms
+argsModesFromRight {cons = False} = Refl
+argsModesFromRight {cons = True} = Refl
+
+export
+argsModesBorrowLeft :
+  (es : List Expr) -> (ms : List Consume) ->
+  {ctx : Ctx} -> {sc : Scopes} -> {e : Expr} -> {callee : String} ->
+  {m : Consume} -> {d : Diag} ->
+  doesConsume m = False ->
+  checkExpr ctx sc e = Left d ->
+  checkArgsModes ctx sc callee (e :: es) (m :: ms) = Left d
+argsModesBorrowLeft _ _ pc pE = rewrite pc in rewrite pE in Refl
+
+export
+argsModesBorrowRight :
+  (es : List Expr) -> (ms : List Consume) ->
+  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {e : Expr} -> {callee : String} ->
+  {m : Consume} ->
+  doesConsume m = False ->
+  checkExpr ctx sc e = Right sc1 ->
+  checkArgsModes ctx sc callee (e :: es) (m :: ms) =
+    checkArgsModes ctx sc1 callee es ms
+argsModesBorrowRight _ _ pc pE = rewrite pc in rewrite pE in Refl
+
+export
+argsModesMoveLeft :
+  (es : List Expr) -> (ms : List Consume) ->
+  {ctx : Ctx} -> {sc : Scopes} -> {e : Expr} -> {callee : String} ->
+  {m : Consume} -> {d : Diag} ->
+  doesConsume m = True ->
+  takeOwner ctx sc e = Left d ->
+  checkArgsModes ctx sc callee (e :: es) (m :: ms) = Left (nameConsumedArg callee e d)
+argsModesMoveLeft _ _ pc pT = rewrite pc in rewrite pT in Refl
+
+export
+argsModesMoveRight :
+  (es : List Expr) -> (ms : List Consume) ->
+  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {e : Expr} -> {callee : String} ->
+  {m : Consume} -> {fl : Flag} ->
+  doesConsume m = True ->
+  takeOwner ctx sc e = Right (sc1, fl) ->
+  checkArgsModes ctx sc callee (e :: es) (m :: ms) =
+    checkArgsModes ctx sc1 callee es ms
+argsModesMoveRight _ _ pc pT = rewrite pc in rewrite pT in Refl
+
+export
+argsModesExtraLeft :
+  (es : List Expr) ->
+  {ctx : Ctx} -> {sc : Scopes} -> {e : Expr} -> {callee : String} -> {d : Diag} ->
+  takeOwner ctx sc e = Left d ->
+  checkArgsModes ctx sc callee (e :: es) [] = Left (nameConsumedArg callee e d)
+argsModesExtraLeft _ pT = rewrite pT in Refl
+
+export
+argsModesExtraRight :
+  (es : List Expr) ->
+  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {e : Expr} -> {callee : String} -> {fl : Flag} ->
+  takeOwner ctx sc e = Right (sc1, fl) ->
+  checkArgsModes ctx sc callee (e :: es) [] =
+    checkArgsModes ctx sc1 callee es []
+argsModesExtraRight _ pT = rewrite pT in Refl
 
 export
 stmtsConsLeft :

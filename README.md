@@ -2,7 +2,7 @@
 
 `pagurus` is a **total Idris 2 checker** for unique-ownership mistakes in a small C subset. What is **verified** is the `checkStmts` theorem (`CheckAcceptedNoOwnershipCrash`): if that function accepts a statement list, no represented `EvalStmts` execution of that list is a use-after-move, use-after-free, or double-free. The operational model is instrumented — it reuses `stepAtom` on per-place atoms and the syntactic consuming summaries; there is **no heap or address model**. Version 1 flags those three errors. A C program is accepted only when the Idris 2 core returns success on the IR the frontend emitted. The **Rust lowering is trusted** for a “safe” verdict: it is an allowlist (unmodelled forms become `Unsupported`) and has been adversarially tested against a suite of short-circuit, pointer-update, and allocator-masquerade repros; it is not itself a theorem. Constructs the allowlist does not model are rejected as unsupported; a gap in the allowlist is a soundness bug in the trusted frontend, not in the Idris proof.
 
-A mutation that accepted a second `free` in the `stepAtom` Drop rule would still type-check the theorem: `CheckAcceptedNoOwnershipCrash` is relative to `stepAtom`, `Eval*`, and `isConsuming`. Correctness of the per-atom rules therefore rests on `Step.idr`, the small lemmas in `Soundness.idr`, and the fixture suite, not on the end-to-end inhabitant alone.
+A mutation that accepted a second `free` in the `stepAtom` Drop rule would still type-check the theorem: `CheckAcceptedNoOwnershipCrash` is relative to `stepAtom`, `Eval*`, and the per-argument consume summaries (`funModes`). Correctness of the per-atom rules therefore rests on `Step.idr`, the small lemmas in `Soundness.idr`, and the fixture suite, not on the end-to-end inhabitant alone.
 
 It is a from-scratch rewrite inspired by [CORAL](https://github.com/tiagodusilva/coral) (C Ownership with Rust-like Analysis and Lifetimes). It is **not** a port of CORAL’s Clava/TypeScript implementation.
 
@@ -47,7 +47,7 @@ To believe a `pagurus` “safe” verdict you have to trust:
 - `malloc`/`calloc` as modelled (fresh unique owner; no heap object identity)
 - `free` as `SDrop` on a variable; **`free(0)` / `free((void*)0)` / `free(NULL)`** lowering to a no-op `Null` IR node (ISO C `free(NULL)`). A pointer known to be null (`p = 0` / `p = NULL`) is atom `ANull`; `free` of that atom is a no-op. Non-null literals (`1`, `"hi"`, `(int*)1`) are `Lit` / Ghost / `AEmpty`, not `ANull`. Uninitialised pointers stay `AEmpty` and `free` of them is still rejected.
 - `realloc` (prototype, not defined in this unit) as consume-first-argument plus a fresh owner. Failure is not modelled: the checker assumes success (a later `free` of the original pointer is rejected). A definition of `realloc` in the unit is summarised like any other function.
-- syntactic consuming summaries (`isConsuming`) as a fixpoint over callee syntax, not a proved interprocedural semantics — **callee bodies are not run**
+- syntactic per-argument consume summaries (`Never` / `May` / `Always`, `funModes`) as a fixpoint over callee syntax, not a proved interprocedural semantics — **callee bodies are not run**. A `May` argument is treated as consumed at the call site.
 - that `SReturn` **ends the path**: remaining statements on that path are not checked and do not appear in `EvalStmts`. An `if` branch that always returns is dropped from the join so it does not poison the continuation. A loop body that always returns keeps the entry environment (zero-iteration exit).
 
 If the core rejects, Rust reports that rejection; if the core is missing or crashes, the result is a failure, not safety. A “safe” verdict still depends on the trusted base above.
@@ -158,7 +158,7 @@ Modelled:
 - `malloc`/`calloc` (fresh unique owner), `realloc` (consume first argument, fresh owner; assumes success), and `free` (drop), only when they are **not** defined in this file
 - `free(0)`, `free((void *)0)`, and `free(NULL)` are accepted as a defined no-op (ISO C `free(NULL)`). A pointer assigned `0` or `NULL` is tracked as known-null; `free` of it is a no-op. Uninitialised pointers are not null. Non-null literals (including `(int*)1` and string literals) are not modelled as null; `free` of a pointer holding one is rejected.
 - Assignment, including chained assignment as a move of the unique owner
-- Calls: borrowing vs consuming, summarised from callee bodies
+- Calls: per-argument borrow vs consume (`Never` / `May` / `Always`), summarised from callee bodies
 - `return`, `if`/`else`
 - `while` / `do` / `for`, including `for`-init declarations, via a Kleene join (not “walk once”). C loops are lowered as `cond; Loop[body; cond]` (do-while: `body; cond; Loop[body; cond]`) so the exiting condition evaluation is in the IR the theorem covers.
 - `&&` / `||` as `SIf` so the right-hand side is conditional (C short-circuit)
@@ -181,7 +181,7 @@ Declare `malloc`/`free` yourself; do not rely on `<stdlib.h>` unless you preproc
 
 ### Pointer parameters
 
-A pointer parameter is **not** assumed `Owned`. If the function’s body (or a consuming callee it passes the pointer to) drops or moves that parameter, the function is summarised as consuming and the parameter starts `Owned`. Otherwise it starts `Borrowed` and `free`/`move` of it is rejected.
+A pointer parameter is **not** assumed `Owned`. Each parameter is summarised `Always`, `May` (consumed on some path), or `Never`. `Always`/`May` parameters start `Owned`; `Never` starts `Borrowed` and `free`/`move` of it is rejected. At a call site, `May` is treated as a move (the join takes the conservative side).
 
 ### Loops and joins
 
@@ -194,7 +194,7 @@ Join is **union of possible atoms**. `Owned ⊔ Empty` is `{Owned, Empty}`: a la
 3. Assigning one owning pointer to another **moves**; the source may not be used afterwards. Assigning `0`/`NULL` makes the destination known-null; `free` of a known-null pointer is a no-op. Assigning a non-null literal does not make the destination null.
 4. `free(p)` **consumes** `p` unless `p` is known-null. A later `free(p)` of a non-null consumed pointer is a **double free**; any other use is **use after free**.
 5. Integers (and other non-pointer types) are **copied**, not moved, and are not tracked as owners.
-6. Passing a pointer to a non-consuming function is a **borrow** (a use). Passing it to a consuming function is a **move**.
+6. Passing a pointer to a `Never`-consumed parameter is a **borrow** (a use). Passing it to an `Always` or `May` parameter is a **move**. A function may consume some arguments and borrow others.
 
 Example (tone modelled on rustc and CORAL):
 

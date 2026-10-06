@@ -1,5 +1,6 @@
 ||| Local action soundness, Represents preservation, `ownerFlagTrue`, and the
-||| stated fuel-indexed theorem type `CheckAcceptedNoOwnershipCrash`.
+||| fuel-indexed theorem type `CheckAcceptedNoOwnershipCrash` (inhabited in
+||| `Pagurus.Safety.Stmt`).
 module Pagurus.Safety
 
 import Pagurus.IR

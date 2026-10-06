@@ -1,6 +1,6 @@
 # pagurus
 
-`pagurus` is a **total Idris 2 checker with lemmas** for unique-ownership mistakes in C. It is **not** a verified end-to-end analyser: there is no proved theorem yet that `check` accepting an IR programme implies every concrete execution is free of use-after-move / use-after-free / double-free. Version 1 flags those three errors on a deliberately small C subset. It accepts a program only when the Idris 2 core's checker returns success; anything it cannot model or prove is rejected.
+`pagurus` is a **total Idris 2 checker** for unique-ownership mistakes in C, **verified under the documented model and assumptions**. If the core accepts an IR programme, no represented concrete execution is a use-after-move, use-after-free, or double-free (`CheckAcceptedNoOwnershipCrash`). Version 1 flags those three errors on a deliberately small C subset. It accepts a program only when the Idris 2 core's checker returns success; anything it cannot model or prove is rejected.
 
 It is a from-scratch rewrite inspired by [CORAL](https://github.com/tiagodusilva/coral) (C Ownership with Rust-like Analysis and Lifetimes). It is **not** a port of CORAL’s Clava/TypeScript implementation.
 
@@ -29,7 +29,7 @@ C source  --(Rust lang-c)-->  IR + span map  --(s-expression)-->  pagurus-core (
 Rust CLI  <-- render diagnostics with source spans ----------------
 ```
 
-1. **Idris 2 core (total checker + lemmas).** Owns the IR, the abstract ownership state (a set of atoms), the move/borrow/drop transfer function, path-sensitive join, loop fixpoints, and the checker. Places are interned `Nat`s (decidable equality). Local lemmas about `stepStatus`, join, store update, and `Represents` preservation are machine-checked; the full end-to-end theorem is not yet an inhabitant of `CheckAcceptedNoOwnershipCrash` (see below).
+1. **Idris 2 core (total checker + proved theorem).** Owns the IR, the abstract ownership state (a set of atoms), the move/borrow/drop transfer function, path-sensitive join, loop fixpoints, and the checker. Places are interned `Nat`s (decidable equality). Local lemmas about `stepStatus`, join, store update, and `Represents` preservation are machine-checked, as is the end-to-end theorem `CheckAcceptedNoOwnershipCrash`.
 2. **Untrusted shell (Rust).** Parses C, lowers it to IR, serialises that IR, spawns `pagurus-core` as a **separate executable** (no FFI), and renders diagnostics. Rust **never** overrides the core: a program is accepted only when the core prints `{"verdict":"safe"}`.
 3. **Soundness-first lowering.** Constructs the frontend or core cannot model become an `Unsupported` IR node. Statements are never silently dropped; the analyser never assumes that an opaque call or an unmodelled join is safe.
 
@@ -38,10 +38,10 @@ Rust CLI  <-- render diagnostics with source spans ----------------
 To believe a `pagurus` “safe” verdict you have to trust:
 
 - Idris 2 **0.8.0** and Chez Scheme, which execute `pagurus-core`
-- the Idris core modules `Pagurus.IR`, `Pagurus.Status`, `Pagurus.Step`, `Pagurus.Checker`, the operational model in `Pagurus.Conc`, and the lemmas in `Pagurus.Soundness` / `Pagurus.Safety` / `Pagurus.Lattice`
+- the Idris core modules `Pagurus.IR`, `Pagurus.Status`, `Pagurus.Step`, `Pagurus.Checker`, the operational model in `Pagurus.Conc`, and the lemmas in `Pagurus.Soundness` / `Pagurus.Safety` / `Pagurus.Lattice` / `Pagurus.Safety.*`
 - that the Rust frontend emitted IR that matches the C you care about (this lowering is *not* proved; see assumptions)
 - `malloc`/`calloc`/`free` as modelled (fresh unique owner / consume)
-- the named theorem type `CheckAcceptedNoOwnershipCrash` (stated; the mutual inhabitant is not compiled — see below)
+- syntactic consuming summaries (`isConsuming`) as a fixpoint over callee bodies, not a proved interprocedural semantics
 
 You do **not** have to trust the Rust analyser for acceptance: if the core rejects, Rust reports that rejection; if the core is missing or crashes, the result is a failure, not safety.
 
@@ -76,10 +76,10 @@ These are real proofs (`Refl` or induction), compiled into `pagurus-core`:
 - **`nilSafe` / `fuelRejectsCons` / `unsupportedRejected` / `loopZSafe` / `retNoneSafe` / `declCopyNoneSafe` / `declPtrNoneSafe` / `declPtrNonePres`**: empty lists, fuel-0, unsupported, zero-iteration loops, `return;`, and uninitialized decls.
 - **`ownerFlagTrue`**: a concrete `TakeOwnerE` that produces `Owner` implies the checker's `Flag` is `Owner` (Ghost vs Owner cannot be confused on that path).
 - **Unfold equations** (`takeMallocLeft`/`Right`, `assignPtrLeft`/`Owner`/`Ghost`, `declPtrLeft`/`Owner`, `stmtAsgPtrLeft`/`Owner`/`Ghost`, `ifFull`, `loopFixLeft`/`False`, …): first-order checker eliminators reduce `rewrite prf in Refl` without casing on `Either`.
+- **`CheckAcceptedNoOwnershipCrash`**: if `checkStmts fuel` accepts, no concrete `EvalStmts` from a represented store is UAM/UAF/DF (fuel exhaustion is a rejection). The inhabitant `checkAcceptedNoOwnershipCrash` in `Pagurus.Safety.Stmt` is a **total** function: per-kind case lemmas plus a syntax-index dispatcher. Computed diagnostics on unsupported/opaque nodes are equality proofs in `Pagurus.Conc` so Idris 2 0.8.0 can see exhaustiveness.
 
 ### Stated, not proved
 
-- **`CheckAcceptedNoOwnershipCrash`**: *if `checkStmts fuel` accepts, no concrete `EvalStmts` from a represented store is UAM/UAF/DF* (fuel exhaustion is a rejection). The type is stated and compiled into the core. A constructor-by-constructor inhabitant was written for assignment, initialised decl, call, if, loop unroll, and sequential `EvConsOk`, but **Idris 2 0.8.0's elaborator diverges and is OOM-killed (~15GiB RSS)** while typechecking that mutual — even after interned `Place = Nat`, `Ty` on assignment (Copy vs Ptr), `Flag` Owner/Ghost, first-order eliminators, specialized Left/Right unfold lemmas, `eq`-first helper order, splitting expression vs statement mutuals, and positional extra indices. The inhabitant is therefore **not** in the binary. Until a later Idris can elaborate it (or it is recast as size-indexed recursion that this elaborator accepts), do not call pagurus verified.
 - **Rust C→IR lowering is faithful** for the modelled fragment (including interned places) and emits `Unsupported` for everything else. This is not a theorem about C11.
 - **`malloc`/`calloc` return a fresh unique owner.** Allocation failure, custom allocators, and aliasing through integer casts are not modelled.
 - **Function summaries** (which callees consume their pointer arguments) are a syntactic fixpoint, not a proved interprocedural semantics.

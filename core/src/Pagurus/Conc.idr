@@ -110,17 +110,31 @@ data ActOn : Action -> CScopes -> Place -> Nat -> Outcome -> Type where
     lookupC n c = Nothing ->
     ActOn act c n nid (Ok c)
 
+public export
+unsupDiag : Nat -> String -> Diag
+unsupDiag nid reason =
+  MkDiag KUnsupported
+    ("unsupported construct: " ++ reason)
+    nid "unsupported here" []
+    "rewrite this using the supported C subset (see README); pagurus rejects what it cannot prove"
+
+public export
+opaqueCallDiag : Nat -> String -> Diag
+opaqueCallDiag id callee =
+  MkDiag KUnsupported
+    ("unsupported call to `" ++ callee ++ "`: no function body, so pagurus cannot prove the call is safe")
+    id "called here"
+    []
+    "provide a definition in this translation unit, or avoid passing unique pointers to opaque functions"
+
 mutual
   public export
   data EvalExpr : Ctx -> CScopes -> Expr -> Outcome -> Type where
     EvLit : EvalExpr ctx c (ELit _) (Ok c)
     EvMalloc : EvalExprs ctx c args o -> EvalExpr ctx c (EMalloc _ args) o
     EvVarUse : ActOn Use c n nid o -> EvalExpr ctx c (EVar nid n nm) o
-    EvUnsupE : EvalExpr ctx c (EUnsupported nid reason)
-                (Crash (MkDiag KUnsupported
-                         ("unsupported construct: " ++ reason)
-                         nid "unsupported here" []
-                         "rewrite this using the supported C subset (see README); pagurus rejects what it cannot prove"))
+    EvUnsupE : {d : Diag} -> d = unsupDiag nid reason ->
+               EvalExpr ctx c (EUnsupported nid reason) (Crash d)
     EvUseAll : EvalExprs ctx c args o -> EvalExpr ctx c (EUse _ args) o
     EvCallE : EvalCall ctx c id callee args o ->
               EvalExpr ctx c (ECall id callee args) o
@@ -180,12 +194,8 @@ mutual
                TakeOwnerE ctx c (ECall id callee args) o Ghost
     TakeUse : EvalExprs ctx c args o ->
               TakeOwnerE ctx c (EUse _ args) o Ghost
-    TakeUnsup : TakeOwnerE ctx c (EUnsupported nid reason)
-                  (Crash (MkDiag KUnsupported
-                           ("unsupported construct: " ++ reason)
-                           nid "unsupported here" []
-                           "rewrite this using the supported C subset (see README); pagurus rejects what it cannot prove"))
-                  Ghost
+    TakeUnsup : {d : Diag} -> d = unsupDiag nid reason ->
+                TakeOwnerE ctx c (EUnsupported nid reason) (Crash d) Ghost
 
   public export
   data TakeOwners : Ctx -> CScopes -> List Expr -> Outcome -> Type where
@@ -203,14 +213,11 @@ mutual
     CallBuiltin : isBuiltin callee = True ->
                   EvalExprs ctx c args o ->
                   EvalCall ctx c id callee args o
-    CallOpaque : isBuiltin callee = False ->
+    CallOpaque : {d : Diag} ->
+                 isBuiltin callee = False ->
                  isDefined ctx callee = False ->
-                 EvalCall ctx c id callee args
-                   (Crash (MkDiag KUnsupported
-                            ("unsupported call to `" ++ callee ++ "`: no function body, so pagurus cannot prove the call is safe")
-                            id "called here"
-                            []
-                            "provide a definition in this translation unit, or avoid passing unique pointers to opaque functions"))
+                 d = opaqueCallDiag id callee ->
+                 EvalCall ctx c id callee args (Crash d)
     CallBorrow : isBuiltin callee = False ->
                  isDefined ctx callee = True ->
                  isConsuming ctx callee = False ->
@@ -261,17 +268,11 @@ mutual
                EvalStmt ctx c (SReturn _ (Just (EUse _ args))) o
     EvRetAsg : EvalExpr ctx c (EAssign id n nm ty rhs) o ->
                EvalStmt ctx c (SReturn _ (Just (EAssign id n nm ty rhs))) o
-    EvRetUnsup : EvalStmt ctx c (SReturn _ (Just (EUnsupported nid reason)))
-                   (Crash (MkDiag KUnsupported
-                            ("unsupported construct: " ++ reason)
-                            nid "unsupported here" []
-                            "rewrite this using the supported C subset (see README); pagurus rejects what it cannot prove"))
+    EvRetUnsup : {d : Diag} -> d = unsupDiag nid reason ->
+                 EvalStmt ctx c (SReturn _ (Just (EUnsupported nid reason))) (Crash d)
     EvExprS : EvalExpr ctx c e o -> EvalStmt ctx c (SExpr _ e) o
-    EvUnsupS : EvalStmt ctx c (SUnsupported nid reason)
-                (Crash (MkDiag KUnsupported
-                         ("unsupported construct: " ++ reason)
-                         nid "unsupported here" []
-                         "rewrite this using the supported C subset (see README); pagurus rejects what it cannot prove"))
+    EvUnsupS : {d : Diag} -> d = unsupDiag nid reason ->
+               EvalStmt ctx c (SUnsupported nid reason) (Crash d)
     EvBlock : EvalStmts ctx c bod o -> EvalStmt ctx c (SBlock _ bod) o
     EvIfCondCrash : EvalExpr ctx c cond (Crash d) ->
                     EvalStmt ctx c (SIf _ cond _ _) (Crash d)

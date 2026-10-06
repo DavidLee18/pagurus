@@ -14,144 +14,165 @@ import Pagurus.Safety.Decl
 import Pagurus.Safety.Drop
 import Pagurus.Safety.Return
 import Pagurus.Safety.If
-import Pagurus.Safety.Loop
 import Pagurus.Safety.Seq
 import Pagurus.Safety.Call
 import Pagurus.Safety.Expr
 
-%default covering
+%default total
 
--- Idris 2 0.8.0 coverage checker does not treat EvalStmt matching as
--- exhaustive when Outcome is an index. Every constructor has a clause;
--- case lemmas in sibling modules are %default total.
+-- Recursion is on the `EvalStmt` / `EvalStmts` derivation (first argument)
+-- so loop postfix can replay at the same fuel on a smaller tree. Fuel still
+-- decreases when entering a child checker call.
 mutual
   export
-  partial
   stmtSafe :
     {ctx : Ctx} -> {s : Stmt} -> {c : CScopes} -> {oS : Outcome} ->
-    (fuel : Nat) ->
     EvalStmt ctx c s oS ->
+    (fuel : Nat) ->
     (sc, sc' : Scopes) ->
     checkStmt fuel ctx sc s = Right sc' ->
     Represents c sc ->
     SafeOut oS sc'
-  stmtSafe Z ev sc sc' eq r =
+  stmtSafe ev Z sc sc' eq r =
     void (stmtZeroContra ctx sc s eq)
-  stmtSafe {s = SBlock id body} (S k) (EvBlock ev) sc sc' eq r =
-    blockSafe k ctx id body (\pB, r0, ev0 => stmtsSafe k ev0 sc sc' pB r0) eq r ev
-  stmtSafe {s = SDecl id n nm Copy Nothing} (S k) EvDeclCopyNone sc sc' eq r =
+  stmtSafe {s = SBlock id body} (EvBlock ev) (S k) sc sc' eq r =
+    stmtsSafe ev k sc sc' (trans (sym (checkStmtBlock k ctx sc id body)) eq) r
+  stmtSafe {s = SDecl id n nm Copy Nothing} EvDeclCopyNone (S k) sc sc' eq r =
     declCopyNoneSafe k id n nm eq r
-  stmtSafe {s = SDecl id n nm Ptr Nothing} (S k) EvDeclPtrNone sc sc' eq r =
+  stmtSafe {s = SDecl id n nm Ptr Nothing} EvDeclPtrNone (S k) sc sc' eq r =
     declPtrNoneSafe k id n nm eq r
-  stmtSafe {s = SDecl id n nm Copy (Just e)} (S k) (EvDeclCopy ev) sc sc' eq r =
-    declCopyJustSafe k id n nm (\pE, r0, ev0 => exprSafe ev0 sc sc' pE r0) eq r ev
-  stmtSafe {s = SDecl id n nm Ptr (Just e)} (S k) (EvDeclPtrCrash take) sc sc' eq r =
+  stmtSafe {s = SDecl id n nm Copy (Just e)} (EvDeclCopy ev) (S k) sc sc' eq r =
+    declCopyJustSafe k id n nm (\pE, r0, ev0 => exprSafe {e} ev0 sc sc' pE r0) eq r ev
+  stmtSafe {s = SDecl id n nm Ptr (Just e)} (EvDeclPtrCrash take) (S k) sc sc' eq r =
     declPtrCrash k id n nm
-      (\sc1, fl1, pT => takeSafe take sc sc1 fl1 pT r)
+      (\sc1, fl1, pT => takeSafe {e} take sc sc1 fl1 pT r)
       eq r (takeOwner ctx sc e) Refl
-  stmtSafe {s = SDecl id n nm Ptr (Just e)} (S k) (EvDeclPtrOwn c' take) sc sc' eq r =
+  stmtSafe {s = SDecl id n nm Ptr (Just e)} (EvDeclPtrOwn c' take) (S k) sc sc' eq r =
     declPtrOwn k id n nm
-      (\sc1, fl1, pT => takeSafe take sc sc1 fl1 pT r)
+      (\sc1, fl1, pT => takeSafe {e} take sc sc1 fl1 pT r)
       eq r take (takeOwner ctx sc e) Refl
-  stmtSafe (S k) (EvStmtAsgCopy {id} {n} {nm} {rhs} ev) sc sc' eq r =
-    stmtAsgCopySafe k id n nm (\pE, r0, ev0 => exprSafe ev0 sc sc' pE r0) eq r ev
-  stmtSafe (S k) (EvStmtAsgPtrCrash {id} {n} {nm} {rhs} take) sc sc' eq r =
+  stmtSafe {s = SAssign id n nm Copy rhs} (EvStmtAsgCopy ev) (S k) sc sc' eq r =
+    stmtAsgCopySafe k id n nm (\pE, r0, ev0 => exprSafe {e = rhs} ev0 sc sc' pE r0) eq r ev
+  stmtSafe {s = SAssign id n nm Ptr rhs} (EvStmtAsgPtrCrash take) (S k) sc sc' eq r =
     stmtAsgPtrCrash k id n nm
-      (\sc1, fl1, pT => takeSafe take sc sc1 fl1 pT r)
+      (\sc1, fl1, pT => takeSafe {e = rhs} take sc sc1 fl1 pT r)
       eq r (takeOwner ctx sc rhs) Refl
-  stmtSafe (S k) (EvStmtAsgPtrOwn {id} {n} {nm} {rhs} c1 take) sc sc' eq r =
+  stmtSafe {s = SAssign id n nm Ptr rhs} (EvStmtAsgPtrOwn c1 take) (S k) sc sc' eq r =
     stmtAsgPtrOwn k id n nm
-      (\sc1, fl1, pT => takeSafe take sc sc1 fl1 pT r)
+      (\sc1, fl1, pT => takeSafe {e = rhs} take sc sc1 fl1 pT r)
       eq r take (takeOwner ctx sc rhs) Refl
-  stmtSafe (S k) (EvStmtAsgPtrEmpty {id} {n} {nm} {rhs} c1 take) sc sc' eq r =
+  stmtSafe {s = SAssign id n nm Ptr rhs} (EvStmtAsgPtrEmpty c1 take) (S k) sc sc' eq r =
     stmtAsgPtrEmpty k id n nm
-      (\sc1, fl1, pT => takeSafe take sc sc1 fl1 pT r)
+      (\sc1, fl1, pT => takeSafe {e = rhs} take sc sc1 fl1 pT r)
       eq r (takeOwner ctx sc rhs) Refl
-  stmtSafe (S k) (EvDrop {nid} {n} {nm} act) sc sc' eq r =
+  stmtSafe {s = SDrop nid n nm} (EvDrop act) (S k) sc sc' eq r =
     dropStmtSafe k ctx nid n nm eq r act
-  stmtSafe (S k) (EvCallS {id} {callee} {args} evc) sc sc' eq r =
+  stmtSafe {s = SCall id callee args} (EvCallS evc) (S k) sc sc' eq r =
     callSafe evc sc sc' (trans (sym (checkStmtCall k ctx sc id callee args)) eq) r
-  stmtSafe {s = SReturn id Nothing} (S k) EvRetNone sc sc' eq r =
+  stmtSafe {s = SReturn id Nothing} EvRetNone (S k) sc sc' eq r =
     retNoneSafe k ctx id eq r
-  stmtSafe {s = SReturn rid (Just (EVar nid n nm))} (S k) (EvRetVar act) sc sc' eq r =
+  stmtSafe {s = SReturn rid (Just (EVar nid n nm))} (EvRetVar act) (S k) sc sc' eq r =
     retVarSafe k ctx rid nid n nm eq r act (takeOwner ctx sc (EVar nid n nm)) Refl
-  stmtSafe {s = SReturn rid (Just (ELit id))} (S k) EvRetLit sc sc' eq r =
+  stmtSafe {s = SReturn rid (Just (ELit id))} EvRetLit (S k) sc sc' eq r =
     retLitSafe k ctx rid id (litSafe id) eq r
-  stmtSafe {s = SReturn rid (Just (EMalloc mid args))} (S k) (EvRetMalloc evs) sc sc' eq r =
+  stmtSafe {s = SReturn rid (Just (EMalloc mid args))} (EvRetMalloc evs) (S k) sc sc' eq r =
     retMallocSafe k ctx rid mid args
-      (\pE, r0, ev0 => exprSafe ev0 sc sc' pE r0) eq r evs
-  stmtSafe {s = SReturn rid (Just (ECall id callee args))} (S k) (EvRetCall evc) sc sc' eq r =
+      (\pE, r0, ev0 => exprSafe {e = EMalloc mid args} ev0 sc sc' pE r0) eq r evs
+  stmtSafe {s = SReturn rid (Just (ECall id callee args))} (EvRetCall evc) (S k) sc sc' eq r =
     retCallSafe k ctx rid id callee args
-      (\pE, r0, ev0 => exprSafe ev0 sc sc' pE r0) eq r evc
-  stmtSafe {s = SReturn rid (Just (EUse uid args))} (S k) (EvRetUse evs) sc sc' eq r =
+      (\pE, r0, ev0 => exprSafe {e = ECall id callee args} ev0 sc sc' pE r0) eq r evc
+  stmtSafe {s = SReturn rid (Just (EUse uid args))} (EvRetUse evs) (S k) sc sc' eq r =
     retUseSafe k ctx rid uid args
-      (\pE, r0, ev0 => exprSafe ev0 sc sc' pE r0) eq r evs
-  stmtSafe {s = SReturn rid (Just (EAssign id n nm ty rhs))} (S k) (EvRetAsg ev) sc sc' eq r =
+      (\pE, r0, ev0 => exprSafe {e = EUse uid args} ev0 sc sc' pE r0) eq r evs
+  stmtSafe {s = SReturn rid (Just (EAssign id n nm ty rhs))} (EvRetAsg ev) (S k) sc sc' eq r =
     retAsgSafe k ctx rid id n nm ty rhs
-      (\pE, r0, ev0 => exprSafe ev0 sc sc' pE r0) eq r ev
-  stmtSafe {s = SReturn rid (Just (EUnsupported id reason))} (S k) EvRetUnsup sc sc' eq r =
+      (\pE, r0, ev0 => exprSafe {e = EAssign id n nm ty rhs} ev0 sc sc' pE r0) eq r ev
+  stmtSafe {s = SReturn rid (Just (EUnsupported id reason))} {oS = Ok _} ev (S k)
+           sc sc' eq r impossible
+  stmtSafe {s = SReturn rid (Just (EUnsupported id reason))} {oS = Crash _} (EvRetUnsup _) (S k)
+           sc sc' eq r =
     void (retUnsupContra k ctx sc rid id reason eq)
-  stmtSafe {s = SExpr id e} (S k) (EvExprS ev) sc sc' eq r =
-    exprStmtSafe k ctx id e (\pE, r0, ev0 => exprSafe ev0 sc sc' pE r0) eq r ev
-  stmtSafe {s = SUnsupported id reason} (S k) EvUnsupS sc sc' eq r =
+  stmtSafe {s = SExpr id e} (EvExprS ev) (S k) sc sc' eq r =
+    exprStmtSafe k ctx id e (\pE, r0, ev0 => exprSafe {e} ev0 sc sc' pE r0) eq r ev
+  stmtSafe {s = SUnsupported id reason} {oS = Ok _} ev (S k) sc sc' eq r impossible
+  stmtSafe {s = SUnsupported id reason} {oS = Crash _} (EvUnsupS _) (S k) sc sc' eq r =
     void (stmtUnsupContra k ctx sc id reason eq)
-  stmtSafe {s = SIf iid cond thn els} (S k) (EvIfCondCrash ev) sc sc' eq r =
+  stmtSafe {s = SIf iid cond thn els} (EvIfCondCrash ev) (S k) sc sc' eq r =
     ifCondCrash k iid thn els
-      (\sc1, pC => exprSafe ev sc sc1 pC r)
+      (\sc1, pC => exprSafe {e = cond} ev sc sc1 pC r)
       eq r (checkExpr ctx sc cond) Refl
-  stmtSafe {s = SIf iid cond thn els} (S k) (EvIfThen c0 evC evT) sc sc' eq r =
+  stmtSafe {s = SIf iid cond thn els} (EvIfThen c0 evC evT) (S k) sc sc' eq r =
     ifThenSafe k iid
-      (\sc1, pC => exprSafe evC sc sc1 pC r)
-      (\sc0, scT, pT, r0 => stmtsSafe k evT sc0 scT pT r0)
+      (\sc1, pC => exprSafe {e = cond} evC sc sc1 pC r)
+      (\sc0, scT, pT, r0 => stmtsSafe evT k sc0 scT pT r0)
       eq r (checkExpr ctx sc cond) Refl
-  stmtSafe {s = SIf iid cond thn els} (S k) (EvIfElse c0 evC evE) sc sc' eq r =
+  stmtSafe {s = SIf iid cond thn els} (EvIfElse c0 evC evE) (S k) sc sc' eq r =
     ifElseSafe k iid
-      (\sc1, pC => exprSafe evC sc sc1 pC r)
-      (\sc0, scE, pE, r0 => stmtsSafe k evE sc0 scE pE r0)
+      (\sc1, pC => exprSafe {e = cond} evC sc sc1 pC r)
+      (\sc0, scE, pE, r0 => stmtsSafe evE k sc0 scE pE r0)
       eq r (checkExpr ctx sc cond) Refl
-  stmtSafe {s = SLoop lid bod} (S k) ev sc sc' eq r =
-    loopFrom k stmtsSafeIh sc sc' c lid bod
-      (trans (sym (checkStmtLoop k ctx sc lid bod)) eq) r ev
+  stmtSafe {s = SLoop lid bod} ev (S k) sc sc' eq r =
+    loopGo k ev sc sc' (trans (sym (checkStmtLoop k ctx sc lid bod)) eq) r
+
+  loopGo :
+    {ctx : Ctx} -> {c : CScopes} -> {lid : Nat} -> {bod : List Stmt} ->
+    {oS : Outcome} ->
+    (k : Nat) ->
+    EvalStmt ctx c (SLoop lid bod) oS ->
+    (sc, sc' : Scopes) ->
+    loopFix k ctx sc lid bod = Right sc' ->
+    Represents c sc ->
+    SafeOut oS sc'
+  loopGo Z ev sc sc' eq r =
+    void (leftNotRight (trans (sym (loopFixZero ctx sc lid bod)) eq))
+  loopGo (S m) EvLoopZ sc sc' eq r =
+    OutOk (reprWeaken (loopFixSub (S m) ctx sc lid bod sc' eq) r)
+  loopGo (S m) (EvLoopCrash evB) sc sc' eq r with (checkStmts m ctx sc bod) proof pB
+    loopGo (S m) (EvLoopCrash evB) sc sc' eq r | Left _ =
+      void (leftNotRight (trans (sym (loopFixLeft lid pB)) eq))
+    loopGo (S m) (EvLoopCrash evB) sc sc' eq r | Right scB =
+      crashScope (stmtsSafe evB m sc scB pB r)
+  loopGo (S m) (EvLoopS c1 evB evR) sc sc' eq r with (checkStmts m ctx sc bod) proof pB
+    loopGo (S m) (EvLoopS c1 evB evR) sc sc' eq r | Left _ =
+      void (leftNotRight (trans (sym (loopFixLeft lid pB)) eq))
+    loopGo (S m) (EvLoopS c1 evB evR) sc sc' eq r | Right scB with (eqScopes (joinScopes sc scB) sc) proof pEq
+      loopGo (S m) (EvLoopS c1 evB evR) sc sc' eq r | Right scB | True =
+        stmtSafe evR (S (S m)) sc sc'
+          (trans (checkStmtLoop (S m) ctx sc lid bod) eq)
+          (reprEqScopes pEq (reprJoinRight (fromOk (stmtsSafe evB m sc scB pB r))))
+      loopGo (S m) (EvLoopS c1 evB evR) sc sc' eq r | Right scB | False =
+        stmtSafe evR (S m) (joinScopes sc scB) sc'
+          (trans (checkStmtLoop m ctx (joinScopes sc scB) lid bod)
+                 (trans (sym (loopFixFalse lid pB pEq)) eq))
+          (reprJoinRight (fromOk (stmtsSafe evB m sc scB pB r)))
 
   export
-  partial
   stmtsSafe :
     {ctx : Ctx} -> {ss : List Stmt} -> {c : CScopes} -> {oL : Outcome} ->
-    (fuel : Nat) ->
     EvalStmts ctx c ss oL ->
+    (fuel : Nat) ->
     (sc, sc' : Scopes) ->
     checkStmts fuel ctx sc ss = Right sc' ->
     Represents c sc ->
     SafeOut oL sc'
-  stmtsSafe fuel EvNil sc sc' eq r = nilSafe fuel ctx eq r
-  stmtsSafe Z (EvConsCrash {s} {ss = rest} ev) sc sc' eq r =
+  stmtsSafe EvNil fuel sc sc' eq r = nilSafe fuel ctx eq r
+  stmtsSafe (EvConsCrash {s} {ss = rest} ev) Z sc sc' eq r =
     void (stmtsZeroContra ctx sc s rest eq)
-  stmtsSafe Z (EvConsOk {s} {ss = rest} c1 evS evSS) sc sc' eq r =
+  stmtsSafe (EvConsOk {s} {ss = rest} c1 evS evSS) Z sc sc' eq r =
     void (stmtsZeroContra ctx sc s rest eq)
-  stmtsSafe (S k) (EvConsCrash {s} {ss = rest} ev) sc sc' eq r =
-    seqCrash rest
-      (\sc1, pS => stmtSafe k ev sc sc1 pS r)
-      eq r (checkStmt k ctx sc s) Refl
-  stmtsSafe (S k) (EvConsOk {s} {ss = rest} c1 evS evSS) sc sc' eq r =
-    seqOk rest
-      (\sc1, pS => stmtSafe k evS sc sc1 pS r)
-      (\sc1, pSS, r1 => stmtsSafe k evSS sc1 sc' pSS r1)
-      eq r (checkStmt k ctx sc s) Refl
-
-  partial
-  stmtsSafeIh :
-    {ctx : Ctx} ->
-    (fuel' : Nat) -> (ss : List Stmt) ->
-    (sc0, sc1 : Scopes) -> (c0 : CScopes) ->
-    {o1 : Outcome} ->
-    checkStmts fuel' ctx sc0 ss = Right sc1 ->
-    Represents c0 sc0 ->
-    EvalStmts ctx c0 ss o1 ->
-    SafeOut o1 sc1
-  stmtsSafeIh fuel' ss sc0 sc1 c0 p r1 ev1 = stmtsSafe fuel' ev1 sc0 sc1 p r1
+  stmtsSafe (EvConsCrash {s} {ss = rest} ev) (S k) sc sc' eq r with (checkStmt k ctx sc s) proof pS
+    stmtsSafe (EvConsCrash {s} {ss = rest} ev) (S k) sc sc' eq r | Left _ =
+      void (leftNotRight (trans (sym (stmtsConsLeft rest pS)) eq))
+    stmtsSafe (EvConsCrash {s} {ss = rest} ev) (S k) sc sc' eq r | Right sc1 =
+      crashScope (stmtSafe ev k sc sc1 pS r)
+  stmtsSafe (EvConsOk {s} {ss = rest} c1 evS evSS) (S k) sc sc' eq r with (checkStmt k ctx sc s) proof pS
+    stmtsSafe (EvConsOk {s} {ss = rest} c1 evS evSS) (S k) sc sc' eq r | Left _ =
+      void (leftNotRight (trans (sym (stmtsConsLeft rest pS)) eq))
+    stmtsSafe (EvConsOk {s} {ss = rest} c1 evS evSS) (S k) sc sc' eq r | Right sc1 =
+      stmtsSafe evSS k sc1 sc' (trans (sym (stmtsConsRight rest pS)) eq)
+        (fromOk (stmtSafe evS k sc sc1 pS r))
 
 export
-partial
 checkAcceptedNoOwnershipCrash : CheckAcceptedNoOwnershipCrash
 checkAcceptedNoOwnershipCrash fuel ctx sc ss sc' eq c r o ev =
-  fromOut (stmtsSafe fuel ev sc sc' eq r)
+  fromOut (stmtsSafe ev fuel sc sc' eq r)

@@ -16,7 +16,8 @@ import Pagurus.Soundness
 
 %default covering
 
-||| Mention lemmas so they stay in the compiled core.
+||| Mention lemmas so they stay in the compiled core. The safety theorem is
+||| total; `main` stays covering because file IO and the IR parser are.
 lemmas : (n : Nat) ->
          (stepAtom AOwned Use n = Right AOwned,
           IsLeft (stepAtom (AMoved n) Use n),
@@ -41,11 +42,9 @@ lemmaStepStatus n =
 keepSafetyType : Type
 keepSafetyType = CheckAcceptedNoOwnershipCrash
 
-partial
 keepSafety : CheckAcceptedNoOwnershipCrash
 keepSafety = checkAcceptedNoOwnershipCrash
 
-partial
 main : IO ()
 main = do
   let _ = lemmas 0

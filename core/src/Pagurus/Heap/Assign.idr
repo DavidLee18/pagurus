@@ -191,6 +191,7 @@ inHandAfterBindMove {n} {id} {sc} live oaB pM with
             (lookupPlaceSetHit n (Pagurus.Status.singleton AOwned) sc)
             ownedSafeUse ownedNoBorrow uns)
 
+export
 takenAfterBindMove :
   {n : Place} -> {id : Nat} -> {nm : String} ->
   {v : HVal} -> {env : HEnv} -> {h : Heap} -> {sc, sc2 : Scopes} ->

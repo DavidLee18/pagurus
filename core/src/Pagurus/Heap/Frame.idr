@@ -883,6 +883,455 @@ noOwnerHereConsOther :
   noOwnerHere ((pl, HVPtr b) :: env) sc a = noOwnerHere env sc a
 noOwnerHereConsOther pl b a env sc ne = rewrite ne in Refl
 
+ptrNotA : (b : Addr) -> {a : Addr} -> Not (HVPtr b = HVPtr a) -> a == b = False
+ptrNotA b {a} nv = paGo (a == b) Refl nv
+  where
+    -- Result keeps `a == b = False` so matching `eqb` does not collapse it
+    -- to `False = False` (Idris 2 `with` substitutes the inspected expr).
+    paGo : (eqb : Bool) -> a == b = eqb -> Not (HVPtr b = HVPtr a) -> a == b = False
+    paGo True pab nv0 = void (nv0 (cong HVPtr (sym (eqNatTrue a b pab))))
+    paGo False pab _ = pab
+
+||| Unfold `noOwnerHere` of a non-matching pointer head. Rewrite in the
+||| goal so `a == c` is still present (Idris 2 does not reduce `if False`).
+noOwnerHerePtrMiss :
+  {k : Place} -> {c, a : Addr} -> {xs : HEnv} -> {sc : Scopes} ->
+  a == c = False ->
+  noOwnerHere ((k, HVPtr c) :: xs) sc a = noOwnerHere xs sc a
+noOwnerHerePtrMiss pab = rewrite pab in Refl
+
+noOwnerHerePtrHitNothing :
+  {k : Place} -> {c, a : Addr} -> {xs : HEnv} -> {sc : Scopes} ->
+  a == c = True ->
+  lookupPlace k sc = Nothing ->
+  noOwnerHere ((k, HVPtr c) :: xs) sc a = False
+noOwnerHerePtrHitNothing pab lk = rewrite pab in rewrite lk in Refl
+
+noOwnerHerePtrHitJust :
+  {k : Place} -> {c, a : Addr} -> {xs : HEnv} -> {sc : Scopes} -> {stK : Status} ->
+  a == c = True ->
+  lookupPlace k sc = Just stK ->
+  noOwnerHere ((k, HVPtr c) :: xs) sc a =
+    notUniqueSt stK && Delay (noOwnerHere xs sc a)
+noOwnerHerePtrHitJust pab lk = rewrite pab in rewrite lk in Refl
+
+lookupPlaceConsMiss :
+  {k, pl : Place} -> {st : Status} -> {sc : Scopes} ->
+  k == pl = False ->
+  lookupPlace k ((pl, st) :: sc) = lookupPlace k sc
+lookupPlaceConsMiss p = rewrite p in Refl
+
+tailOwnerTrue :
+  {k : Place} -> {x : HVal} -> {xs : HEnv} -> {sc : Scopes} -> {a : Addr} ->
+  noOwnerHere ((k, x) :: xs) sc a = True ->
+  noOwnerHere xs sc a = True
+tailOwnerTrue {x = HVNone} pT = pT
+tailOwnerTrue {x = HVCopy} pT = pT
+tailOwnerTrue {x = HVPtr c} {a} {xs} {sc} {k} pT = tailPtr (a == c) Refl pT
+  where
+    tailPtr :
+      (eqb : Bool) ->
+      a == c = eqb ->
+      noOwnerHere ((k, HVPtr c) :: xs) sc a = True ->
+      noOwnerHere xs sc a = True
+    tailPtr False pab pT0 = trans (sym (noOwnerHerePtrMiss pab)) pT0
+    tailPtr True pab pT0 with (lookupPlace k sc) proof lk
+      tailPtr True pab pT0 | Nothing =
+        void (falseNotTrue (trans (sym (noOwnerHerePtrHitNothing pab lk)) pT0))
+      tailPtr True pab pT0 | Just st =
+        snd (andTrue {a = notUniqueSt st} {b = noOwnerHere xs sc a}
+          (trans (sym (noOwnerHerePtrHitJust pab lk)) pT0))
+
+||| Overwriting / inserting a non-`a` value cannot create a unique owner
+||| of `a`. Contrapositively, a unique owner in the `setH` result was
+||| already a unique owner in `env` (same scopes).
+export
+noOwnerHereSetHKeep :
+  (n : Place) -> (v : HVal) -> (env : HEnv) -> (sc : Scopes) -> (a : Addr) ->
+  Not (v = HVPtr a) ->
+  noOwnerHere env sc a = True ->
+  noOwnerHere (setH n v env) sc a = True
+noOwnerHereSetHKeep n HVNone [] sc a _ _ = Refl
+noOwnerHereSetHKeep n HVCopy [] sc a _ _ = Refl
+noOwnerHereSetHKeep n (HVPtr b) [] sc a nv _ =
+  rewrite ptrNotA b nv in Refl
+noOwnerHereSetHKeep n v ((k, x) :: xs) sc a nv pT with (n == k) proof pnk
+  noOwnerHereSetHKeep n v ((k, x) :: xs) sc a nv pT | True =
+    rewrite eqNatTrue n k pnk in keepHit v nv (tailOwnerTrue pT)
+    where
+      keepHit :
+        (v0 : HVal) ->
+        Not (v0 = HVPtr a) ->
+        noOwnerHere xs sc a = True ->
+        noOwnerHere ((k, v0) :: xs) sc a = True
+      keepHit HVNone _ pXs = pXs
+      keepHit HVCopy _ pXs = pXs
+      keepHit (HVPtr b) nv0 pXs = rewrite ptrNotA b nv0 in pXs
+  noOwnerHereSetHKeep n v ((k, x) :: xs) sc a nv pT | False =
+    keepMiss x pT (noOwnerHereSetHKeep n v xs sc a nv)
+    where
+      keepMiss :
+        (x0 : HVal) ->
+        noOwnerHere ((k, x0) :: xs) sc a = True ->
+        (noOwnerHere xs sc a = True -> noOwnerHere (setH n v xs) sc a = True) ->
+        noOwnerHere ((k, x0) :: setH n v xs) sc a = True
+      keepMiss HVNone pOld ih = ih pOld
+      keepMiss HVCopy pOld ih = ih pOld
+      keepMiss (HVPtr c) pOld ih = missPtr (a == c) Refl pOld ih
+        where
+          missPtr :
+            (eqb : Bool) ->
+            a == c = eqb ->
+            noOwnerHere ((k, HVPtr c) :: xs) sc a = True ->
+            (noOwnerHere xs sc a = True -> noOwnerHere (setH n v xs) sc a = True) ->
+            noOwnerHere ((k, HVPtr c) :: setH n v xs) sc a = True
+          missPtr False pab pOld ih0 =
+            trans (noOwnerHerePtrMiss {k} {c} {xs = setH n v xs} {sc} pab)
+              (ih0 (trans (sym (noOwnerHerePtrMiss {k} {c} {xs} {sc} pab)) pOld))
+          missPtr True pab pOld ih0 with (lookupPlace k sc) proof lk
+            missPtr True pab pOld ih0 | Nothing =
+              void (falseNotTrue (trans (sym (noOwnerHerePtrHitNothing pab lk)) pOld))
+            missPtr True pab pOld ih0 | Just st0 =
+              let (nu, rest) = andTrue {a = notUniqueSt st0} {b = noOwnerHere xs sc a}
+                    (trans (sym (noOwnerHerePtrHitJust pab lk)) pOld)
+              in trans (noOwnerHerePtrHitJust {k} {c} {xs = setH n v xs} {sc} {stK = st0} pab lk)
+                   (rewrite nu in ih0 rest)
+
+export
+noOwnerHereSetHNotA :
+  (n : Place) -> (v : HVal) -> (env : HEnv) -> (sc : Scopes) -> (a : Addr) ->
+  Not (v = HVPtr a) ->
+  noOwnerHere (setH n v env) sc a = False ->
+  noOwnerHere env sc a = False
+noOwnerHereSetHNotA n v env sc a nv pF =
+  notAGo (noOwnerHere env sc a) Refl
+  where
+    notAGo :
+      (b : Bool) ->
+      noOwnerHere env sc a = b ->
+      noOwnerHere env sc a = False
+    notAGo False pO = pO
+    notAGo True pO =
+      void (trueNotFalse (trans (sym (noOwnerHereSetHKeep n v env sc a nv pO)) pF))
+
+lookupHConsHitEq :
+  {pl, k : Place} -> {x : HVal} -> {env : HEnv} ->
+  pl == k = True ->
+  lookupH pl ((k, x) :: env) = Just x
+lookupHConsHitEq p = rewrite p in Refl
+
+lookupHConsMissEq :
+  {pl, k : Place} -> {x : HVal} -> {env : HEnv} ->
+  pl == k = False ->
+  lookupH pl ((k, x) :: env) = lookupH pl env
+lookupHConsMissEq p = rewrite p in Refl
+
+lookupHNothingNe :
+  {env : HEnv} -> {pl, k : Place} -> {x : HVal} ->
+  lookupH pl ((k, x) :: env) = Nothing ->
+  pl == k = False
+lookupHNothingNe {pl} {k} {x} {env} miss = neGo (pl == k) Refl miss
+  where
+    neGo : (eqb : Bool) -> pl == k = eqb ->
+           lookupH pl ((k, x) :: env) = Nothing -> pl == k = False
+    neGo True p eq = void (nothingNotJustH (trans (sym eq) (lookupHConsHitEq p)))
+    neGo False p _ = p
+
+lookupHNothingTail :
+  {env : HEnv} -> {pl, k : Place} -> {x : HVal} ->
+  lookupH pl ((k, x) :: env) = Nothing ->
+  lookupH pl env = Nothing
+lookupHNothingTail {pl} {k} {x} {env} miss = tlGo (pl == k) Refl miss
+  where
+    tlGo : (eqb : Bool) -> pl == k = eqb ->
+           lookupH pl ((k, x) :: env) = Nothing -> lookupH pl env = Nothing
+    tlGo True p eq = void (nothingNotJustH (trans (sym eq) (lookupHConsHitEq p)))
+    tlGo False p eq = trans (sym (lookupHConsMissEq p)) eq
+
+||| Extra head scope at `pl` is invisible to `noOwnerHere` when `pl` is
+||| not a key of `env`.
+export
+noOwnerHereAddHead :
+  {env : HEnv} -> {pl : Place} -> {st : Status} -> {sc : Scopes} -> {a : Addr} ->
+  UniqueKeys env ->
+  lookupH pl env = Nothing ->
+  noOwnerHere env ((pl, st) :: sc) a = noOwnerHere env sc a
+noOwnerHereAddHead UKNil _ = Refl
+noOwnerHereAddHead {pl} {st} {sc} {a} (UKCons {k} {x = HVNone} {xs} miss uk) pL =
+  noOwnerHereAddHead uk (lookupHNothingTail pL)
+noOwnerHereAddHead {pl} {st} {sc} {a} (UKCons {k} {x = HVCopy} {xs} miss uk) pL =
+  noOwnerHereAddHead uk (lookupHNothingTail pL)
+noOwnerHereAddHead {pl} {st} {sc} {a} (UKCons {k} {x = HVPtr c} {xs} miss uk) pL =
+  addPtr (a == c) Refl
+  where
+    addPtr :
+      (eqb : Bool) ->
+      a == c = eqb ->
+      noOwnerHere ((k, HVPtr c) :: xs) ((pl, st) :: sc) a =
+        noOwnerHere ((k, HVPtr c) :: xs) sc a
+    neKP : k == pl = False
+    neKP = neqNatSym (lookupHNothingNe {env = xs} {pl} {k} {x = HVPtr c} pL)
+
+    addPtr False pab =
+      trans (noOwnerHerePtrMiss {k} {c} {xs} {sc = (pl, st) :: sc} pab)
+        (trans (noOwnerHereAddHead uk (lookupHNothingTail {env = xs} {pl} {k} {x = HVPtr c} pL))
+          (sym (noOwnerHerePtrMiss {k} {c} {xs} {sc} pab)))
+    addPtr True pab with (lookupPlace k sc) proof lk
+      addPtr True pab | Nothing =
+        let lkE = trans (lookupPlaceConsMiss {k} {pl} {st} {sc} neKP) lk
+        in trans (noOwnerHerePtrHitNothing {k} {c} {xs} {sc = (pl, st) :: sc} pab lkE)
+             (sym (noOwnerHerePtrHitNothing {k} {c} {xs} {sc} pab lk))
+      addPtr True pab | Just stK =
+        let lkE = trans (lookupPlaceConsMiss {k} {pl} {st} {sc} neKP) lk
+        in trans (noOwnerHerePtrHitJust {k} {c} {xs} {sc = (pl, st) :: sc} {stK} pab lkE)
+             (trans (cong (\u => notUniqueSt stK && Delay u)
+                       (noOwnerHereAddHead uk
+                         (lookupHNothingTail {env = xs} {pl} {k} {x = HVPtr c} pL)))
+                    (sym (noOwnerHerePtrHitJust {k} {c} {xs} {sc} {stK} pab lk)))
+
+ownerHitNotA :
+  {k : Place} -> {v : HVal} -> {xs : HEnv} -> {pl : Place} ->
+  {st : Status} -> {sc : Scopes} -> {a : Addr} ->
+  UniqueKeys xs ->
+  lookupH pl xs = Nothing ->
+  Not (v = HVPtr a) ->
+  noOwnerHere xs sc a = True ->
+  noOwnerHere ((k, v) :: xs) ((pl, st) :: sc) a = True
+ownerHitNotA {v = HVNone} {xs} {pl} {st} {sc} {a} uk miss _ pXs =
+  trans (noOwnerHereAddHead uk miss) pXs
+ownerHitNotA {v = HVCopy} {xs} {pl} {st} {sc} {a} uk miss _ pXs =
+  trans (noOwnerHereAddHead uk miss) pXs
+ownerHitNotA {v = HVPtr b} {xs} {pl} {st} {sc} {a} uk miss nv pXs =
+  rewrite ptrNotA b nv in trans (noOwnerHereAddHead uk miss) pXs
+
+||| Binding a non-`a` value at `pl` cannot create a unique owner of leftover
+||| `a`. UniqueKeys of the tail frame is `bindFrameUK`.
+export
+noOwnerHereSetValConsKeep :
+  {pl : Place} -> {v : HVal} -> {env : HEnv} -> {st : Status} ->
+  {sc : Scopes} -> {a : Addr} ->
+  UniqueKeys env ->
+  Not (v = HVPtr a) ->
+  noOwnerHere env sc a = True ->
+  noOwnerHere (setH pl v env) ((pl, st) :: sc) a = True
+noOwnerHereSetValConsKeep {v = HVNone} UKNil _ _ = Refl
+noOwnerHereSetValConsKeep {v = HVCopy} UKNil _ _ = Refl
+noOwnerHereSetValConsKeep {v = HVPtr b} UKNil nv _ =
+  rewrite ptrNotA b nv in Refl
+noOwnerHereSetValConsKeep {pl} {v} {st} {sc} {a}
+    (UKCons {k} {x} {xs} miss uk) nv pT with (pl == k) proof ppk
+  noOwnerHereSetValConsKeep {pl} {v} {st} {sc} {a}
+      (UKCons {k} {x} {xs} miss uk) nv pT | True =
+    rewrite eqNatTrue pl k ppk in
+      ownerHitNotA {k} {v} {xs} {pl = k} {st} {sc} {a} uk miss nv (tailOwnerTrue pT)
+  noOwnerHereSetValConsKeep {pl} {v} {st} {sc} {a}
+      (UKCons {k} {x} {xs} miss uk) nv pT | False =
+    keepMiss x pT (noOwnerHereSetValConsKeep {pl} {v} {st} {sc} {a} uk nv)
+    where
+      keepMiss :
+        (x0 : HVal) ->
+        noOwnerHere ((k, x0) :: xs) sc a = True ->
+        (noOwnerHere xs sc a = True ->
+         noOwnerHere (setH pl v xs) ((pl, st) :: sc) a = True) ->
+        noOwnerHere ((k, x0) :: setH pl v xs) ((pl, st) :: sc) a = True
+      keepMiss HVNone pOld ih = ih pOld
+      keepMiss HVCopy pOld ih = ih pOld
+      keepMiss (HVPtr c) pOld ih = missPtr (a == c) Refl pOld ih
+        where
+          missPtr :
+            (eqb : Bool) ->
+            a == c = eqb ->
+            noOwnerHere ((k, HVPtr c) :: xs) sc a = True ->
+            (noOwnerHere xs sc a = True ->
+             noOwnerHere (setH pl v xs) ((pl, st) :: sc) a = True) ->
+            noOwnerHere ((k, HVPtr c) :: setH pl v xs) ((pl, st) :: sc) a = True
+          missPtr False pab pOld ih0 =
+            trans (noOwnerHerePtrMiss {k} {c} {xs = setH pl v xs} {sc = (pl, st) :: sc} pab)
+              (ih0 (trans (sym (noOwnerHerePtrMiss {k} {c} {xs} {sc} pab)) pOld))
+          missPtr True pab pOld ih0 with (lookupPlace k sc) proof lk
+            missPtr True pab pOld ih0 | Nothing =
+              void (falseNotTrue (trans (sym (noOwnerHerePtrHitNothing pab lk)) pOld))
+            missPtr True pab pOld ih0 | Just stK =
+              let (nu, rest) = andTrue {a = notUniqueSt stK} {b = noOwnerHere xs sc a}
+                    (trans (sym (noOwnerHerePtrHitJust pab lk)) pOld)
+                  lkF = trans (lookupPlaceConsMiss {k} {pl} {st} {sc} (neqNatSym ppk)) lk
+              in trans (noOwnerHerePtrHitJust {k} {c} {xs = setH pl v xs}
+                         {sc = (pl, st) :: sc} {stK} pab lkF)
+                   (rewrite nu in ih0 rest)
+
+export
+noOwnerHereSetValConsNotA :
+  {pl : Place} -> {v : HVal} -> {env : HEnv} -> {st : Status} ->
+  {sc : Scopes} -> {a : Addr} ->
+  UniqueKeys env ->
+  Not (v = HVPtr a) ->
+  noOwnerHere (setH pl v env) ((pl, st) :: sc) a = False ->
+  noOwnerHere env sc a = False
+noOwnerHereSetValConsNotA {pl} {v} {env} {st} {sc} {a} uk nv pF =
+  notAGo (noOwnerHere env sc a) Refl
+  where
+    notAGo :
+      (b : Bool) ->
+      noOwnerHere env sc a = b ->
+      noOwnerHere env sc a = False
+    notAGo False pO = pO
+    notAGo True pO =
+      void (trueNotFalse (trans (sym (noOwnerHereSetValConsKeep uk nv pO)) pF))
+
+export
+bindFrameCopy :
+  (id : Nat) -> (pl : Place) -> (nm : String) ->
+  (ps : List Param) -> (v : HVal) -> (vs : List HVal) ->
+  bindFrame (MkParam id pl nm Copy :: ps) (v :: vs) = bindFrame ps vs
+bindFrameCopy _ _ _ _ _ _ = Refl
+
+export
+bindParamsCopy :
+  (fid : Nat) -> (id : Nat) -> (pl : Place) -> (nm : String) ->
+  (ps : List Param) -> (m : Consume) -> (ms : List Consume) ->
+  bindParams fid (MkParam id pl nm Copy :: ps) (m :: ms) = bindParams fid ps ms
+bindParamsCopy _ _ _ _ _ _ _ = Refl
+
+skipPtrGo :
+  (fid : Nat) -> (id : Nat) -> (pl : Place) -> (nm : String) ->
+  (ps : List Param) -> (m : Consume) -> (ms : List Consume) ->
+  (v : HVal) -> (vs : List HVal) -> (a : Addr) ->
+  Not (ptrArg v = HVPtr a) ->
+  noOwnerHere (bindFrame (MkParam id pl nm Ptr :: ps) (v :: vs))
+              (bindParams fid (MkParam id pl nm Ptr :: ps) (m :: ms)) a = False ->
+  noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = False
+skipPtrGo fid id pl nm ps m ms v vs a nv pno =
+  let p1 = replace {p = \e => noOwnerHere e
+                    (bindParams fid (MkParam id pl nm Ptr :: ps) (m :: ms)) a = False}
+             (bindFramePtr id pl nm ps v vs) pno
+      p2 = replace {p = \s => noOwnerHere (setH pl (ptrArg v) (bindFrame ps vs)) s a = False}
+             (bindParamsPtr fid id pl nm ps m ms) p1
+  in noOwnerHereSetValConsNotA {pl} {v = ptrArg v} {env = bindFrame ps vs}
+       {st = paramStatus m fid} {sc = bindParams fid ps ms} {a}
+       (bindFrameUK ps vs) nv p2
+
+||| BindOk consume of `HVPtr b` with `b != leftover a`: the unique owner
+||| of leftover `a` is in the tail frame.
+export
+noOwnerHereSkipPtrOwn :
+  (fid : Nat) -> (id : Nat) -> (pl : Place) -> (nm : String) ->
+  (ps : List Param) -> (m : Consume) -> (ms : List Consume) ->
+  (vs : List HVal) -> (a, b : Addr) ->
+  a == b = False ->
+  noOwnerHere (bindFrame (MkParam id pl nm Ptr :: ps) (HVPtr b :: vs))
+              (bindParams fid (MkParam id pl nm Ptr :: ps) (m :: ms)) a = False ->
+  noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = False
+noOwnerHereSkipPtrOwn fid id pl nm ps m ms vs a b pab pno =
+  skipPtrGo fid id pl nm ps m ms (HVPtr b) vs a
+    (\eq => eqNatFalse a b pab (sym (hvPtrInj (trans (sym (ptrArgPtr b)) eq)))) pno
+
+export
+noOwnerHereSkipPtrNone :
+  (fid : Nat) -> (id : Nat) -> (pl : Place) -> (nm : String) ->
+  (ps : List Param) -> (m : Consume) -> (ms : List Consume) ->
+  (vs : List HVal) -> (a : Addr) ->
+  noOwnerHere (bindFrame (MkParam id pl nm Ptr :: ps) (HVNone :: vs))
+              (bindParams fid (MkParam id pl nm Ptr :: ps) (m :: ms)) a = False ->
+  noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = False
+noOwnerHereSkipPtrNone fid id pl nm ps m ms vs a pno =
+  skipPtrGo fid id pl nm ps m ms HVNone vs a
+    (\eq => hvNoneNotPtr (trans (sym ptrArgNone) eq)) pno
+
+export
+noOwnerHereSkipPtrCopy :
+  (fid : Nat) -> (id : Nat) -> (pl : Place) -> (nm : String) ->
+  (ps : List Param) -> (m : Consume) -> (ms : List Consume) ->
+  (vs : List HVal) -> (a : Addr) ->
+  noOwnerHere (bindFrame (MkParam id pl nm Ptr :: ps) (HVCopy :: vs))
+              (bindParams fid (MkParam id pl nm Ptr :: ps) (m :: ms)) a = False ->
+  noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = False
+noOwnerHereSkipPtrCopy fid id pl nm ps m ms vs a pno =
+  skipPtrGo fid id pl nm ps m ms HVCopy vs a
+    (\eq => hvNoneNotPtr (trans (sym ptrArgCopy) eq)) pno
+
+export
+skipPtrExtraGo :
+  (fid : Nat) -> (id : Nat) -> (pl : Place) -> (nm : String) ->
+  (ps : List Param) -> (v : HVal) -> (vs : List HVal) -> (a : Addr) ->
+  Not (ptrArg v = HVPtr a) ->
+  noOwnerHere (bindFrame (MkParam id pl nm Ptr :: ps) (v :: vs))
+              (bindParams fid (MkParam id pl nm Ptr :: ps) []) a = False ->
+  noOwnerHere (bindFrame ps vs) (bindParams fid ps []) a = False
+skipPtrExtraGo fid id pl nm ps v vs a nv pno =
+  let p1 = replace {p = \e => noOwnerHere e
+                    (bindParams fid (MkParam id pl nm Ptr :: ps) []) a = False}
+             (bindFramePtr id pl nm ps v vs) pno
+      p2 = replace {p = \s => noOwnerHere (setH pl (ptrArg v) (bindFrame ps vs)) s a = False}
+             (bindParamsPtrNil fid id pl nm ps) p1
+  in noOwnerHereSetValConsNotA {pl} {v = ptrArg v} {env = bindFrame ps vs}
+       {st = Pagurus.Status.singleton (ABorrowed fid)} {sc = bindParams fid ps []} {a}
+       (bindFrameUK ps vs) nv p2
+
+export
+noOwnerHereSkipPtrExtra :
+  (fid : Nat) -> (id : Nat) -> (pl : Place) -> (nm : String) ->
+  (ps : List Param) -> (vs : List HVal) -> (a, b : Addr) ->
+  a == b = False ->
+  noOwnerHere (bindFrame (MkParam id pl nm Ptr :: ps) (HVPtr b :: vs))
+              (bindParams fid (MkParam id pl nm Ptr :: ps) []) a = False ->
+  noOwnerHere (bindFrame ps vs) (bindParams fid ps []) a = False
+noOwnerHereSkipPtrExtra fid id pl nm ps vs a b pab pno =
+  skipPtrExtraGo fid id pl nm ps (HVPtr b) vs a
+    (\eq => eqNatFalse a b pab (sym (hvPtrInj (trans (sym (ptrArgPtr b)) eq)))) pno
+
+neverNotMay : Not (Never = May)
+neverNotMay Refl impossible
+
+neverNotAlways : Not (Never = Always)
+neverNotAlways Refl impossible
+
+mayNotNever : Not (May = Never)
+mayNotNever Refl impossible
+
+mayNotAlways : Not (May = Always)
+mayNotAlways Refl impossible
+
+alwaysNotNever : Not (Always = Never)
+alwaysNotNever Refl impossible
+
+alwaysNotMay : Not (Always = May)
+alwaysNotMay Refl impossible
+
+export
+consumeEq : (x, y : Consume) -> Either (x = y) (Not (x = y))
+consumeEq Never Never = Left Refl
+consumeEq Never May = Right neverNotMay
+consumeEq Never Always = Right neverNotAlways
+consumeEq May Never = Right mayNotNever
+consumeEq May May = Left Refl
+consumeEq May Always = Right mayNotAlways
+consumeEq Always Never = Right alwaysNotNever
+consumeEq Always May = Right alwaysNotMay
+consumeEq Always Always = Left Refl
+
+consConsumeInj : {x, y : Consume} -> {xs, ys : List Consume} ->
+                 x :: xs = y :: ys -> (x = y, xs = ys)
+consConsumeInj Refl = (Refl, Refl)
+
+nilNotConsC : {m : Consume} -> {ms : List Consume} -> Not ([] = m :: ms)
+nilNotConsC Refl impossible
+
+consNotNilC : {m : Consume} -> {ms : List Consume} -> Not (m :: ms = [])
+consNotNilC Refl impossible
+
+export
+consumeListEq : (xs, ys : List Consume) -> Either (xs = ys) (Not (xs = ys))
+consumeListEq [] [] = Left Refl
+consumeListEq [] (_ :: _) = Right nilNotConsC
+consumeListEq (_ :: _) [] = Right consNotNilC
+consumeListEq (x :: xs) (y :: ys) =
+  case consumeEq x y of
+    Left Refl =>
+      case consumeListEq xs ys of
+        Left Refl => Left Refl
+        Right ne => Right (\eq => ne (snd (consConsumeInj eq)))
+    Right ne => Right (\eq => ne (fst (consConsumeInj eq)))
+
 export
 noOwnerSound :
   (env : HEnv) -> (sc : Scopes) -> (a : Addr) ->

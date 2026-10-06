@@ -2045,14 +2045,16 @@ justInjChk Refl = Refl
 nothingNotJustChk : {0 x : a} -> Not (Nothing = Just x)
 nothingNotJustChk Refl impossible
 
+orTrueChk : {x, y : Bool} -> x || y = True -> Either (x = True) (y = True)
+orTrueChk {x = True} Refl = Left Refl
+orTrueChk {x = False} {y = True} Refl = Right Refl
+
 export
 placeInSplit :
   {p, q : Place} -> {qs : List Place} ->
   placeIn p (q :: qs) = True ->
   Either (p == q = True) (placeIn p qs = True)
-placeInSplit pin with (p == q) proof pq
-  placeInSplit pin | True = Left pq
-  placeInSplit pin | False = Right (rewrite pq in pin)
+placeInSplit pin = orTrueChk pin
 
 ||| The intern of a consume-mode `EVar` argument is in `consumePlaces`.
 export
@@ -2068,7 +2070,7 @@ consumePlacesVar (EVar _ q _) es m ms p pc prf =
   rewrite natEqReflChk p in Refl
 consumePlacesVar (EAssign _ _ _ _ _) _ _ _ _ _ prf = void (nothingNotJustChk prf)
 consumePlacesVar (ELit _) _ _ _ _ _ prf = void (nothingNotJustChk prf)
-consumePlacesVar (ENull _) _ _ _ _ prf = void (nothingNotJustChk prf)
+consumePlacesVar (ENull _) _ _ _ _ _ prf = void (nothingNotJustChk prf)
 consumePlacesVar (EMalloc _ _) _ _ _ _ _ prf = void (nothingNotJustChk prf)
 consumePlacesVar (ECall _ _ _) _ _ _ _ _ prf = void (nothingNotJustChk prf)
 consumePlacesVar (EUse _ _) _ _ _ _ _ prf = void (nothingNotJustChk prf)

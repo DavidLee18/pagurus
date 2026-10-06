@@ -203,13 +203,13 @@ error[use_after_move]: use of moved value `p`
  --> tests/fixtures/fail/use_after_move.c:8:10
   |
 8 |     free(p);
-  |          ^ used here after move
+  |          ^ freed here after move
 note: value moved here
  --> tests/fixtures/fail/use_after_move.c:7:15
   |
 7 |     void *q = p;
   |               ^ value moved here
-help: this pointer was moved; free the unique owner instead, not the moved-from name
+help: this pointer was already moved or consumed; freeing it here may be a double free
 ```
 
 ## Tests

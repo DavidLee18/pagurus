@@ -1,0 +1,6 @@
+error[unproven_ownership]: free of a pointer that may not uniquely own a heap object `q`
+ --> cast_launder_int.c:5:92
+  |
+5 | int main(void){int*p=malloc(4);unsigned long x=(unsigned long)p;int*q=(int*)x;free(p);free(q);return 0;}
+  |                                                                                            ^ freed here
+help: pagurus cannot track unique ownership through a call, cast, or integer conversion; this may be a double free

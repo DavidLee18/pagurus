@@ -1,0 +1,11 @@
+error[use_after_move]: use of moved value `p`
+ --> realloc_df.c:6:56
+  |
+6 | int main(void){int*p=malloc(4);int*q=realloc(p,8);free(p);free(q);return 0;}
+  |                                                        ^ freed here after move
+note: value moved here
+ --> realloc_df.c:6:46
+  |
+6 | int main(void){int*p=malloc(4);int*q=realloc(p,8);free(p);free(q);return 0;}
+  |                                              ^ value moved here
+help: this pointer was already moved or consumed; freeing it here may be a double free

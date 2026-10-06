@@ -439,6 +439,11 @@ impl<'a> Lowering<'a> {
                         id: self.alloc_node(expr),
                         place: self.lookup_place(&id.node.name),
                         name: id.node.name.clone(),
+                        ty: if self.is_pointer_name(&id.node.name) {
+                            Ty::Pointer
+                        } else {
+                            Ty::Copy
+                        },
                         rhs: self.lower_expr(&bin.node.rhs),
                     }]
                 } else {
@@ -578,10 +583,16 @@ impl<'a> Lowering<'a> {
                 if matches!(op, BinaryOperator::Assign) {
                     if let Expression::Identifier(id) = &bin.node.lhs.node {
                         let name = id.node.name.clone();
+                        let ty = if self.is_pointer_name(&name) {
+                            Ty::Pointer
+                        } else {
+                            Ty::Copy
+                        };
                         return Expr::Assign {
                             id: self.alloc_node(expr),
                             place: self.lookup_place(&name),
                             name,
+                            ty,
                             rhs: Box::new(self.lower_expr(&bin.node.rhs)),
                         };
                     }

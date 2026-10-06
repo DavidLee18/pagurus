@@ -35,6 +35,7 @@ kindCode KDoubleFree = "double_free"
 kindCode KUnsupported = "unsupported"
 kindCode KUnproven = "unproven_ownership"
 
+public export
 emptyUse : Nat -> Diag
 emptyUse n =
   MkDiag KUnproven
@@ -42,6 +43,15 @@ emptyUse n =
     n "used here"
     []
     "initialise this pointer with malloc (or a move from a unique owner) before using it"
+
+public export
+emptyDrop : Nat -> Diag
+emptyDrop n =
+  MkDiag KUnproven
+    "free of a pointer that may not uniquely own a heap object"
+    n "freed here"
+    []
+    "only free a pointer that this function can prove is a unique owner (e.g. from malloc)"
 
 movedUse : Nat -> Nat -> Diag
 movedUse at n =
@@ -68,12 +78,7 @@ stepAtom AOwned Drop n = Right (AFreed n)
 stepAtom AEmpty Use n = Left (emptyUse n)
 stepAtom AEmpty Borrow n = Left (emptyUse n)
 stepAtom AEmpty Move n = Left (emptyUse n)
-stepAtom AEmpty Drop n =
-  Left (MkDiag KUnproven
-    "free of a pointer that may not uniquely own a heap object"
-    n "freed here"
-    []
-    "only free a pointer that this function can prove is a unique owner (e.g. from malloc)")
+stepAtom AEmpty Drop n = Left (emptyDrop n)
 stepAtom (ABorrowed origin) Use _ = Right (ABorrowed origin)
 stepAtom (ABorrowed origin) Borrow _ = Right (ABorrowed origin)
 stepAtom (ABorrowed origin) Move n =

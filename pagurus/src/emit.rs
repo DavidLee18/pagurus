@@ -81,9 +81,13 @@ fn emit_stmt(out: &mut String, stmt: &Stmt) {
             id,
             place,
             name,
+            ty,
             rhs,
         } => {
-            out.push_str(&format!("(assign {id} {place} {name} "));
+            out.push_str(&format!(
+                "(assign {id} {place} {name} {} ",
+                ty_atom(*ty)
+            ));
             emit_expr(out, rhs);
             out.push(')');
         }
@@ -162,9 +166,13 @@ fn emit_expr(out: &mut String, expr: &Expr) {
             id,
             place,
             name,
+            ty,
             rhs,
         } => {
-            out.push_str(&format!("(assign-e {id} {place} {name} "));
+            out.push_str(&format!(
+                "(assign-e {id} {place} {name} {} ",
+                ty_atom(*ty)
+            ));
             emit_expr(out, rhs);
             out.push(')');
         }

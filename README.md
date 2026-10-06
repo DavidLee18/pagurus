@@ -41,7 +41,7 @@ To believe a `pagurus` “safe” verdict you have to trust:
 - the Idris core modules `Pagurus.IR`, `Pagurus.Status`, `Pagurus.Step`, `Pagurus.Checker`, the operational model in `Pagurus.Conc`, and the lemmas in `Pagurus.Soundness` / `Pagurus.Safety` / `Pagurus.Lattice`
 - that the Rust frontend emitted IR that matches the C you care about (this lowering is *not* proved; see assumptions)
 - `malloc`/`calloc`/`free` as modelled (fresh unique owner / consume)
-- the named theorem type `CheckAcceptedNoOwnershipCrash` (full `Eval` induction not yet completed; Drop/nil/unsupported/fuel cases are proved)
+- the named theorem type `CheckAcceptedNoOwnershipCrash` (stated; the mutual inhabitant is not compiled — see below)
 
 You do **not** have to trust the Rust analyser for acceptance: if the core rejects, Rust reports that rejection; if the core is missing or crashes, the result is a failure, not safety.
 
@@ -74,10 +74,12 @@ These are real proofs (`Refl` or induction), compiled into `pagurus-core`:
 - **`actOnSound` / `actOnPres`**: a represented `ActOn` cannot be UAM/UAF/DF if the abstract step succeeded, and a successful `Ok` updates preserve `Represents`.
 - **`usePlaceSafe` / `usePlacePres` / `movePlaceSafe` / `movePlacePres` / `dropSafe` / `dropPres` / `dropStmtSafe`**: the corresponding checker operations are locally sound.
 - **`nilSafe` / `fuelRejectsCons` / `unsupportedRejected` / `loopZSafe` / `retNoneSafe` / `declCopyNoneSafe` / `declPtrNoneSafe` / `declPtrNonePres`**: empty lists, fuel-0, unsupported, zero-iteration loops, `return;`, and uninitialized decls.
+- **`ownerFlagTrue`**: a concrete `TakeOwnerE` that produces `Owner` implies the checker's `Flag` is `Owner` (Ghost vs Owner cannot be confused on that path).
+- **Unfold equations** (`takeMallocLeft`/`Right`, `assignPtrLeft`/`Owner`/`Ghost`, `declPtrLeft`/`Owner`, `stmtAsgPtrLeft`/`Owner`/`Ghost`, `ifFull`, `loopFixLeft`/`False`, …): first-order checker eliminators reduce `rewrite prf in Refl` without casing on `Either`.
 
 ### Stated, not proved
 
-- **`CheckAcceptedNoOwnershipCrash`**: *if `checkStmts fuel` accepts, no concrete `EvalStmts` from a represented store is UAM/UAF/DF* (fuel exhaustion is a rejection). The type is stated; inhabitants exist for Drop, empty lists, fuel-0, unsupported, loop-Z, `return;`, and uninitialized `Copy`/`Ptr` decls. Remaining constructors (assignment, initialized decl, call, if, loop unroll, sequential `EvConsOk` of mixed statements) still need the same `actOnSound`+`reprSet` argument, one constructor at a time. Until that induction is finished, do not call pagurus verified.
+- **`CheckAcceptedNoOwnershipCrash`**: *if `checkStmts fuel` accepts, no concrete `EvalStmts` from a represented store is UAM/UAF/DF* (fuel exhaustion is a rejection). The type is stated and compiled into the core. A constructor-by-constructor inhabitant was written for assignment, initialised decl, call, if, loop unroll, and sequential `EvConsOk`, but **Idris 2 0.8.0's elaborator diverges and is OOM-killed (~15GiB RSS)** while typechecking that mutual — even after interned `Place = Nat`, `Ty` on assignment (Copy vs Ptr), `Flag` Owner/Ghost, first-order eliminators, specialized Left/Right unfold lemmas, `eq`-first helper order, splitting expression vs statement mutuals, and positional extra indices. The inhabitant is therefore **not** in the binary. Until a later Idris can elaborate it (or it is recast as size-indexed recursion that this elaborator accepts), do not call pagurus verified.
 - **Rust C→IR lowering is faithful** for the modelled fragment (including interned places) and emits `Unsupported` for everything else. This is not a theorem about C11.
 - **`malloc`/`calloc` return a fresh unique owner.** Allocation failure, custom allocators, and aliasing through integer casts are not modelled.
 - **Function summaries** (which callees consume their pointer arguments) are a syntactic fixpoint, not a proved interprocedural semantics.

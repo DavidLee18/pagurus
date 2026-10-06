@@ -85,7 +85,7 @@ mutual
   ||| True when `p` is used as a unique-owner rvalue (move/return), not a borrow.
   movedInExpr : Place -> Expr -> Bool
   movedInExpr p (EVar _ q _) = p == q
-  movedInExpr p (EAssign _ _ _ rhs) = movedInExpr p rhs
+  movedInExpr p (EAssign _ _ _ _ rhs) = movedInExpr p rhs
   movedInExpr p (EMalloc _ args) = movedInExprs p args
   movedInExpr p (ECall _ _ args) = movedInExprs p args
   movedInExpr p (EUse _ args) = movedInExprs p args
@@ -101,7 +101,7 @@ mutual
   consumesInStmt consuming p (SBlock _ body) = consumesInStmts consuming p body
   consumesInStmt _ p (SDecl _ _ _ _ (Just e)) = movedInExpr p e
   consumesInStmt _ _ (SDecl _ _ _ _ Nothing) = False
-  consumesInStmt _ p (SAssign _ _ _ e) = movedInExpr p e
+  consumesInStmt _ p (SAssign _ _ _ _ e) = movedInExpr p e
   consumesInStmt _ p (SDrop _ q _) = p == q
   consumesInStmt consuming p (SCall _ callee args) =
     movedInExprs p args && elem callee consuming
@@ -112,7 +112,7 @@ mutual
   consumesInStmt consuming p (SLoop _ body) = consumesInStmts consuming p body
   consumesInStmt consuming p (SExpr _ (ECall _ callee args)) =
     movedInExprs p args && elem callee consuming
-  consumesInStmt _ p (SExpr _ (EAssign _ _ _ rhs)) = movedInExpr p rhs
+  consumesInStmt _ p (SExpr _ (EAssign _ _ _ _ rhs)) = movedInExpr p rhs
   consumesInStmt _ _ (SExpr _ _) = False
   consumesInStmt _ _ (SUnsupported _ _) = False
 
@@ -142,17 +142,22 @@ record Ctx where
   consuming : List String
   defined : List String
 
-export
+public export
 isDefined : Ctx -> String -> Bool
 isDefined ctx n = elem n ctx.defined
 
-export
+public export
 isConsuming : Ctx -> String -> Bool
 isConsuming ctx n = elem n ctx.consuming
 
-export
+public export
 isBuiltin : String -> Bool
 isBuiltin n = n == "malloc" || n == "calloc" || n == "free"
+
+||| Whether `takeOwner` produced a unique owner (`Owner`) or a non-owner
+||| (`Ghost`, e.g. a literal or an untracked name).
+public export
+data Flag = Owner | Ghost
 
 withName : String -> Diag -> Diag
 withName n d =
@@ -210,6 +215,71 @@ unsupported id reason =
     []
     "rewrite this using the supported C subset (see README); pagurus rejects what it cannot prove"
 
+||| First-order eliminators so Safety can `rewrite` a result equality
+||| without Idris 0.8.0 inserting a quantity-0 `let` around `case`.
+public export
+mapToGhost : Either Diag Scopes -> Either Diag (Scopes, Flag)
+mapToGhost (Left d) = Left d
+mapToGhost (Right sc') = Right (sc', Ghost)
+
+public export
+mapToOwner : Either Diag Scopes -> Either Diag (Scopes, Flag)
+mapToOwner (Left d) = Left d
+mapToOwner (Right sc') = Right (sc', Owner)
+
+public export
+takeVarFrom : Scopes -> Nat -> Place -> String -> Maybe Status -> Either Diag (Scopes, Flag)
+takeVarFrom sc _ _ _ Nothing = Right (sc, Ghost)
+takeVarFrom sc nid n nm (Just _) = mapToOwner (movePlace sc n nid nm)
+
+public export
+takeAssignPtrFrom : Nat -> Place -> String -> Either Diag (Scopes, Flag) -> Either Diag (Scopes, Flag)
+takeAssignPtrFrom _ _ _ (Left d) = Left d
+takeAssignPtrFrom id n nm (Right (sc', Owner)) =
+  mapToOwner (movePlace (setPlace n (Pagurus.Status.singleton AOwned) sc') n id nm)
+takeAssignPtrFrom _ n _ (Right (sc', Ghost)) =
+  Right (setPlace n (Pagurus.Status.singleton AEmpty) sc', Ghost)
+
+public export
+assignPtrFrom : Bool -> Nat -> Place -> String -> Either Diag (Scopes, Flag) -> Either Diag Scopes
+assignPtrFrom _ _ _ _ (Left d) = Left d
+assignPtrFrom asMove id n nm (Right (sc', Owner)) =
+  if asMove
+    then movePlace (setPlace n (Pagurus.Status.singleton AOwned) sc') n id nm
+    else usePlace (setPlace n (Pagurus.Status.singleton AOwned) sc') n id nm
+assignPtrFrom _ _ n _ (Right (sc', Ghost)) =
+  Right (setPlace n (Pagurus.Status.singleton AEmpty) sc')
+
+public export
+declPtrFrom : Nat -> Place -> String -> Either Diag (Scopes, Flag) -> Either Diag Scopes
+declPtrFrom _ _ _ (Left d) = Left d
+declPtrFrom _ n _ (Right (sc', Owner)) =
+  Right (declarePlace n (Pagurus.Status.singleton AOwned) sc')
+declPtrFrom id _ nm (Right (sc', Ghost)) =
+  Left (MkDiag KUnproven
+    ("cannot prove `" ++ nm ++ "` uniquely owns a heap object")
+    id "declared here"
+    []
+    "initialise unique pointers from malloc or by moving from another unique owner")
+
+public export
+stmtAsgPtrFrom : Place -> Either Diag (Scopes, Flag) -> Either Diag Scopes
+stmtAsgPtrFrom _ (Left d) = Left d
+stmtAsgPtrFrom n (Right (sc', Owner)) =
+  Right (setPlace n (Pagurus.Status.singleton AOwned) sc')
+stmtAsgPtrFrom n (Right (sc', Ghost)) =
+  Right (setPlace n (Pagurus.Status.singleton AEmpty) sc')
+
+public export
+retVarFrom : Either Diag (Scopes, Flag) -> Either Diag Scopes
+retVarFrom (Left d) = Left d
+retVarFrom (Right (sc', _)) = Right sc'
+
+public export
+ifJoin : Scopes -> Either Diag Scopes -> Either Diag Scopes
+ifJoin _ (Left d) = Left d
+ifJoin scT (Right scE) = Right (joinScopes scT scE)
+
 mutual
   public export
   checkExpr : Ctx -> Scopes -> Expr -> Either Diag Scopes
@@ -217,76 +287,49 @@ mutual
   checkExpr ctx sc (EMalloc _ args) = checkArgsBorrow ctx sc args
   checkExpr ctx sc (EVar id n nm) = usePlace sc n id nm
   checkExpr ctx sc (ECall id callee args) = checkCall ctx sc id callee args
-  checkExpr ctx sc (EAssign id n nm rhs) = assignPlace ctx sc id n nm rhs False
+  checkExpr ctx sc (EAssign id n nm ty rhs) = assignPlace ctx sc id n nm ty rhs False
   checkExpr ctx sc (EUse _ args) = checkArgsBorrow ctx sc args
   checkExpr _ _ (EUnsupported id reason) = Left (unsupported id reason)
 
-  ||| Evaluate an expression as a unique-owner rvalue. True = produced an owner.
+  ||| Evaluate an expression as a unique-owner rvalue.
   public export
-  takeOwner : Ctx -> Scopes -> Expr -> Either Diag (Scopes, Bool)
-  takeOwner ctx sc (EMalloc _ args) =
-    case checkArgsBorrow ctx sc args of
-      Left d => Left d
-      Right sc' => Right (sc', True)
-  takeOwner _ sc (ELit _) = Right (sc, False)
-  takeOwner _ sc (EVar id n nm) =
-    case lookupPlace n sc of
-      Nothing => Right (sc, False)
-      Just _ =>
-        case movePlace sc n id nm of
-          Left d => Left d
-          Right sc' => Right (sc', True)
-  takeOwner ctx sc (EAssign id n nm rhs) =
-    case lookupPlace n sc of
-      Nothing =>
-        case checkExpr ctx sc rhs of
-          Left d => Left d
-          Right sc' => Right (sc', False)
-      Just _ =>
-        case takeOwner ctx sc rhs of
-          Left d => Left d
-          Right (sc', True) =>
-            let sc2 = setPlace n (Pagurus.Status.singleton AOwned) sc'
-            in case movePlace sc2 n id nm of
-                 Left d => Left d
-                 Right sc3 => Right (sc3, True)
-          Right (sc', False) => Right (setPlace n (Pagurus.Status.singleton AEmpty) sc', False)
-  takeOwner ctx sc e =
-    case checkExpr ctx sc e of
-      Left d => Left d
-      Right sc' => Right (sc', False)
+  takeOwner : Ctx -> Scopes -> Expr -> Either Diag (Scopes, Flag)
+  takeOwner ctx sc (EMalloc _ args) = mapToOwner (checkArgsBorrow ctx sc args)
+  takeOwner _ sc (ELit _) = Right (sc, Ghost)
+  takeOwner _ sc (EVar id n nm) = takeVarFrom sc id n nm (lookupPlace n sc)
+  takeOwner ctx sc (EAssign id n nm ty rhs) =
+    case ty of
+      Copy => mapToGhost (checkExpr ctx sc rhs)
+      Ptr => takeAssignPtrFrom id n nm (takeOwner ctx sc rhs)
+  takeOwner ctx sc e = mapToGhost (checkExpr ctx sc e)
 
   ||| Store into `n`. If `asMove` then yield the stored owner (assignment rvalue).
   public export
-  assignPlace : Ctx -> Scopes -> Nat -> Place -> String -> Expr -> Bool -> Either Diag Scopes
-  assignPlace ctx sc id n nm rhs asMove =
-    case lookupPlace n sc of
-      Nothing => checkExpr ctx sc rhs
-      Just _ =>
-        case takeOwner ctx sc rhs of
-          Left d => Left d
-          Right (sc', True) =>
-            let sc2 = setPlace n (Pagurus.Status.singleton AOwned) sc'
-            in if asMove
-                 then movePlace sc2 n id nm
-                 else usePlace sc2 n id nm
-          Right (sc', False) => Right (setPlace n (Pagurus.Status.singleton AEmpty) sc')
+  assignPlace : Ctx -> Scopes -> Nat -> Place -> String -> Ty -> Expr -> Bool -> Either Diag Scopes
+  assignPlace ctx sc id n nm ty rhs asMove =
+    case ty of
+      Copy => checkExpr ctx sc rhs
+      Ptr => assignPtrFrom asMove id n nm (takeOwner ctx sc rhs)
+
+  public export
+  argsBorrowFrom : Ctx -> List Expr -> Either Diag Scopes -> Either Diag Scopes
+  argsBorrowFrom _ _ (Left d) = Left d
+  argsBorrowFrom ctx es (Right sc') = checkArgsBorrow ctx sc' es
 
   public export
   checkArgsBorrow : Ctx -> Scopes -> List Expr -> Either Diag Scopes
   checkArgsBorrow _ sc [] = Right sc
-  checkArgsBorrow ctx sc (e :: es) =
-    case checkExpr ctx sc e of
-      Left d => Left d
-      Right sc' => checkArgsBorrow ctx sc' es
+  checkArgsBorrow ctx sc (e :: es) = argsBorrowFrom ctx es (checkExpr ctx sc e)
+
+  public export
+  argsMoveFrom : Ctx -> List Expr -> Either Diag (Scopes, Flag) -> Either Diag Scopes
+  argsMoveFrom _ _ (Left d) = Left d
+  argsMoveFrom ctx es (Right (sc', _)) = checkArgsMove ctx sc' es
 
   public export
   checkArgsMove : Ctx -> Scopes -> List Expr -> Either Diag Scopes
   checkArgsMove _ sc [] = Right sc
-  checkArgsMove ctx sc (e :: es) =
-    case takeOwner ctx sc e of
-      Left d => Left d
-      Right (sc', _) => checkArgsMove ctx sc' es
+  checkArgsMove ctx sc (e :: es) = argsMoveFrom ctx es (takeOwner ctx sc e)
 
   public export
   checkCall : Ctx -> Scopes -> Nat -> String -> List Expr -> Either Diag Scopes
@@ -322,53 +365,34 @@ mutual
       Ptr =>
         case init of
           Nothing => Right (declarePlace n (Pagurus.Status.singleton AEmpty) sc)
-          Just e =>
-            case takeOwner ctx sc e of
-              Left d => Left d
-              Right (sc', True) => Right (declarePlace n (Pagurus.Status.singleton AOwned) sc')
-              Right (sc', False) =>
-                Left (MkDiag KUnproven
-                  ("cannot prove `" ++ nm ++ "` uniquely owns a heap object")
-                  id "declared here"
-                  []
-                  "initialise unique pointers from malloc or by moving from another unique owner")
-  checkStmt (S fuel) ctx sc (SAssign id n nm rhs) =
-    case lookupPlace n sc of
-      Nothing =>
-        case checkExpr ctx sc rhs of
-          Left d => Left d
-          Right sc' => Right sc'
-      Just _ =>
-        case takeOwner ctx sc rhs of
-          Left d => Left d
-          Right (sc', True) => Right (setPlace n (Pagurus.Status.singleton AOwned) sc')
-          Right (sc', False) => Right (setPlace n (Pagurus.Status.singleton AEmpty) sc')
+          Just e => declPtrFrom id n nm (takeOwner ctx sc e)
+  checkStmt (S fuel) ctx sc (SAssign id n nm ty rhs) =
+    case ty of
+      Copy => checkExpr ctx sc rhs
+      Ptr => stmtAsgPtrFrom n (takeOwner ctx sc rhs)
   checkStmt (S fuel) ctx sc (SDrop id n nm) = dropPlace sc n id nm
   checkStmt (S fuel) ctx sc (SCall id callee args) = checkCall ctx sc id callee args
   checkStmt (S fuel) ctx sc (SReturn id (Just e)) =
     case e of
-      EVar nid n nm =>
-        case lookupPlace n sc of
-          Just _ =>
-            case takeOwner ctx sc e of
-              Left d => Left d
-              Right (sc', _) => Right sc'
-          Nothing => checkExpr ctx sc e
+      EVar nid n nm => retVarFrom (takeOwner ctx sc e)
       _ => checkExpr ctx sc e
   checkStmt (S fuel) _ sc (SReturn _ Nothing) = Right sc
   checkStmt (S fuel) ctx sc (SIf _ cond thn els) =
-    case checkExpr ctx sc cond of
-      Left d => Left d
-      Right sc0 =>
-        case checkStmts fuel ctx sc0 thn of
-          Left d => Left d
-          Right scT =>
-            case checkStmts fuel ctx sc0 els of
-              Left d => Left d
-              Right scE => Right (joinScopes scT scE)
+    ifFromCond fuel ctx thn els (checkExpr ctx sc cond)
   checkStmt (S fuel) ctx sc (SLoop id body) = loopFix fuel ctx sc id body
   checkStmt (S fuel) ctx sc (SExpr _ e) = checkExpr ctx sc e
   checkStmt (S fuel) _ _ (SUnsupported id reason) = Left (unsupported id reason)
+
+  public export
+  ifFromThn : Nat -> Ctx -> Scopes -> List Stmt -> Either Diag Scopes -> Either Diag Scopes
+  ifFromThn _ _ _ _ (Left d) = Left d
+  ifFromThn fuel ctx sc0 els (Right scT) = ifJoin scT (checkStmts fuel ctx sc0 els)
+
+  public export
+  ifFromCond : Nat -> Ctx -> List Stmt -> List Stmt -> Either Diag Scopes -> Either Diag Scopes
+  ifFromCond _ _ _ _ (Left d) = Left d
+  ifFromCond fuel ctx thn els (Right sc0) =
+    ifFromThn fuel ctx sc0 els (checkStmts fuel ctx sc0 thn)
 
   public export
   checkStmts : Nat -> Ctx -> Scopes -> List Stmt -> Either Diag Scopes
@@ -377,9 +401,12 @@ mutual
       "this is an internal limitation; simplify control flow")
   checkStmts _ _ sc [] = Right sc
   checkStmts (S fuel) ctx sc (s :: ss) =
-    case checkStmt fuel ctx sc s of
-      Left d => Left d
-      Right sc' => checkStmts fuel ctx sc' ss
+    stmtsConsFrom fuel ctx ss (checkStmt fuel ctx sc s)
+
+  public export
+  stmtsConsFrom : Nat -> Ctx -> List Stmt -> Either Diag Scopes -> Either Diag Scopes
+  stmtsConsFrom _ _ _ (Left d) = Left d
+  stmtsConsFrom fuel ctx ss (Right sc') = checkStmts fuel ctx sc' ss
 
   public export
   loopFix : Nat -> Ctx -> Scopes -> Nat -> List Stmt -> Either Diag Scopes
@@ -390,13 +417,15 @@ mutual
       []
       "the ownership lattice did not stabilise; simplify the loop")
   loopFix (S fuel) ctx sc id body =
-    case checkStmts fuel ctx sc body of
-      Left d => Left d
-      Right sc' =>
-        let scJ = joinScopes sc sc'
-        in if eqScopes scJ sc
-             then Right scJ
-             else loopFix fuel ctx scJ id body
+    loopFixFrom fuel ctx sc id body (checkStmts fuel ctx sc body)
+
+  public export
+  loopFixFrom : Nat -> Ctx -> Scopes -> Nat -> List Stmt -> Either Diag Scopes -> Either Diag Scopes
+  loopFixFrom _ _ _ _ _ (Left d) = Left d
+  loopFixFrom fuel ctx sc id body (Right sc') =
+    if eqScopes (joinScopes sc sc') sc
+      then Right (joinScopes sc sc')
+      else loopFix fuel ctx (joinScopes sc sc') id body
 
 checkFun : Nat -> Ctx -> Fun -> Either Diag ()
 checkFun fuel ctx f =

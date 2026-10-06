@@ -51,6 +51,7 @@ pub enum Stmt {
         id: u32,
         place: u32,
         name: String,
+        ty: Ty,
         rhs: Expr,
     },
     Drop {
@@ -127,6 +128,7 @@ pub enum Expr {
         id: u32,
         place: u32,
         name: String,
+        ty: Ty,
         rhs: Box<Expr>,
     },
     Use {

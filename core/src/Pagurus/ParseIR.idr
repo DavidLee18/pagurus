@@ -56,16 +56,19 @@ mutual
         case parseExprs args of
           Left e => Left e
           Right as => Right (ECall n callee as)
-  parseExpr (Lst (Atom "assign-e" :: id :: place :: Atom name :: rhs :: [])) =
+  parseExpr (Lst (Atom "assign-e" :: id :: place :: Atom name :: ty :: rhs :: [])) =
     case natOf id of
       Left e => Left e
       Right n =>
         case natOf place of
           Left e => Left e
           Right p =>
-            case parseExpr rhs of
+            case tyOf ty of
               Left e => Left e
-              Right e => Right (EAssign n p name e)
+              Right t =>
+                case parseExpr rhs of
+                  Left e => Left e
+                  Right e => Right (EAssign n p name t e)
   parseExpr (Lst (Atom "use" :: id :: args)) =
     case natOf id of
       Left e => Left e
@@ -121,16 +124,19 @@ mutual
                 case parseExpr init of
                   Left e => Left e
                   Right e => Right (SDecl n p name t (Just e))
-  parseStmt (Lst (Atom "assign" :: id :: place :: Atom name :: rhs :: [])) =
+  parseStmt (Lst (Atom "assign" :: id :: place :: Atom name :: ty :: rhs :: [])) =
     case natOf id of
       Left e => Left e
       Right n =>
         case natOf place of
           Left e => Left e
           Right p =>
-            case parseExpr rhs of
+            case tyOf ty of
               Left e => Left e
-              Right e => Right (SAssign n p name e)
+              Right t =>
+                case parseExpr rhs of
+                  Left e => Left e
+                  Right e => Right (SAssign n p name t e)
   parseStmt (Lst (Atom "drop" :: id :: place :: Atom name :: [])) =
     case natOf id of
       Left e => Left e

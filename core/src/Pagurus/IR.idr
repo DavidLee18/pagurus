@@ -27,7 +27,7 @@ data Expr : Type where
   ELit : (id : Nat) -> Expr
   EMalloc : (id : Nat) -> (args : List Expr) -> Expr
   ECall : (id : Nat) -> (callee : String) -> (args : List Expr) -> Expr
-  EAssign : (id : Nat) -> (place : Place) -> (name : String) -> (rhs : Expr) -> Expr
+  EAssign : (id : Nat) -> (place : Place) -> (name : String) -> (ty : Ty) -> (rhs : Expr) -> Expr
   EUse : (id : Nat) -> (args : List Expr) -> Expr
   EUnsupported : (id : Nat) -> (reason : String) -> Expr
 
@@ -37,7 +37,7 @@ exprId (EVar id _ _) = id
 exprId (ELit id) = id
 exprId (EMalloc id _) = id
 exprId (ECall id _ _) = id
-exprId (EAssign id _ _ _) = id
+exprId (EAssign id _ _ _ _) = id
 exprId (EUse id _) = id
 exprId (EUnsupported id _) = id
 
@@ -45,7 +45,7 @@ public export
 data Stmt : Type where
   SBlock : (id : Nat) -> (body : List Stmt) -> Stmt
   SDecl : (id : Nat) -> (place : Place) -> (name : String) -> (ty : Ty) -> (init : Maybe Expr) -> Stmt
-  SAssign : (id : Nat) -> (place : Place) -> (name : String) -> (rhs : Expr) -> Stmt
+  SAssign : (id : Nat) -> (place : Place) -> (name : String) -> (ty : Ty) -> (rhs : Expr) -> Stmt
   SDrop : (id : Nat) -> (place : Place) -> (name : String) -> Stmt
   SCall : (id : Nat) -> (callee : String) -> (args : List Expr) -> Stmt
   SReturn : (id : Nat) -> (value : Maybe Expr) -> Stmt
@@ -58,7 +58,7 @@ public export
 stmtId : Stmt -> Nat
 stmtId (SBlock id _) = id
 stmtId (SDecl id _ _ _ _) = id
-stmtId (SAssign id _ _ _) = id
+stmtId (SAssign id _ _ _ _) = id
 stmtId (SDrop id _ _) = id
 stmtId (SCall id _ _) = id
 stmtId (SReturn id _) = id

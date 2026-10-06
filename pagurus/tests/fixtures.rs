@@ -578,3 +578,29 @@ fn cex4_rejected_programs_stay_rejected() {
         );
     }
 }
+
+/// pg-cex4 / PR #11 programmes: per-arg consume summaries correctly reject.
+const CEX4_PR11_FAIL: &[&str] = &[
+    "m1_move_local_free.c",
+    "m2_direct.c",
+    "m3_cond_df.c",
+    "m4_chain.c",
+    "m5_dup_arg.c",
+    "m6_second_param.c",
+    "m7_uaf.c",
+    "m8_realloc_param.c",
+    "m9_recur.c",
+    "m10_mutual.c",
+    "m11_reassign.c",
+];
+
+#[test]
+fn cex4_per_arg_consume_programs_are_rejected() {
+    for name in CEX4_PR11_FAIL {
+        let diags = check(&fixture("fail", name));
+        assert!(
+            !diags.is_empty(),
+            "{name} must stay rejected (RESULTS.txt pag_rc=1), got a clean verdict"
+        );
+    }
+}

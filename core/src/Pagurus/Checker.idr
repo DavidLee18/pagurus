@@ -236,6 +236,7 @@ mutual
   consumeInExpr acc p (ECall _ callee args) = consumeInArgs acc p callee args
   consumeInExpr _ _ (EUse _ _) = Never
   consumeInExpr _ _ (ELit _) = Never
+  consumeInExpr _ _ (ENull _) = Never
   consumeInExpr _ _ (EUnsupported _ _) = Never
 
   consumeInArgs : List (String, List Consume) -> Place -> String -> List Expr -> Consume

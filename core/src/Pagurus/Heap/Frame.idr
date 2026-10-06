@@ -1396,6 +1396,43 @@ noOwnerHereSkipPtrBorrow fid id pl nm ps m ms vs a b pab pc pno =
   skipPtrBorrowGo fid id pl nm ps m ms (HVPtr b) vs a pc
     (trans (ptrArgPtr b) (cong HVPtr (sym (eqNatTrue a b pab)))) pno
 
+||| Missing Ptr value binds `HVNone`; uniqueness of leftover `a` stays in the tail.
+export
+noOwnerHereSkipPtrMiss :
+  (fid : Nat) -> (id : Nat) -> (pl : Place) -> (nm : String) ->
+  (ps : List Param) -> (m : Consume) -> (ms : List Consume) ->
+  (a : Addr) ->
+  noOwnerHere (bindFrame (MkParam id pl nm Ptr :: ps) [])
+              (bindParams fid (MkParam id pl nm Ptr :: ps) (m :: ms)) a = False ->
+  noOwnerHere (bindFrame ps []) (bindParams fid ps ms) a = False
+noOwnerHereSkipPtrMiss fid id pl nm ps m ms a pno =
+  let p1 = replace {p = \e => noOwnerHere e
+                    (bindParams fid (MkParam id pl nm Ptr :: ps) (m :: ms)) a = False}
+             (bindFramePtrNil id pl nm ps) pno
+      p2 = replace {p = \s => noOwnerHere (setH pl HVNone (bindFrame ps [])) s a = False}
+             (bindParamsPtr fid id pl nm ps m ms) p1
+  in noOwnerHereSetValConsNotA {pl} {v = HVNone} {env = bindFrame ps []}
+       {st = paramStatus m fid} {sc = bindParams fid ps ms} {a}
+       (bindFrameUK ps []) (\eq => hvNoneNotPtr eq) p2
+
+||| Extra Ptr with no modes binds `ABorrowed`; missing value is `HVNone`.
+export
+noOwnerHereSkipPtrBothMiss :
+  (fid : Nat) -> (id : Nat) -> (pl : Place) -> (nm : String) ->
+  (ps : List Param) -> (a : Addr) ->
+  noOwnerHere (bindFrame (MkParam id pl nm Ptr :: ps) [])
+              (bindParams fid (MkParam id pl nm Ptr :: ps) []) a = False ->
+  noOwnerHere (bindFrame ps []) (bindParams fid ps []) a = False
+noOwnerHereSkipPtrBothMiss fid id pl nm ps a pno =
+  let p1 = replace {p = \e => noOwnerHere e
+                    (bindParams fid (MkParam id pl nm Ptr :: ps) []) a = False}
+             (bindFramePtrNil id pl nm ps) pno
+      p2 = replace {p = \s => noOwnerHere (setH pl HVNone (bindFrame ps [])) s a = False}
+             (bindParamsPtrNil fid id pl nm ps) p1
+  in noOwnerHereSetValConsNotA {pl} {v = HVNone} {env = bindFrame ps []}
+       {st = Pagurus.Status.singleton (ABorrowed fid)} {sc = bindParams fid ps []} {a}
+       (bindFrameUK ps []) (\eq => hvNoneNotPtr eq) p2
+
 export
 skipPtrExtraGo :
   (fid : Nat) -> (id : Nat) -> (pl : Place) -> (nm : String) ->

@@ -564,11 +564,12 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} bok evs veq pMode
             (noOwnerHereSkipPtrBorrow fid id pl nm ps0 m ms0 vs0 a b pab pc pno)
       go (BOPtrLiveBorrow clive nuo pc rec) HEArgsNil veq0 _ _ _ =
         void (nilNotCons (sym veq0))
-      go (BOPtrMissCV {m} {ms} rec) HEArgsNil veq0 pM oaC pno =
+      go (BOPtrMissCV {id} {pl} {nm} {ps = ps0} {m} {ms} rec) HEArgsNil veq0 pM oaC pno =
         let scEq = rightInj (trans (sym (checkArgsModesNil ctx sc0 callee (m :: ms))) pM)
         in go rec HEArgsNil veq0
              (rewrite sym scEq in checkArgsModesNil ctx sc0 callee ms)
-             (oaRewrite scEq oaC) pno
+             (oaRewrite scEq oaC)
+             (noOwnerHereSkipPtrMiss fid id pl nm ps0 m ms a pno)
       go (BOPtrExtraLive {id} {pl} {nm} {ps = ps0} {vs = vs0} {a = b} clive nuo rec)
           (HEArgsCons v envX hX evE evEs) veq0 pM oaC pno with
           (a == b) proof pab
@@ -600,11 +601,12 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} bok evs veq pMode
             (\eq => copyNotPtrA (trans (sym ptrArgCopy) eq)) pno)
       go (BOPtrExtraCopy rec) HEArgsNil veq0 _ _ _ =
         void (nilNotCons (sym veq0))
-      go (BOPtrBothMiss rec) HEArgsNil veq0 pM oaC pno =
+      go (BOPtrBothMiss {id} {pl} {nm} {ps = ps0} rec) HEArgsNil veq0 pM oaC pno =
         let scEq = rightInj (trans (sym (checkArgsModesNil ctx sc0 callee [])) pM)
         in go rec HEArgsNil veq0
              (rewrite sym scEq in checkArgsModesNil ctx sc0 callee [])
-             (oaRewrite scEq oaC) pno
+             (oaRewrite scEq oaC)
+             (noOwnerHereSkipPtrBothMiss fid id pl nm ps0 a pno)
 
       ownConsumed :
         {m : Consume} -> {ms0 : List Consume} -> {vs0 : List HVal} ->
@@ -1113,7 +1115,12 @@ mutual
     in MkLN (hFromOk out) (nuoRewrite scEq ln.nuoLN) ln.liveLN
   stmtLN ln eq HSDeclNonePtr {fuel = S k} {s = SDecl id n nm Ptr Nothing} =
     let out = declPtrNoneH k id n nm eq ln.oaLN
-    in MkLN (hFromOk out) (nuoSetHPlaceNot ln.nuoLN noneNotPtrA) ln.liveLN
+        scEq = rightInj (trans (sym (checkStmtDeclPtrNone k ctx sc id n nm)) eq)
+    in MkLN (hFromOk out)
+         (nuoRewrite scEq
+            (nuoSetHPlaceNot {st' = Pagurus.Status.singleton AEmpty}
+               ln.nuoLN noneNotPtrA))
+         ln.liveLN
   stmtLN ln eq HSLoopZ {fuel = S k} {s = SLoop lid bod} =
     let sub = loopFixSub k ctx sc lid bod sc1
                 (trans (sym (checkStmtLoop k ctx sc lid bod)) eq)
@@ -2125,37 +2132,42 @@ mutual
         ||| Inspect `v` first so matching `HECall` / `HERealloc` refines the
         ||| eval result instead of fighting the parent `v`.
         ownerCase :
+          {sc1 : Scopes} ->
           HEvalExpr {funs} env h (ECall id callee args) (HROk v env' h') ->
           sc1 = sc' -> Owner = fl ->
           LiveNuo env' h' sc1 a ->
           TakeLN fl v env' h' sc' a
-        ownerCase ev0 scEq flEq ln1 with (v)
-          ownerCase ev0 scEq flEq ln1 | HVNone = noneGo ev0
+        ownerCase {sc1} ev0 scEq flEq ln1 with (v)
+          ownerCase {sc1} ev0 scEq flEq ln1 | HVNone = noneGo ev0
             where
               noneGo :
                 HEvalExpr {funs} env h (ECall id callee args)
                   (HROk HVNone env' h') ->
                 TakeLN fl HVNone env' h' sc' a
               noneGo (HECall _ _ _ _) =
-                MkTLN (MkLN (oaRewrite scEq ln1.oaLN) (nuoRewrite scEq ln1.nuoLN) ln1.liveLN)
+                MkTLN (MkLN (oaRewrite {xs = sc1} {ys = sc'} scEq ln1.oaLN)
+                         (nuoRewrite {sc1 = sc1} {sc2 = sc'} scEq ln1.nuoLN) ln1.liveLN)
                   (replace {p = \f => HTaken f HVNone env' h' sc'} flEq
                      (replace {p = \s => HTaken Owner HVNone env' h' s} scEq HOwnNone))
               noneGo (HECallUser _ _ _ _ _ _ _ _ _ _) =
-                MkTLN (MkLN (oaRewrite scEq ln1.oaLN) (nuoRewrite scEq ln1.nuoLN) ln1.liveLN)
+                MkTLN (MkLN (oaRewrite {xs = sc1} {ys = sc'} scEq ln1.oaLN)
+                         (nuoRewrite {sc1 = sc1} {sc2 = sc'} scEq ln1.nuoLN) ln1.liveLN)
                   (replace {p = \f => HTaken f HVNone env' h' sc'} flEq
                      (replace {p = \s => HTaken Owner HVNone env' h' s} scEq HOwnNone))
               noneGo (HECallUserRet _ _ _ _ _ _ _ _ _ _) =
-                MkTLN (MkLN (oaRewrite scEq ln1.oaLN) (nuoRewrite scEq ln1.nuoLN) ln1.liveLN)
+                MkTLN (MkLN (oaRewrite {xs = sc1} {ys = sc'} scEq ln1.oaLN)
+                         (nuoRewrite {sc1 = sc1} {sc2 = sc'} scEq ln1.nuoLN) ln1.liveLN)
                   (replace {p = \f => HTaken f HVNone env' h' sc'} flEq
                      (replace {p = \s => HTaken Owner HVNone env' h' s} scEq HOwnNone))
-          ownerCase ev0 scEq flEq ln1 | HVPtr b = ptrGo ev0
+          ownerCase {sc1} ev0 scEq flEq ln1 | HVPtr b = ptrGo ev0
             where
               ptrGo :
                 HEvalExpr {funs} env h (ECall id callee args)
                   (HROk (HVPtr b) env' h') ->
                 TakeLN fl (HVPtr b) env' h' sc' a
               ptrGo (HERealloc pName pMiss env1 h1 evs) =
-                MkTLN (MkLN (oaRewrite scEq ln1.oaLN) (nuoRewrite scEq ln1.nuoLN) ln1.liveLN)
+                MkTLN (MkLN (oaRewrite {xs = sc1} {ys = sc'} scEq ln1.oaLN)
+                         (nuoRewrite {sc1 = sc1} {sc2 = sc'} scEq ln1.nuoLN) ln1.liveLN)
                   (replace {p = \f => HTaken f (HVPtr b) env' h' sc'} flEq
                      (replace {p = \s => HTaken Owner (HVPtr b) env' h' s} scEq
                         (replace {p = \x => HTaken Owner (HVPtr x) env' h' sc1}
@@ -2167,10 +2179,10 @@ mutual
               callNotCopy :
                 HEvalExpr {funs} env h (ECall id callee args)
                   (HROk HVCopy env' h') -> Void
-              callNotCopy (HECall _ _ _ _) impossible
-              callNotCopy (HECallUser _ _ _ _ _ _ _ _ _ _) impossible
-              callNotCopy (HECallUserRet _ _ _ _ _ _ _ _ _ _) impossible
-              callNotCopy (HERealloc _ _ _ _ _) impossible
+                callNotCopy (HECall _ _ _ _) impossible
+                callNotCopy (HECallUser _ _ _ _ _ _ _ _ _ _) impossible
+                callNotCopy (HECallUserRet _ _ _ _ _ _ _ _ _ _) impossible
+                callNotCopy (HERealloc _ _ _ _ _) impossible
 
   reallocTakeLN :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->

@@ -219,6 +219,7 @@ takeVarWildContra ctx nid n nm eq oa look noneC = go (lookupPlace n sc) Refl
                      liveA = replace {p = \x => cell h x = Just Live} same liveB
                  in nothingNotJustH (trans (sym noneC) liveA)
 
+export
 takeVarCopyContra :
   (ctx : Ctx) -> (nid : Nat) -> (n : Place) -> (nm : String) ->
   {sc, sc' : Scopes} -> {env : HEnv} -> {h : Heap} -> {fl : Flag} ->

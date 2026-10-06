@@ -1,0 +1,11 @@
+error[double_free]: double free of `p`
+ --> double_free.c:8:10
+  |
+8 |     free(p);
+  |          ^ freed here again
+note: first freed here
+ --> double_free.c:7:10
+  |
+7 |     free(p);
+  |          ^ first freed here
+help: this pointer was already consumed by free; do not free it a second time

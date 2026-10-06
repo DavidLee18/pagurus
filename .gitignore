@@ -1,0 +1,8 @@
+/target
+core/build
+**/*.rs.bk
+.idea/
+.vscode/
+*.swp
+*.ttc
+*.ttm

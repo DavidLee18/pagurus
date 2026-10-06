@@ -1,0 +1,6 @@
+error[unsupported]: unsupported construct: goto is not modelled
+ --> unsupported_goto.c:3:5
+  |
+3 |     goto skip;
+  |     ^ unsupported here
+help: rewrite this using the supported C subset (see README); pagurus rejects what it cannot prove

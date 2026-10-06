@@ -1,0 +1,11 @@
+error[use_after_free]: use of freed value `p`
+  --> use_after_free.c:11:13
+   |
+11 |     inspect(p);
+   |             ^ used here after free
+note: value freed here
+  --> use_after_free.c:10:10
+   |
+10 |     free(p);
+   |          ^ value freed here
+help: this pointer was consumed by free and must not be used afterwards

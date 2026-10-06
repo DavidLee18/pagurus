@@ -1,0 +1,23 @@
+package pagurus-core
+version = 0.1.0
+authors = "pagurus contributors"
+license = "MIT"
+
+sourcedir = "src"
+depends = base
+
+modules = Pagurus.IR
+        , Pagurus.Status
+        , Pagurus.Step
+        , Pagurus.Lattice
+        , Pagurus.Checker
+        , Pagurus.Store
+        , Pagurus.Conc
+        , Pagurus.Soundness
+        , Pagurus.Safety
+        , Pagurus.Sexp
+        , Pagurus.ParseIR
+        , Pagurus.Output
+
+main = Main
+executable = pagurus-core

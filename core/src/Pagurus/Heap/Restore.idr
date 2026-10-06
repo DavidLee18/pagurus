@@ -513,7 +513,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} bok evs veq pMode
         skipExtra rec evE evEs (consTailEq veq0) pM oaC pno
       go (BOCopyC rec) HEArgsNil veq0 _ _ _ =
         void (nilNotCons (sym veq0))
-      go (BOCopyV rec) HEArgsNil veq0 pM oaC pno =
+      go (BOCopyV {m} {ms} rec) HEArgsNil veq0 pM oaC pno =
         let scEq = rightInj (trans (sym (checkArgsModesNil ctx sc0 callee (m :: ms))) pM)
         in go rec HEArgsNil veq0
              (rewrite sym scEq in checkArgsModesNil ctx sc0 callee ms)
@@ -563,7 +563,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} bok evs veq pMode
           skipUse pc rec evE evEs (consTailEq veq0) pM oaC pno
       go (BOPtrLiveBorrow rec) HEArgsNil veq0 _ _ _ =
         void (nilNotCons (sym veq0))
-      go (BOPtrMissCV rec) HEArgsNil veq0 pM oaC pno =
+      go (BOPtrMissCV {m} {ms} rec) HEArgsNil veq0 pM oaC pno =
         let scEq = rightInj (trans (sym (checkArgsModesNil ctx sc0 callee (m :: ms))) pM)
         in go rec HEArgsNil veq0
              (rewrite sym scEq in checkArgsModesNil ctx sc0 callee ms)
@@ -1046,14 +1046,21 @@ mutual
         LiveNuo env h sc1 a
       dropNoneNuo Nothing pL pDr _ =
         void (leftNotRight (trans (sym (dropPlaceNothing pL)) pDr))
-      dropNoneNuo (Just st0) pL pDr out0 with (stepStatus st0 Drop nid) proof pS
-        dropNoneNuo (Just st0) pL pDr out0 | Left d =
-          void (leftNotRight (trans (sym (dropPlaceJustL pL pS)) pDr))
-        dropNoneNuo (Just st0) pL pDr out0 | Right stD =
-          let scEq = rightInj (trans (sym (dropPlaceJust pL pS)) pDr)
-              nuo' = nuoRewrite scEq
-                       (nuoSetPlaceMiss {st' = stD} ln.nuoLN (lookNotPtrNone none))
-          in MkLN (hFromOk out0) nuo' ln.liveLN
+      dropNoneNuo (Just st0) pL pDr out0 =
+        dropStep (stepStatus st0 Drop nid) Refl out0
+        where
+          dropStep :
+            (res : Either Diag Status) ->
+            stepStatus st0 Drop nid = res ->
+            HSafeOut (HOk env h) sc1 ->
+            LiveNuo env h sc1 a
+          dropStep (Left d) pS _ =
+            void (leftNotRight (trans (sym (dropPlaceJustL pL pS)) pDr))
+          dropStep (Right stD) pS out1 =
+            let scEq = rightInj (trans (sym (dropPlaceJust pL pS)) pDr)
+                nuo' = nuoRewrite scEq
+                         (nuoSetPlaceMiss {st' = stD} ln.nuoLN (lookNotPtrNone none))
+            in MkLN (hFromOk out1) nuo' ln.liveLN
   stmtLN ln eq (HSDropMiss {n} {nid} {nm} miss) {fuel = S k} =
     let out = dropMissH k ctx nid n nm eq ln.oaLN miss
         pDrop = trans (sym (checkStmtDrop k ctx sc nid n nm)) eq
@@ -1067,14 +1074,21 @@ mutual
         LiveNuo env h sc1 a
       dropMissNuo Nothing pL pDr _ =
         void (leftNotRight (trans (sym (dropPlaceNothing pL)) pDr))
-      dropMissNuo (Just st0) pL pDr out0 with (stepStatus st0 Drop nid) proof pS
-        dropMissNuo (Just st0) pL pDr out0 | Left d =
-          void (leftNotRight (trans (sym (dropPlaceJustL pL pS)) pDr))
-        dropMissNuo (Just st0) pL pDr out0 | Right stD =
-          let scEq = rightInj (trans (sym (dropPlaceJust pL pS)) pDr)
-              nuo' = nuoRewrite scEq
-                       (nuoSetPlaceMiss {st' = stD} ln.nuoLN (lookNotPtrMiss miss))
-          in MkLN (hFromOk out0) nuo' ln.liveLN
+      dropMissNuo (Just st0) pL pDr out0 =
+        dropStep (stepStatus st0 Drop nid) Refl out0
+        where
+          dropStep :
+            (res : Either Diag Status) ->
+            stepStatus st0 Drop nid = res ->
+            HSafeOut (HOk env h) sc1 ->
+            LiveNuo env h sc1 a
+          dropStep (Left d) pS _ =
+            void (leftNotRight (trans (sym (dropPlaceJustL pL pS)) pDr))
+          dropStep (Right stD) pS out1 =
+            let scEq = rightInj (trans (sym (dropPlaceJust pL pS)) pDr)
+                nuo' = nuoRewrite scEq
+                         (nuoSetPlaceMiss {st' = stD} ln.nuoLN (lookNotPtrMiss miss))
+            in MkLN (hFromOk out1) nuo' ln.liveLN
   stmtLN ln eq HSDeclNoneCopy {fuel = S k} {s = SDecl id n nm Copy Nothing} =
     let out = declCopyNoneH k id n nm eq ln.oaLN
     in MkLN (hFromOk out) ln.nuoLN ln.liveLN
@@ -1896,13 +1910,19 @@ mutual
             mvGo Nothing pL =
               let (_ ** lpT) = ln.oaLN.tracked n (HVPtr b) lookV
               in void (nothingNotJust (trans (sym pL) lpT))
-            mvGo (Just st) pL with (movePlace sc n nid nm) proof pM
-              mvGo (Just st) pL | Left d =
-                void (leftNotRight (trans (sym (takeVarJustL ctx pL pM)) pT))
-              mvGo (Just st) pL | Right sc1 =
-                replace {p = \s => movePlace sc n nid nm = Right s}
-                  (cong fst (rightInj (trans (sym (takeVarJustR ctx pL pM)) pT)))
-                  pM
+            mvGo (Just st) pL =
+              moveOk (movePlace sc n nid nm) Refl
+              where
+                moveOk :
+                  (res : Either Diag Scopes) ->
+                  movePlace sc n nid nm = res ->
+                  movePlace sc n nid nm = Right sc'
+                moveOk (Left d) pMv =
+                  void (leftNotRight (trans (sym (takeVarJustL ctx pL pMv)) pT))
+                moveOk (Right sc1) pMv =
+                  replace {p = \s => movePlace sc n nid nm = Right s}
+                    (cong fst (rightInj (trans (sym (takeVarJustR ctx pL pMv)) pT)))
+                    pMv
   takeLN ln eq (HEVarNone none) {e = EVar nid n nm} =
     let ht = takeVarH ctx nid n nm eq ln.oaLN (HEVarNone none)
     in MkTLN (MkLN (htFromOk ht) (nuoMoveOrGhost ln eq none) ln.liveLN)
@@ -2068,28 +2088,30 @@ mutual
                 (trans (sym (checkExprCall ctx sc id callee args)) pE))) eq))
               flEq = cong snd (rightInj (trans (sym (takeReallocRight pF
                 (trans (sym (checkExprCall ctx sc id callee args)) pE))) eq))
-          in ownerFrom ev scEq (sym flEq) ln1
+          in ownerCase ev Refl scEq flEq ln1
 
-        ||| `HECall` / `HECallUser` / `HECallUserRet` return `HVNone`.
-        ||| `HERealloc` is dispatched above. Owner+HVNone is `HOwnNone`.
-        ownerFrom :
-          HEvalExpr {funs} env h (ECall id callee args) (HROk v env' h') ->
-          sc1 = sc' -> fl = Owner ->
+        ||| Local `v0` so matching `HECall` refines the eval result without
+        ||| fighting the parent `v`. `Owner = fl` matches `takeReallocRight`.
+        ownerCase :
+          {v0 : HVal} ->
+          HEvalExpr {funs} env h (ECall id callee args) (HROk v0 env' h') ->
+          v0 = v ->
+          sc1 = sc' -> Owner = fl ->
           LiveNuo env' h' sc1 a ->
           TakeLN fl v env' h' sc' a
-        ownerFrom (HECall _ _ _ _) scEq flEq ln1 =
+        ownerCase (HECall _ _ _ _) Refl scEq flEq ln1 =
           MkTLN (MkLN (oaRewrite scEq ln1.oaLN) (nuoRewrite scEq ln1.nuoLN) ln1.liveLN)
             (replace {p = \f => HTaken f HVNone env' h' sc'} flEq
                (replace {p = \s => HTaken Owner HVNone env' h' s} scEq HOwnNone))
-        ownerFrom (HECallUser _ _ _ _ _ _ _ _ _ _) scEq flEq ln1 =
+        ownerCase (HECallUser _ _ _ _ _ _ _ _ _ _) Refl scEq flEq ln1 =
           MkTLN (MkLN (oaRewrite scEq ln1.oaLN) (nuoRewrite scEq ln1.nuoLN) ln1.liveLN)
             (replace {p = \f => HTaken f HVNone env' h' sc'} flEq
                (replace {p = \s => HTaken Owner HVNone env' h' s} scEq HOwnNone))
-        ownerFrom (HECallUserRet _ _ _ _ _ _ _ _ _ _) scEq flEq ln1 =
+        ownerCase (HECallUserRet _ _ _ _ _ _ _ _ _ _) Refl scEq flEq ln1 =
           MkTLN (MkLN (oaRewrite scEq ln1.oaLN) (nuoRewrite scEq ln1.nuoLN) ln1.liveLN)
             (replace {p = \f => HTaken f HVNone env' h' sc'} flEq
                (replace {p = \s => HTaken Owner HVNone env' h' s} scEq HOwnNone))
-        ownerFrom (HERealloc _ _ _ _ _) scEq flEq ln1 =
+        ownerCase (HERealloc _ _ _ _ _) Refl scEq flEq ln1 =
           MkTLN (MkLN (oaRewrite scEq ln1.oaLN) (nuoRewrite scEq ln1.nuoLN) ln1.liveLN)
             (replace {p = \f => HTaken f HVNone env' h' sc'} flEq
                (replace {p = \s => HTaken Owner HVNone env' h' s} scEq HOwnNone))
@@ -2353,7 +2375,7 @@ mutual
           in asgTakeOwner scEq flEq tln
           where
             asgTakeOwner :
-              sc2 = sc' -> fl = Owner ->
+              sc2 = sc' -> Owner = fl ->
               TakeLN Owner v env1 h1 scT a ->
               TakeLN fl v (setH n v env1) h1 sc' a
             asgTakeOwner scEq flEq tln =

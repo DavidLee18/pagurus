@@ -1317,7 +1317,7 @@ mutual
       {e = ECall id callee args} =
     nestedTakeCallLN ln eq (HECallUserRet pB f look pDef env1 h1 evs envB hB evBody)
   takeLN ln eq (HERealloc pName pMiss env1 h1 evs) {e = ECall id callee args} =
-    nestedTakeCallLN ln eq (HERealloc pName pMiss env1 h1 evs)
+    reallocTakeLN ln eq pName evs
   takeLN ln eq (HEAsgPtr w env1 h1 ev) {e = EAssign id n nm Ptr rhs} =
     asgPtrTakeLN {funs} {chk} ln eq ev
 
@@ -1330,12 +1330,12 @@ mutual
     LiveNuo env h sc a ->
     takeOwner ctx sc (ECall id callee args) = Right (sc', fl) ->
     HEvalExpr {funs} env h (ECall id callee args) (HROk v env' h') ->
-    LiveNuo env' h' sc' a
+    TakeLN fl v env' h' sc' a
   nestedTakeCallLN ln eq ev = tGo (checkExpr ctx sc (ECall id callee args)) Refl
     where
       tGo : (res : Either Diag Scopes) ->
             checkExpr ctx sc (ECall id callee args) = res ->
-            LiveNuo env' h' sc' a
+            TakeLN fl v env' h' sc' a
       tGo (Left d) pE =
         void (leftNotRight (trans (sym (takeCallLeft pE)) eq))
       tGo (Right sc1) pE =
@@ -1346,14 +1346,86 @@ mutual
             isRealloc callee && not (isDefined ctx callee) = fresh ->
             LiveNuo env' h' sc1 a ->
             checkExpr ctx sc (ECall id callee args) = Right sc1 ->
-            LiveNuo env' h' sc' a
+            TakeLN fl v env' h' sc' a
       tFl False pF ln1 pE =
         let scEq = cong fst (rightInj (trans (sym (takeCallRight pF pE)) eq))
-        in MkLN (oaRewrite scEq ln1.oaLN) (nuoRewrite scEq ln1.nuoLN) ln1.liveLN
+            flEq = cong snd (rightInj (trans (sym (takeCallRight pF pE)) eq))
+        in MkTLN (MkLN (oaRewrite scEq ln1.oaLN) (nuoRewrite scEq ln1.nuoLN) ln1.liveLN)
+             (replace {p = \f => HTaken f v env' h' sc'} flEq
+                (replace {p = \s => HTaken Ghost v env' h' s} scEq HGh))
       tFl True pF ln1 pE =
         let scEq = cong fst (rightInj (trans (sym (takeReallocRight pF
               (trans (sym (checkExprCall ctx sc id callee args)) pE))) eq))
-        in MkLN (oaRewrite scEq ln1.oaLN) (nuoRewrite scEq ln1.nuoLN) ln1.liveLN
+            flEq = cong snd (rightInj (trans (sym (takeReallocRight pF
+              (trans (sym (checkExprCall ctx sc id callee args)) pE))) eq))
+        in reallocTaken scEq flEq ln1
+
+      reallocTaken :
+        sc1 = sc' -> fl = Owner ->
+        LiveNuo env' h' sc1 a ->
+        TakeLN fl v env' h' sc' a
+      reallocTaken scEq flEq ln1 with (v)
+        reallocTaken scEq flEq ln1 | HVNone =
+          MkTLN (MkLN (oaRewrite scEq ln1.oaLN) (nuoRewrite scEq ln1.nuoLN) ln1.liveLN)
+            (replace {p = \f => HTaken f HVNone env' h' sc'} flEq
+               (replace {p = \s => HTaken Owner HVNone env' h' s} scEq HOwnNone))
+
+  reallocTakeLN :
+    {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
+    {auto chk : FunsChecked cfuel ctx funs} ->
+    {env, env1 : HEnv} -> {h, h1 : Heap} ->
+    {id : Nat} -> {callee : String} -> {args : List Expr} ->
+    {sc, sc' : Scopes} -> {a : Addr} -> {fl : Flag} ->
+    LiveNuo env h sc a ->
+    takeOwner ctx sc (ECall id callee args) = Right (sc', fl) ->
+    isReallocName callee = True ->
+    HEvalReallocArgs {funs} env h args (HROk HVNone env1 h1) ->
+    TakeLN fl (HVPtr (fst (alloc h1))) env1 (snd (alloc h1)) sc' a
+  reallocTakeLN ln eq pName evs = rGo (checkCall ctx sc id callee args) Refl
+    where
+      rGo : (res : Either Diag Scopes) ->
+            checkCall ctx sc id callee args = res ->
+            TakeLN fl (HVPtr (fst (alloc h1))) env1 (snd (alloc h1)) sc' a
+      rGo (Left d) pC =
+        void (leftNotRight (trans (sym (takeCallLeft pC)) eq))
+      rGo (Right sc1) pC =
+        let ln1 = reallocArgsLN {funs} {chk} ln pC evs
+            nf = liveNotFresh h1 ln1.oaLN.wf a ln1.liveLN
+            pF = trans (cong (\r => r && Delay (not (isDefined ctx callee)))
+                           (reallocNameEq callee))
+                   (rewrite pName in Refl)
+        in rFl (isRealloc callee && not (isDefined ctx callee)) Refl ln1 pC
+
+      rFl : {sc1 : Scopes} -> (fresh : Bool) ->
+            isRealloc callee && not (isDefined ctx callee) = fresh ->
+            LiveNuo env1 h1 sc1 a ->
+            checkCall ctx sc id callee args = Right sc1 ->
+            TakeLN fl (HVPtr (fst (alloc h1))) env1 (snd (alloc h1)) sc' a
+      rFl False pF ln1 pC =
+        let scEq = cong fst (rightInj (trans (sym (takeCallRight pF
+              (trans (checkExprCall ctx sc id callee args) pC))) eq))
+            flEq = cong snd (rightInj (trans (sym (takeCallRight pF
+              (trans (checkExprCall ctx sc id callee args) pC))) eq))
+            nf = liveNotFresh h1 ln1.oaLN.wf a ln1.liveLN
+            oaA = oaAlloc ln1.oaLN
+        in MkTLN (MkLN (oaRewrite scEq oaA) (nuoRewrite scEq ln1.nuoLN)
+                   (trans (allocPresCell h1 a nf) ln1.liveLN))
+             (replace {p = \f => HTaken f (HVPtr (fst (alloc h1))) env1
+                                   (snd (alloc h1)) sc'} flEq
+                (replace {p = \s => HTaken Ghost (HVPtr (fst (alloc h1))) env1
+                                     (snd (alloc h1)) s} scEq HGh))
+      rFl True pF ln1 pC =
+        let scEq = cong fst (rightInj (trans (sym (takeReallocRight pF pC)) eq))
+            flEq = cong snd (rightInj (trans (sym (takeReallocRight pF pC)) eq))
+            nf = liveNotFresh h1 ln1.oaLN.wf a ln1.liveLN
+            oaA = oaAlloc ln1.oaLN
+        in MkTLN (MkLN (oaRewrite scEq oaA) (nuoRewrite scEq ln1.nuoLN)
+                   (trans (allocPresCell h1 a nf) ln1.liveLN))
+             (replace {p = \f => HTaken f (HVPtr (fst (alloc h1))) env1
+                                   (snd (alloc h1)) sc'} flEq
+                (replace {p = \s => HTaken Owner (HVPtr (fst (alloc h1))) env1
+                                     (snd (alloc h1)) s} scEq
+                   (HOwnLive (allocCell h1) (inHandAlloc ln1.oaLN))))
 
   asgPtrLN :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
@@ -1374,32 +1446,44 @@ mutual
       asgPtrGo (Left d) pT =
         void (leftNotRight (trans (sym (stmtAsgPtrLeft k id n nm pT)) eq))
       asgPtrGo (Right (scT, Ghost)) pT =
-        let ln1 = takeLN {funs} {chk} ln pT ev
+        let tln = takeLN {funs} {chk} ln pT ev
+            ln1 = tln.lnTLN
             scEq = rightInj (trans (sym (stmtAsgPtrGhost k id n nm pT)) eq)
         in MkLN (oaRewrite scEq (oaBindDead ln1.oaLN))
              (nuoRewrite scEq (nuoBindDead ln1.nuoLN emptyUnsafeUse))
              ln1.liveLN
       asgPtrGo (Right (scT, Null)) pT =
-        let ln1 = takeLN {funs} {chk} ln pT ev
+        let tln = takeLN {funs} {chk} ln pT ev
+            ln1 = tln.lnTLN
             scEq = rightInj (trans (sym (stmtAsgPtrNull k id n nm pT)) eq)
-        in MkLN (oaRewrite scEq (oaBindNull (case v of
-             HVNone => ln1.oaLN
-             _ => ln1.oaLN)))
+        in MkLN (oaRewrite scEq (oaBindNull ln1.oaLN))
              (nuoRewrite scEq (nuoBindNull ln1.nuoLN))
              ln1.liveLN
       asgPtrGo (Right (scT, Owner)) pT =
-        let ln1 = takeLN {funs} {chk} ln pT ev
+        let tln = takeLN {funs} {chk} ln pT ev
             scEq = rightInj (trans (sym (stmtAsgPtrOwner k id n nm pT)) eq)
-        in case valNotPtrA {a} v of
-             Left veq =>
-               -- Owner of leftover `a`: take of unique owner, contradicted
-               -- by nuo of the source (takeLiveNuoContra / malloc freshness).
-               -- Binding AOwned of `a` would introduce a unique owner.
-               void (asgOwnerA ln1 veq)
-             Right nv =>
-               MkLN (oaRewrite scEq (oaBindDead ln1.oaLN))
-                 (nuoRewrite scEq (nuoSetHPlaceNot ln1.nuoLN nv))
-                 ln1.liveLN
+        in asgOwnerBind scEq tln
+        where
+          asgOwnerBind :
+            sc1 = setPlace n (Pagurus.Status.singleton AOwned) scT ->
+            TakeLN Owner v env1 h1 scT a ->
+            LiveNuo (setH n v env1) h1 sc1 a
+          asgOwnerBind scEq tln with (tln.tkTLN)
+            asgOwnerBind scEq tln | HOwnNone =
+              MkLN (oaRewrite scEq (bindOwner tln.lnTLN.oaLN HOwnNone))
+                (nuoRewrite scEq (nuoSetHPlaceNot tln.lnTLN.nuoLN noneNotPtrA))
+                tln.lnTLN.liveLN
+            asgOwnerBind scEq tln | HOwnLive {a = b} live ih =
+              case valNotPtrA {a} (HVPtr b) of
+                Left veq =>
+                  void (tln.lnTLN.nuoLN n (Pagurus.Status.singleton AOwned)
+                    (rewrite veq in lookupHSetHit n (HVPtr a) env1)
+                    (lookupPlaceSetHit n (Pagurus.Status.singleton AOwned) scT)
+                    ownedSafeUse ownedSingletonOwned ownedNoBorrow)
+                Right nv =>
+                  MkLN (oaRewrite scEq (bindOwner tln.lnTLN.oaLN (HOwnLive live ih)))
+                    (nuoRewrite scEq (nuoSetHPlaceNot tln.lnTLN.nuoLN nv))
+                    tln.lnTLN.liveLN
 
   asgPtrExprLN :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
@@ -1420,13 +1504,15 @@ mutual
       asgPtrExprGo (Left d) pT =
         void (leftNotRight (trans (sym (checkExprAsgPtrLeft id n nm pT)) eq))
       asgPtrExprGo (Right (scT, Ghost)) pT =
-        let ln1 = takeLN {funs} {chk} ln pT ev
+        let tln = takeLN {funs} {chk} ln pT ev
+            ln1 = tln.lnTLN
             scEq = rightInj (trans (sym (checkExprAsgPtrGhost id n nm pT)) eq)
         in MkLN (oaRewrite scEq (oaBindDead ln1.oaLN))
              (nuoRewrite scEq (nuoBindDead ln1.nuoLN emptyUnsafeUse))
              ln1.liveLN
       asgPtrExprGo (Right (scT, Null)) pT =
-        let ln1 = takeLN {funs} {chk} ln pT ev
+        let tln = takeLN {funs} {chk} ln pT ev
+            ln1 = tln.lnTLN
             scEq = rightInj (trans (sym (checkExprAsgPtrNull id n nm pT)) eq)
         in MkLN (oaRewrite scEq ln1.oaLN)
              (nuoRewrite scEq (nuoBindNull ln1.nuoLN))
@@ -1436,20 +1522,28 @@ mutual
         asgPtrExprGo (Right (scT, Owner)) pT | Left d =
           void (leftNotRight (trans (sym (checkExprAsgPtrUseFail pT pU)) eq))
         asgPtrExprGo (Right (scT, Owner)) pT | Right sc2 =
-          let ln1 = takeLN {funs} {chk} ln pT ev
+          let tln = takeLN {funs} {chk} ln pT ev
+              ln1 = tln.lnTLN
               scEq = rightInj (trans (sym (checkExprAsgPtrOwner pT pU)) eq)
-          in case valNotPtrA {a} v of
-               Left veq =>
-                 void (ln1.nuoLN n (Pagurus.Status.singleton AOwned)
-                   (rewrite veq in lookupHSetHit n (HVPtr a) env1)
-                   (lookupPlaceSetHit n (Pagurus.Status.singleton AOwned) scT)
-                   ownedSafeUse ownedSingletonOwned ownedNoBorrow)
-               Right nv =>
-                 MkLN (oaRewrite scEq (oaUsePlace
-                     (bindOwner ln1.oaLN HOwnNone) pU))
-                   (nuoRewrite scEq (nuoUse (nuoSetHPlaceNot ln1.nuoLN nv) pU
-                     (lookupHSetHit n v env1)))
+          in case tln.tkTLN of
+               HOwnNone =>
+                 MkLN (oaRewrite scEq (oaUsePlace (bindOwner ln1.oaLN HOwnNone) pU))
+                   (nuoRewrite scEq (nuoUse (nuoSetHPlaceNot ln1.nuoLN noneNotPtrA) pU
+                     (lookupHSetHit n HVNone env1)))
                    ln1.liveLN
+               HOwnLive {a = b} live ih =>
+                 case valNotPtrA {a} (HVPtr b) of
+                   Left veq =>
+                     void (ln1.nuoLN n (Pagurus.Status.singleton AOwned)
+                       (rewrite veq in lookupHSetHit n (HVPtr a) env1)
+                       (lookupPlaceSetHit n (Pagurus.Status.singleton AOwned) scT)
+                       ownedSafeUse ownedSingletonOwned ownedNoBorrow)
+                   Right nv =>
+                     MkLN (oaRewrite scEq (oaUsePlace
+                         (bindOwner ln1.oaLN (HOwnLive live ih)) pU))
+                       (nuoRewrite scEq (nuoUse (nuoSetHPlaceNot ln1.nuoLN nv) pU
+                         (lookupHSetHit n (HVPtr b) env1)))
+                       ln1.liveLN
 
   asgPtrTakeLN :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
@@ -1460,41 +1554,75 @@ mutual
     LiveNuo env h sc a ->
     takeOwner ctx sc (EAssign id n nm Ptr rhs) = Right (sc', fl) ->
     HEvalExpr {funs} env h rhs (HROk v env1 h1) ->
-    LiveNuo (setH n v env1) h1 sc' a
+    TakeLN fl v (setH n v env1) h1 sc' a
   asgPtrTakeLN ln eq ev = asgPtrTakeGo (takeOwner ctx sc rhs) Refl
     where
       asgPtrTakeGo :
         (res : Either Diag (Scopes, Flag)) ->
         takeOwner ctx sc rhs = res ->
-        LiveNuo (setH n v env1) h1 sc' a
+        TakeLN fl v (setH n v env1) h1 sc' a
       asgPtrTakeGo (Left d) pT =
         void (leftNotRight (trans (sym (takeAsgPtrLeft id n nm pT)) eq))
       asgPtrTakeGo (Right (scT, Ghost)) pT =
-        let ln1 = takeLN {funs} {chk} ln pT ev
+        let tln = takeLN {funs} {chk} ln pT ev
+            ln1 = tln.lnTLN
             scEq = cong fst (rightInj (trans (sym (takeAsgPtrGhost id n nm pT)) eq))
-        in MkLN (oaRewrite scEq (oaBindDead ln1.oaLN))
-             (nuoRewrite scEq (nuoBindDead ln1.nuoLN emptyUnsafeUse))
-             ln1.liveLN
+            flEq = cong snd (rightInj (trans (sym (takeAsgPtrGhost id n nm pT)) eq))
+        in MkTLN (MkLN (oaRewrite scEq (oaBindDead ln1.oaLN))
+                   (nuoRewrite scEq (nuoBindDead ln1.nuoLN emptyUnsafeUse))
+                   ln1.liveLN)
+             (replace {p = \f => HTaken f v (setH n v env1) h1 sc'} flEq
+                (replace {p = \s => HTaken Ghost v (setH n v env1) h1 s} scEq HGh))
       asgPtrTakeGo (Right (scT, Null)) pT =
-        let ln1 = takeLN {funs} {chk} ln pT ev
+        let tln = takeLN {funs} {chk} ln pT ev
+            ln1 = tln.lnTLN
             scEq = cong fst (rightInj (trans (sym (takeAsgPtrNull id n nm pT)) eq))
-        in MkLN (oaRewrite scEq ln1.oaLN)
-             (nuoRewrite scEq (nuoBindNull ln1.nuoLN))
-             ln1.liveLN
+            flEq = cong snd (rightInj (trans (sym (takeAsgPtrNull id n nm pT)) eq))
+        in MkTLN (MkLN (oaRewrite scEq ln1.oaLN)
+                   (nuoRewrite scEq (nuoBindNull ln1.nuoLN))
+                   ln1.liveLN)
+             (replace {p = \f => HTaken f v (setH n v env1) h1 sc'} flEq
+                (replace {p = \s => HTaken Null v (setH n v env1) h1 s} scEq HNull))
       asgPtrTakeGo (Right (scT, Owner)) pT with
           (movePlace (setPlace n (Pagurus.Status.singleton AOwned) scT) n id nm) proof pM
         asgPtrTakeGo (Right (scT, Owner)) pT | Left d =
           void (leftNotRight (trans (sym (takeAsgPtrFail pT pM)) eq))
         asgPtrTakeGo (Right (scT, Owner)) pT | Right sc2 =
-          let ln1 = takeLN {funs} {chk} ln pT ev
+          let tln = takeLN {funs} {chk} ln pT ev
               scEq = cong fst (rightInj (trans (sym (takeAsgPtrOwner pT pM)) eq))
-          in case valNotPtrA {a} v of
-               Left veq => void (asgOwnerA ln1 veq)
-               Right nv =>
-                 MkLN (oaRewrite scEq ln1.oaLN)
-                   (nuoRewrite scEq (nuoMove (nuoSetHPlaceNot ln1.nuoLN nv) pM
-                     (lookupHSetHit n v env1)))
-                   ln1.liveLN
+              flEq = cong snd (rightInj (trans (sym (takeAsgPtrOwner pT pM)) eq))
+          in asgTakeOwner scEq flEq tln
+          where
+            asgTakeOwner :
+              sc2 = sc' -> fl = Owner ->
+              TakeLN Owner v env1 h1 scT a ->
+              TakeLN fl v (setH n v env1) h1 sc' a
+            asgTakeOwner scEq flEq tln with (tln.tkTLN)
+              asgTakeOwner scEq flEq tln | HOwnNone =
+                let oaB = bindOwner tln.lnTLN.oaLN HOwnNone
+                    oaM = oaMovePlace oaB pM
+                    nuo' = nuoMove (nuoSetHPlaceNot tln.lnTLN.nuoLN noneNotPtrA) pM
+                             (lookupHSetHit n HVNone env1)
+                in MkTLN (MkLN (oaRewrite scEq oaM) (nuoRewrite scEq nuo') tln.lnTLN.liveLN)
+                     (replace {p = \f => HTaken f HVNone (setH n HVNone env1) h1 sc'} flEq
+                        (replace {p = \s => HTaken Owner HVNone (setH n HVNone env1) h1 s} scEq
+                           (takenAfterBindMove HOwnNone oaB pM)))
+              asgTakeOwner scEq flEq tln | HOwnLive {a = b} live ih =
+                case valNotPtrA {a} (HVPtr b) of
+                  Left veq =>
+                    void (tln.lnTLN.nuoLN n (Pagurus.Status.singleton AOwned)
+                      (rewrite veq in lookupHSetHit n (HVPtr a) env1)
+                      (lookupPlaceSetHit n (Pagurus.Status.singleton AOwned) scT)
+                      ownedSafeUse ownedSingletonOwned ownedNoBorrow)
+                  Right nv =>
+                    let oaB = bindOwner tln.lnTLN.oaLN (HOwnLive live ih)
+                        oaM = oaMovePlace oaB pM
+                        nuo' = nuoMove (nuoSetHPlaceNot tln.lnTLN.nuoLN nv) pM
+                                 (lookupHSetHit n (HVPtr b) env1)
+                    in MkTLN (MkLN (oaRewrite scEq oaM) (nuoRewrite scEq nuo') tln.lnTLN.liveLN)
+                         (replace {p = \f => HTaken f (HVPtr b) (setH n (HVPtr b) env1) h1 sc'} flEq
+                            (replace {p = \s => HTaken Owner (HVPtr b) (setH n (HVPtr b) env1) h1 s} scEq
+                               (takenAfterBindMove (HOwnLive live ih) oaB pM)))
 
   declPtrLN :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
@@ -1515,30 +1643,39 @@ mutual
       declGo (Left d) pT =
         void (leftNotRight (trans (sym (declPtrLeft k id n nm pT)) eq))
       declGo (Right (scT, Ghost)) pT =
-        let ln1 = takeLN {funs} {chk} ln pT ev
+        let tln = takeLN {funs} {chk} ln pT ev
+            ln1 = tln.lnTLN
             scEq = rightInj (trans (sym (declPtrGhostEq k id n nm pT)) eq)
         in MkLN (oaRewrite scEq (oaBindDead ln1.oaLN))
              (nuoRewrite scEq (nuoBindDead ln1.nuoLN emptyUnsafeUse))
              ln1.liveLN
       declGo (Right (scT, Null)) pT =
-        let ln1 = takeLN {funs} {chk} ln pT ev
+        let tln = takeLN {funs} {chk} ln pT ev
+            ln1 = tln.lnTLN
             scEq = rightInj (trans (sym (declPtrNullEq k id n nm pT)) eq)
         in MkLN (oaRewrite scEq ln1.oaLN)
              (nuoRewrite scEq (nuoBindNull ln1.nuoLN))
              ln1.liveLN
       declGo (Right (scT, Owner)) pT =
-        let ln1 = takeLN {funs} {chk} ln pT ev
+        let tln = takeLN {funs} {chk} ln pT ev
+            ln1 = tln.lnTLN
             scEq = rightInj (trans (sym (declPtrOwner k id n nm pT)) eq)
-        in case valNotPtrA {a} v of
-             Left veq =>
-               void (ln1.nuoLN n (Pagurus.Status.singleton AOwned)
-                 (rewrite veq in lookupHSetHit n (HVPtr a) env1)
-                 (lookupPlaceSetHit n (Pagurus.Status.singleton AOwned) scT)
-                 ownedSafeUse ownedSingletonOwned ownedNoBorrow)
-             Right nv =>
+        in case tln.tkTLN of
+             HOwnNone =>
                MkLN (oaRewrite scEq (bindOwner ln1.oaLN HOwnNone))
-                 (nuoRewrite scEq (nuoSetHPlaceNot ln1.nuoLN nv))
+                 (nuoRewrite scEq (nuoSetHPlaceNot ln1.nuoLN noneNotPtrA))
                  ln1.liveLN
+             HOwnLive {a = b} live ih =>
+               case valNotPtrA {a} (HVPtr b) of
+                 Left veq =>
+                   void (ln1.nuoLN n (Pagurus.Status.singleton AOwned)
+                     (rewrite veq in lookupHSetHit n (HVPtr a) env1)
+                     (lookupPlaceSetHit n (Pagurus.Status.singleton AOwned) scT)
+                     ownedSafeUse ownedSingletonOwned ownedNoBorrow)
+                 Right nv =>
+                   MkLN (oaRewrite scEq (bindOwner ln1.oaLN (HOwnLive live ih)))
+                     (nuoRewrite scEq (nuoSetHPlaceNot ln1.nuoLN nv))
+                     ln1.liveLN
 
   ifElseLN :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
@@ -1831,7 +1968,8 @@ mutual
       retVarLN (Left d) pT =
         void (leftNotRight (trans (sym (retVarLeft k ctx nid pT)) eq))
       retVarLN (Right (scT, fl)) pT =
-        let ln1 = takeLN {funs} {chk} ln pT ev
+        let tln = takeLN {funs} {chk} ln pT ev
+            ln1 = tln.lnTLN
         in ln1.liveLN
   retJustLN ln eq ev {e = ELit id} =
     (exprLN {funs} {chk} ln (trans (sym (checkStmtRetLit k ctx sc nid id)) eq) ev).liveLN
@@ -1931,8 +2069,8 @@ mutual
       tGo (Left d) pT =
         void (leftNotRight (trans (sym (reallocTailLeft es pT)) eq))
       tGo (Right (sc1, fl)) pT =
-        let ln1 = takeLN {funs} {chk} ln pT evE
-        in exprsBorrowLN {funs} {chk} ln1
+        let tln = takeLN {funs} {chk} ln pT evE
+        in exprsBorrowLN {funs} {chk} tln.lnTLN
              (trans (sym (reallocTailRight es pT)) eq) evEs
 
   exprsCallConsLN :
@@ -1978,7 +2116,7 @@ mutual
     LiveNuo env' h' sc' a
   exprsModesLN ln eq evE evEs {modes = []} =
     let (sc1 ** (fl ** (pT, pEs))) = argsModesExtraSplit eq
-        ln1 = takeLN {funs} {chk} ln pT evE
+        ln1 = (takeLN {funs} {chk} ln pT evE).lnTLN
     in exprsModesRest {funs} {chk} {modes = []} ln1 pEs evEs
   exprsModesLN ln eq evE evEs {modes = m :: ms} with (doesConsume m) proof pc
     exprsModesLN ln eq evE evEs {modes = m :: ms} | False =
@@ -1987,7 +2125,7 @@ mutual
       in exprsModesRest {funs} {chk} {modes = ms} ln1 pEs evEs
     exprsModesLN ln eq evE evEs {modes = m :: ms} | True =
       let (sc1 ** (fl ** (pT, pEs))) = argsModesMoveSplit pc eq
-          ln1 = takeLN {funs} {chk} ln pT evE
+          ln1 = (takeLN {funs} {chk} ln pT evE).lnTLN
       in exprsModesRest {funs} {chk} {modes = ms} ln1 pEs evEs
 
   exprsModesRest :

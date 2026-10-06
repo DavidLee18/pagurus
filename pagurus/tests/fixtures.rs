@@ -356,3 +356,73 @@ fn cex2_false_accepts_and_rejects_are_rejected() {
         );
     }
 }
+
+/// pg-cex3 programmes that pagurus accepted at c3de693 (`pag_rc=0`).
+const CEX3_PASS: &[&str] = &["cast_lhs_assign.c", "two_sinks.c"];
+
+/// pg-cex3 programmes rejected by the checker at c3de693 (`pag_rc=1`).
+const CEX3_FAIL: &[&str] = &[
+    "calloc_df.c",
+    "cast_arith_hidden.c",
+    "cast_char_void.c",
+    "cast_launder_int.c",
+    "cast_long_plus0.c",
+    "cast_long_roundtrip.c",
+    "cast_uintptr_alias.c",
+    "consume2_same.c",
+    "fnptr_free.c",
+    "fnptr_wrapper.c",
+    "id_alias.c",
+    "id_alias_only_q.c",
+    "if_guard_free.c",
+    "mutual_rec.c",
+    "null_after_free.c",
+    "param_consume_unseen.c",
+    "pp_addr_consume.c",
+    "pp_deref_free.c",
+    "realloc_df.c",
+    "realloc_ok.c",
+    "return_p_alias.c",
+    "strdup_df.c",
+    "unary_addr.c",
+    "variadic_consume.c",
+    "wrap_cond_free.c",
+    "wrap_free_first.c",
+    "wrap_move_then_free.c",
+    "wrap_myfree_twice.c",
+    "wrap_of_wrapper.c",
+];
+
+#[test]
+fn cex3_accepted_programs_stay_accepted() {
+    for name in CEX3_PASS {
+        let diags = check(&fixture("pass", name));
+        assert!(
+            diags.is_empty(),
+            "{name} must stay accepted (RESULTS.txt pag_rc=0), got {diags:?}"
+        );
+    }
+}
+
+#[test]
+fn cex3_rejected_programs_stay_rejected() {
+    for name in CEX3_FAIL {
+        let diags = check(&fixture("fail", name));
+        assert!(
+            !diags.is_empty(),
+            "{name} must stay rejected (RESULTS.txt pag_rc=1), got a clean verdict"
+        );
+    }
+}
+
+#[test]
+fn cex3_stmt_expr_stays_a_parse_failure() {
+    let path = fixture("fail", "stmt_expr.c");
+    let err = check_file(&path).expect_err(
+        "RESULTS.txt pag_rc=2: GNU statement-expression must fail to parse, not reach the checker",
+    );
+    assert!(
+        err.to_string().contains("failed to parse"),
+        "expected a parse error, got {err}"
+    );
+}

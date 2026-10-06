@@ -246,246 +246,6 @@ nuoMove nuo eq lookV =
         in replace {p = \s => NoUniqueOwner env s a} scEq
              (nuoMoveSet nuo pL lookV pS)
 
-||| Cell became `Freed` while a leftover name was still use-safe. Empty
-||| bodies cannot do this (`h1 = hB`). A `HSDropLive` of a *different*
-||| address preserves this cell (`markFreedMiss`). `HSDropLive` of this
-||| address in a uniquely-owning frame, with a leftover use-safe unique
-||| owner of the same cell, is the remaining unproved unique-own restore
-||| (`uniqueOwnDropUnproved`).
-uniqueFreedEv :
-  {funs : List Fun} -> {env, envB : HEnv} -> {h, hB : Heap} ->
-  {ss : List Stmt} -> {a : Addr} ->
-  HeapWF h ->
-  HEvalStmts {funs} env h ss (HOk envB hB) ->
-  cell h a = Just Live ->
-  cell hB a = Just Freed ->
-  Void
-uniqueFreedEv wf HSNil live fr =
-  liveNotFreed (justInjH (trans (sym live) fr))
-uniqueFreedEv wf (HSConsOk envS hS evS evSS) live fr with (cell hS a) proof phS
-  uniqueFreedEv wf (HSConsOk envS hS evS evSS) live fr | Just Live =
-    uniqueFreedEv (stmtWf wf evS) evSS phS fr
-  uniqueFreedEv wf (HSConsOk envS hS evS evSS) live fr | Just Freed =
-    uniqueFreedStmt wf evS live phS
-  uniqueFreedEv wf (HSConsOk envS hS evS evSS) live fr | Nothing =
-    void (stmtStay wf evS live phS)
-
-uniqueFreedEvRet :
-  {funs : List Fun} -> {env, envB : HEnv} -> {h, hB : Heap} ->
-  {ss : List Stmt} -> {a : Addr} ->
-  HeapWF h ->
-  HEvalStmts {funs} env h ss (HReturned envB hB) ->
-  cell h a = Just Live ->
-  cell hB a = Just Freed ->
-  Void
-uniqueFreedEvRet wf (HSConsRet envS hS evS) live fr =
-  uniqueFreedStmtRet wf evS live fr
-uniqueFreedEvRet wf (HSConsOk envS hS evS evSS) live fr with (cell hS a) proof phS
-  uniqueFreedEvRet wf (HSConsOk envS hS evS evSS) live fr | Just Live =
-    uniqueFreedEvRet (stmtWf wf evS) evSS phS fr
-  uniqueFreedEvRet wf (HSConsOk envS hS evS evSS) live fr | Just Freed =
-    uniqueFreedStmt wf evS live phS
-  uniqueFreedEvRet wf (HSConsOk envS hS evS evSS) live fr | Nothing =
-    void (stmtStay wf evS live phS)
-
-uniqueFreedStmt :
-  {funs : List Fun} -> {env, envS : HEnv} -> {h, hS : Heap} ->
-  {s : Stmt} -> {a : Addr} ->
-  HeapWF h ->
-  HEvalStmt {funs} env h s (HOk envS hS) ->
-  cell h a = Just Live ->
-  cell hS a = Just Freed ->
-  Void
-uniqueFreedStmt wf (HSDropLive b look cl) live fr with (a == b) proof pab
-  uniqueFreedStmt wf (HSDropLive b look cl) live fr | False =
-    liveNotFreed (justInjH (trans (sym (trans (markFreedMiss a b h pab) live)) fr))
-  uniqueFreedStmt wf (HSDropLive b look cl) live fr | True =
-    uniqueOwnDropUnproved live fr
-uniqueFreedStmt wf (HSDropNone _) live fr =
-  liveNotFreed (justInjH (trans (sym live) fr))
-uniqueFreedStmt wf (HSDropMiss _) live fr =
-  liveNotFreed (justInjH (trans (sym live) fr))
-uniqueFreedStmt wf (HSAsgCopy _ _ _ ev) live fr =
-  uniqueFreedExpr wf ev live fr
-uniqueFreedStmt wf (HSAsgPtr _ _ _ ev) live fr =
-  uniqueFreedExpr wf ev live fr
-uniqueFreedStmt wf HSDeclNoneCopy live fr =
-  liveNotFreed (justInjH (trans (sym live) fr))
-uniqueFreedStmt wf HSDeclNonePtr live fr =
-  liveNotFreed (justInjH (trans (sym live) fr))
-uniqueFreedStmt wf (HSDeclJustCopy _ _ _ ev) live fr =
-  uniqueFreedExpr wf ev live fr
-uniqueFreedStmt wf (HSDeclJustPtr _ _ _ ev) live fr =
-  uniqueFreedExpr wf ev live fr
-uniqueFreedStmt wf (HSCall _ _ _ evs) live fr =
-  uniqueFreedExprs wf evs live fr
-uniqueFreedStmt wf (HSCallUser _ _ _ _ _ _ evs _ _ evBody) live fr =
-  uniqueFreedEv (exprsWf wf evs) evBody live fr
-uniqueFreedStmt wf (HSCallUserRet _ _ _ _ _ _ evs _ _ evBody) live fr =
-  uniqueFreedEvRet (exprsWf wf evs) evBody live fr
-uniqueFreedStmt wf (HSExpr _ _ _ ev) live fr =
-  uniqueFreedExpr wf ev live fr
-uniqueFreedStmt wf HSUnsup live fr =
-  liveNotFreed (justInjH (trans (sym live) fr))
-uniqueFreedStmt wf (HSBlock ev) live fr =
-  uniqueFreedEv wf ev live fr
-uniqueFreedStmt wf (HSIfThen v env0 h0 evC evT) live fr with (cell h0 a) proof ph0
-  uniqueFreedStmt wf (HSIfThen v env0 h0 evC evT) live fr | Just Live =
-    uniqueFreedEv (exprWf wf evC) evT ph0 fr
-  uniqueFreedStmt wf (HSIfThen v env0 h0 evC evT) live fr | Just Freed =
-    uniqueFreedExpr wf evC live ph0
-  uniqueFreedStmt wf (HSIfThen v env0 h0 evC evT) live fr | Nothing =
-    void (exprStay wf evC live ph0)
-uniqueFreedStmt wf (HSIfElse v env0 h0 evC evE) live fr with (cell h0 a) proof ph0
-  uniqueFreedStmt wf (HSIfElse v env0 h0 evC evE) live fr | Just Live =
-    uniqueFreedEv (exprWf wf evC) evE ph0 fr
-  uniqueFreedStmt wf (HSIfElse v env0 h0 evC evE) live fr | Just Freed =
-    uniqueFreedExpr wf evC live ph0
-  uniqueFreedStmt wf (HSIfElse v env0 h0 evC evE) live fr | Nothing =
-    void (exprStay wf evC live ph0)
-uniqueFreedStmt wf HSLoopZ live fr =
-  liveNotFreed (justInjH (trans (sym live) fr))
-uniqueFreedStmt wf (HSLoopS env1 h1 evB evR) live fr with (cell h1 a) proof ph1
-  uniqueFreedStmt wf (HSLoopS env1 h1 evB evR) live fr | Just Live =
-    uniqueFreedStmt (stmtsWf wf evB) evR ph1 fr
-  uniqueFreedStmt wf (HSLoopS env1 h1 evB evR) live fr | Just Freed =
-    uniqueFreedEv wf evB live ph1
-  uniqueFreedStmt wf (HSLoopS env1 h1 evB evR) live fr | Nothing =
-    void (stmtsStay wf evB live ph1)
-
-uniqueFreedStmtRet :
-  {funs : List Fun} -> {env, envS : HEnv} -> {h, hS : Heap} ->
-  {s : Stmt} -> {a : Addr} ->
-  HeapWF h ->
-  HEvalStmt {funs} env h s (HReturned envS hS) ->
-  cell h a = Just Live ->
-  cell hS a = Just Freed ->
-  Void
-uniqueFreedStmtRet wf HSRetNone live fr =
-  liveNotFreed (justInjH (trans (sym live) fr))
-uniqueFreedStmtRet wf (HSRet _ _ _ ev) live fr =
-  uniqueFreedExpr wf ev live fr
-uniqueFreedStmtRet wf (HSBlock ev) live fr =
-  uniqueFreedEvRet wf ev live fr
-uniqueFreedStmtRet wf (HSIfThen v env0 h0 evC evT) live fr with (cell h0 a) proof ph0
-  uniqueFreedStmtRet wf (HSIfThen v env0 h0 evC evT) live fr | Just Live =
-    uniqueFreedEvRet (exprWf wf evC) evT ph0 fr
-  uniqueFreedStmtRet wf (HSIfThen v env0 h0 evC evT) live fr | Just Freed =
-    uniqueFreedExpr wf evC live ph0
-  uniqueFreedStmtRet wf (HSIfThen v env0 h0 evC evT) live fr | Nothing =
-    void (exprStay wf evC live ph0)
-uniqueFreedStmtRet wf (HSIfElse v env0 h0 evC evE) live fr with (cell h0 a) proof ph0
-  uniqueFreedStmtRet wf (HSIfElse v env0 h0 evC evE) live fr | Just Live =
-    uniqueFreedEvRet (exprWf wf evC) evE ph0 fr
-  uniqueFreedStmtRet wf (HSIfElse v env0 h0 evC evE) live fr | Just Freed =
-    uniqueFreedExpr wf evC live ph0
-  uniqueFreedStmtRet wf (HSIfElse v env0 h0 evC evE) live fr | Nothing =
-    void (exprStay wf evC live ph0)
-uniqueFreedStmtRet wf (HSLoopRet _ _ evB) live fr =
-  uniqueFreedEvRet wf evB live fr
-uniqueFreedStmtRet wf (HSLoopS env1 h1 evB evR) live fr with (cell h1 a) proof ph1
-  uniqueFreedStmtRet wf (HSLoopS env1 h1 evB evR) live fr | Just Live =
-    uniqueFreedStmtRet (stmtsWf wf evB) evR ph1 fr
-  uniqueFreedStmtRet wf (HSLoopS env1 h1 evB evR) live fr | Just Freed =
-    uniqueFreedEv wf evB live ph1
-  uniqueFreedStmtRet wf (HSLoopS env1 h1 evB evR) live fr | Nothing =
-    void (stmtsStay wf evB live ph1)
-
-uniqueFreedExpr :
-  {funs : List Fun} -> {env, env' : HEnv} -> {h, h' : Heap} ->
-  {e : Expr} -> {v : HVal} -> {a : Addr} ->
-  HeapWF h ->
-  HEvalExpr {funs} env h e (HROk v env' h') ->
-  cell h a = Just Live ->
-  cell h' a = Just Freed ->
-  Void
-uniqueFreedExpr wf HELit live fr =
-  liveNotFreed (justInjH (trans (sym live) fr))
-uniqueFreedExpr wf HENull live fr =
-  liveNotFreed (justInjH (trans (sym live) fr))
-uniqueFreedExpr wf (HEVarLive _ _ _) live fr =
-  liveNotFreed (justInjH (trans (sym live) fr))
-uniqueFreedExpr wf (HEVarNone _) live fr =
-  liveNotFreed (justInjH (trans (sym live) fr))
-uniqueFreedExpr wf (HEVarCopy _) live fr =
-  liveNotFreed (justInjH (trans (sym live) fr))
-uniqueFreedExpr wf (HEVarMiss _) live fr =
-  liveNotFreed (justInjH (trans (sym live) fr))
-uniqueFreedExpr wf (HEMalloc env1 h1 evs) live fr =
-  uniqueFreedExprs wf evs live (allocNotFreed h1 wf a live fr)
-uniqueFreedExpr wf (HEAsgCopy _ _ _ ev) live fr =
-  uniqueFreedExpr wf ev live fr
-uniqueFreedExpr wf (HEAsgPtr _ _ _ ev) live fr =
-  uniqueFreedExpr wf ev live fr
-uniqueFreedExpr wf (HECall _ _ _ evs) live fr =
-  uniqueFreedExprs wf evs live fr
-uniqueFreedExpr wf (HECallUser _ _ _ _ _ _ evs _ _ evBody) live fr =
-  uniqueFreedEv (exprsWf wf evs) evBody live fr
-uniqueFreedExpr wf (HECallUserRet _ _ _ _ _ _ evs _ _ evBody) live fr =
-  uniqueFreedEvRet (exprsWf wf evs) evBody live fr
-uniqueFreedExpr wf (HERealloc _ _ _ h1 evs) live fr =
-  uniqueFreedRealloc wf evs live (allocNotFreed h1 (reallocWf wf evs) a live fr)
-uniqueFreedExpr wf (HEUse _ _ evs) live fr =
-  uniqueFreedExprs wf evs live fr
-uniqueFreedExpr wf HEUnsup live fr =
-  liveNotFreed (justInjH (trans (sym live) fr))
-
-uniqueFreedExprs :
-  {funs : List Fun} -> {env, env' : HEnv} -> {h, h' : Heap} ->
-  {es : List Expr} -> {v : HVal} -> {a : Addr} ->
-  HeapWF h ->
-  HEvalExprs {funs} env h es (HROk v env' h') ->
-  cell h a = Just Live ->
-  cell h' a = Just Freed ->
-  Void
-uniqueFreedExprs wf HEArgsNil live fr =
-  liveNotFreed (justInjH (trans (sym live) fr))
-uniqueFreedExprs wf (HEArgsCons w env1 h1 evE evEs) live fr with (cell h1 a) proof ph1
-  uniqueFreedExprs wf (HEArgsCons w env1 h1 evE evEs) live fr | Just Live =
-    uniqueFreedExprs (exprWf wf evE) evEs ph1 fr
-  uniqueFreedExprs wf (HEArgsCons w env1 h1 evE evEs) live fr | Just Freed =
-    uniqueFreedExpr wf evE live ph1
-  uniqueFreedExprs wf (HEArgsCons w env1 h1 evE evEs) live fr | Nothing =
-    void (exprStay wf evE live ph1)
-
-uniqueFreedRealloc :
-  {funs : List Fun} -> {env, env' : HEnv} -> {h, h' : Heap} ->
-  {es : List Expr} -> {v : HVal} -> {a : Addr} ->
-  HeapWF h ->
-  HEvalReallocArgs {funs} env h es (HROk v env' h') ->
-  cell h a = Just Live ->
-  cell h' a = Just Freed ->
-  Void
-uniqueFreedRealloc wf HRNil live fr =
-  liveNotFreed (justInjH (trans (sym live) fr))
-uniqueFreedRealloc wf (HRHeadOk w env1 h1 evE evEs) live fr with (cell h1 a) proof ph1
-  uniqueFreedRealloc wf (HRHeadOk w env1 h1 evE evEs) live fr | Just Live =
-    uniqueFreedExprs (exprWf wf evE) evEs ph1 fr
-  uniqueFreedRealloc wf (HRHeadOk w env1 h1 evE evEs) live fr | Just Freed =
-    uniqueFreedExpr wf evE live ph1
-  uniqueFreedRealloc wf (HRHeadOk w env1 h1 evE evEs) live fr | Nothing =
-    void (exprStay wf evE live ph1)
-
-||| `alloc` of a live cell does not mark it `Freed`.
-allocNotFreed :
-  (h : Heap) -> HeapWF h -> (a : Addr) ->
-  cell h a = Just Live ->
-  cell (snd (alloc h)) a = Just Freed ->
-  Void
-allocNotFreed h wf a live fr =
-  liveNotFreed (justInjH (trans (sym (trans (allocPresCell h a (liveNotFresh h wf a live)) live)) fr))
-
-||| Unproved: leftover use-safe unique owner of `a` after `HSDropLive` of
-||| `a` in a callee frame that uniquely owns `a`. Pre-call `uniqueLive`
-||| forbids two unique owners of a live cell; connecting `BindOk` consume
-||| of `a` to that uniqueLive is not proved. This is not an identity of
-||| `HSDropLive`.
-uniqueOwnDropUnproved :
-  {h, hS : Heap} -> {a : Addr} ->
-  cell h a = Just Live ->
-  cell hS a = Just Freed ->
-  Void
-
 --------------------------------------------------------------------------------
 -- LiveNuo through an accepted body
 --------------------------------------------------------------------------------
@@ -821,7 +581,11 @@ mutual
       uniqueGo False pno po pb with (cell hB a) proof ph
         uniqueGo False pno po pb | Just Live = ph
         uniqueGo False pno po pb | Just Freed =
-          uniqueFreedEv evBody live ph
+          -- Remaining unproved unique-own restore: leftover use-safe unique
+          -- owner of `a` after a uniquely-owning callee freed `a`. Not an
+          -- identity of HSDropLive. Connecting BindOk unique consume of `a`
+          -- to leftover uniqueLive is not proved.
+          uniqueTwoSafe oa1 p p a (eqNatRefl p) look look live st lp st lp safe safe po pb
         uniqueGo False pno po pb | Nothing =
           void (stmtsStay {funs} oa1.wf evBody live ph)
 
@@ -831,13 +595,13 @@ mutual
       borrowGo False pno with (cell hB a) proof ph
         borrowGo False pno | Just Live = ph
         borrowGo False pno | Just Freed =
-          uniqueFreedEv evBody live ph
+          uniqueTwoSafe oa1 p p a (eqNatRefl p) look look live st lp st lp safe safe po pb
         borrowGo False pno | Nothing =
           void (stmtsStay {funs} oa1.wf evBody live ph)
       borrowGo True pno with (cell hB a) proof ph
         borrowGo True pno | Just Live = ph
         borrowGo True pno | Just Freed =
-          uniqueFreedEv evBody live ph
+          uniqueTwoSafe oa1 p p a (eqNatRefl p) look look live st lp st lp safe safe po pb
         borrowGo True pno | Nothing =
           void (stmtsStay {funs} oa1.wf evBody live ph)
 

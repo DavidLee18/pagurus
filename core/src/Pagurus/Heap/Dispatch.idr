@@ -615,6 +615,42 @@ mutual
   userCallBound {funs} {chk} {ctx} (Right (pr, pd)) pB f look pDef evs evBody eq oa oa1 Nothing =
     userCallNoneIdBody evBody oa1
 
+  ||| BindOk missing: empty body leaves the leftover heap unchanged.
+  userCallNone :
+    {funs : List Fun} -> {ctx : Ctx} ->
+    {id : Nat} -> {callee : String} -> {args : List Expr} ->
+    {env1, envB : HEnv} -> {h1, hB : Heap} -> {sc, sc' : Scopes} ->
+    {ss : List Stmt} ->
+    isBuiltin callee = False ->
+    isDefined ctx callee = True ->
+    checkCall ctx sc id callee args = Right sc' ->
+    HEvalStmts {funs} envB h1 ss (HOk envB hB) ->
+    OverApprox env1 h1 sc' ->
+    HSafeRes (HROk HVNone env1 hB) sc'
+  userCallNone pb pd eq HSNil oa1 =
+    restoreCaller oa1 oa1.wf safeLiveId
+  userCallNone pb pd eq (HSConsOk envS hS evS evSS) oa1 with
+      (aliasBad ctx args callee) proof pbad
+    userCallNone pb pd eq (HSConsOk envS hS evS evSS) oa1 | True =
+      void (leftNotRight (trans (sym (checkCallMixedAlias pb pd pbad)) eq))
+
+  userCallNoneIdBody :
+    {funs : List Fun} -> {env1, envB : HEnv} -> {h1, hB : Heap} ->
+    {sc' : Scopes} -> {ss : List Stmt} ->
+    HEvalStmts {funs} envB h1 ss (HOk envB hB) ->
+    OverApprox env1 h1 sc' ->
+    HSafeRes (HROk HVNone env1 hB) sc'
+  userCallNoneIdBody HSNil oa1 = restoreCaller oa1 oa1.wf safeLiveId
+
+  retNoneId :
+    {funs : List Fun} -> {env1, envB : HEnv} -> {h1, hB : Heap} ->
+    {sc' : Scopes} -> {ss : List Stmt} ->
+    HEvalStmts {funs} envB h1 ss (HReturned envB hB) ->
+    OverApprox env1 h1 sc' ->
+    HSafeRes (HROk HVNone env1 hB) sc'
+  retNoneId (HSConsRet envS hS HSRetNone) oa1 =
+    restoreCaller oa1 oa1.wf safeLiveId
+
   userCallGo :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
     {auto chk : FunsChecked cfuel ctx funs} ->
@@ -708,6 +744,7 @@ mutual
       crashBound {funs} {chk} {ctx} pB f look pDef evs evBody eq oa oa1 Nothing | Left pd | True =
         void (leftNotRight (trans (sym (checkCallMixedAlias
           (replace {p = \b => b = False} (builtinEq callee) pB) pd pbad)) eq))
+
 
   userCallRunRet :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->

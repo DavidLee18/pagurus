@@ -934,6 +934,17 @@ notUniqueStFalse st prf =
       (ow, nb) = orFalse rest
   in (u, eqFalseIsTrue ow, notNothingFalse nb)
 
+export
+lookupHConsHit : (k : Place) -> (v : HVal) -> (xs : HEnv) ->
+                 lookupH k ((k, v) :: xs) = Just v
+lookupHConsHit k v xs = rewrite eqNatRefl k in Refl
+
+export
+lookupHConsMiss : (p, k : Place) -> (v : HVal) -> (xs : HEnv) ->
+                  p == k = False ->
+                  lookupH p ((k, v) :: xs) = lookupH p xs
+lookupHConsMiss p k v xs ne = rewrite ne in Refl
+
 --------------------------------------------------------------------------------
 -- Construct `BindOk` (Nothing = mixed/dead; discharged at the call site)
 --------------------------------------------------------------------------------

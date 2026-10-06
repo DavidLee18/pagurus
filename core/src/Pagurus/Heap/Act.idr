@@ -1145,3 +1145,121 @@ takeOwnerNotUnique oa lookN lpN safeN ownN nbN live pT p stP lookP lpP safeP own
         uns0 = oa.uniqueLive n p a (trans (sym (eqNatSym p n)) ne)
                  lookN lookP live st lpN st0 lp0 safeN ownN nbN
     in trueNotFalse (trans (sym uns0) (trans (cong unsafeUse (sym stEq)) safeP))
+
+ownedRewriteFalse :
+  {xs, ys : Status} -> xs = ys -> hasOwned xs = False -> hasOwned ys = False
+ownedRewriteFalse Refl p = p
+
+hasOwnedTail :
+  (x : Atom) -> (xs : Status) ->
+  hasOwned (x :: xs) = False -> hasOwned xs = False
+hasOwnedTail AOwned xs prf = void (trueNotFalse prf)
+hasOwnedTail AEmpty xs prf = prf
+hasOwnedTail (ABorrowed _) xs prf = prf
+hasOwnedTail (AMoved _) xs prf = prf
+hasOwnedTail (AFreed _) xs prf = prf
+hasOwnedTail ANull xs prf = prf
+
+hasOwnedConsKeep :
+  (x : Atom) -> (xs, ys : Status) ->
+  hasOwned (x :: xs) = False ->
+  hasOwned ys = False ->
+  hasOwned (x :: ys) = False
+hasOwnedConsKeep AOwned xs ys prf _ = void (trueNotFalse prf)
+hasOwnedConsKeep AEmpty xs ys _ ih = ih
+hasOwnedConsKeep (ABorrowed _) xs ys _ ih = ih
+hasOwnedConsKeep (AMoved _) xs ys _ ih = ih
+hasOwnedConsKeep (AFreed _) xs ys _ ih = ih
+hasOwnedConsKeep ANull xs ys _ ih = ih
+
+||| Inserting `AMoved` into a status with no `AOwned` cannot create one.
+hasOwnedInsertMoved :
+  (n : Nat) -> (xs : Status) ->
+  hasOwned xs = False ->
+  hasOwned (insertSorted (AMoved n) xs) = False
+hasOwnedInsertMoved n [] Refl = Refl
+hasOwnedInsertMoved n (x :: xs) prf with (compareAtom (AMoved n) x)
+  hasOwnedInsertMoved n (x :: xs) prf | LT = prf
+  hasOwnedInsertMoved n (x :: xs) prf | EQ = prf
+  hasOwnedInsertMoved n (x :: xs) prf | GT =
+    hasOwnedConsKeep x xs (insertSorted (AMoved n) xs) prf
+      (hasOwnedInsertMoved n xs (hasOwnedTail x xs prf))
+
+||| Inserting `ANull` into a status with no `AOwned` cannot create one.
+hasOwnedInsertNull :
+  (xs : Status) ->
+  hasOwned xs = False ->
+  hasOwned (insertSorted ANull xs) = False
+hasOwnedInsertNull [] Refl = Refl
+hasOwnedInsertNull (x :: xs) prf with (compareAtom ANull x)
+  hasOwnedInsertNull (x :: xs) prf | LT = prf
+  hasOwnedInsertNull (x :: xs) prf | EQ = prf
+  hasOwnedInsertNull (x :: xs) prf | GT =
+    hasOwnedConsKeep x xs (insertSorted ANull xs) prf
+      (hasOwnedInsertNull xs (hasOwnedTail x xs prf))
+
+||| A successful `Move` never leaves `AOwned` in the result.
+export
+moveHasOwnedFalse :
+  (st : Status) -> (nid : Nat) -> (st' : Status) ->
+  stepStatus st Move nid = Right st' ->
+  hasOwned st' = False
+moveHasOwnedFalse [] _ _ Refl = Refl
+moveHasOwnedFalse (AOwned :: xs) nid st' eq with (stepStatus xs Move nid) proof pxs
+  moveHasOwnedFalse (AOwned :: xs) nid st' eq | Left d = void (leftNotRight eq)
+  moveHasOwnedFalse (AOwned :: xs) nid st' eq | Right rest =
+    ownedRewriteFalse (rightInj eq)
+      (hasOwnedInsertMoved nid rest (moveHasOwnedFalse xs nid rest pxs))
+moveHasOwnedFalse (ANull :: xs) nid st' eq with (stepStatus xs Move nid) proof pxs
+  moveHasOwnedFalse (ANull :: xs) nid st' eq | Left d = void (leftNotRight eq)
+  moveHasOwnedFalse (ANull :: xs) nid st' eq | Right rest =
+    ownedRewriteFalse (rightInj eq)
+      (hasOwnedInsertNull rest (moveHasOwnedFalse xs nid rest pxs))
+moveHasOwnedFalse (AEmpty :: xs) _ _ eq = void (leftNotRight eq)
+moveHasOwnedFalse (ABorrowed n :: xs) _ _ eq = void (leftNotRight eq)
+moveHasOwnedFalse (AMoved n :: xs) _ _ eq = void (leftNotRight eq)
+moveHasOwnedFalse (AFreed n :: xs) _ _ eq = void (leftNotRight eq)
+
+||| Invert `argVarPlace` of a named argument.
+export
+argVarIsVar :
+  (e : Expr) -> (p : Place) ->
+  argVarPlace e = Just p ->
+  (nid : Nat ** nm : String ** e = EVar nid p nm)
+argVarIsVar (EVar nid n nm) p eq =
+  rewrite sym (justInj eq) in (nid ** nm ** Refl)
+argVarIsVar (ELit _) _ eq = void (nothingNotJust eq)
+argVarIsVar (ENull _) _ eq = void (nothingNotJust eq)
+argVarIsVar (EMalloc _ _) _ eq = void (nothingNotJust eq)
+argVarIsVar (ECall _ _ _) _ eq = void (nothingNotJust eq)
+argVarIsVar (EAssign _ _ _ _ _) _ eq = void (nothingNotJust eq)
+argVarIsVar (EUse _ _) _ eq = void (nothingNotJust eq)
+argVarIsVar (EUnsupported _ _) _ eq = void (nothingNotJust eq)
+
+||| Empty remaining arguments after a consume-mode `EVar`: the named intern
+||| is not use-safe in the final `sc'`. This is the checker-side transfer
+||| lemma for a trailing May/Always named owner.
+|||
+||| The unrestricted form (arbitrary remaining arguments) is false:
+||| a later Never-mode `EAssign` *to that intern* does `assignPtrFrom False`,
+||| which `setPlace`s `AOwned`/`ANull` and can make the intern use-safe
+||| again. `mixedAlias` only inspects `argVarPlace` (`EVar`), so it does
+||| not reject that assign. Remaining Lit/Null/Var still preserve unsafety
+||| (`useKeepUnsafe` / `moveKeepUnsafe`); the BindOk zip uses
+||| `takeOwnerNotUnique` at consume-time `sc1` instead of this FINAL-sc'
+||| statement when remaining arguments are present.
+export
+consumeNamedNotSafe :
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {callee : String} ->
+  {nid : Nat} -> {n : Place} -> {nm : String} ->
+  {m : Consume} -> {ms : List Consume} ->
+  {st, stF : Status} ->
+  doesConsume m = True ->
+  checkArgsModes ctx sc callee (EVar nid n nm :: []) (m :: ms) = Right sc' ->
+  lookupPlace n sc = Just st ->
+  hasOwned st = True ->
+  lookupPlace n sc' = Just stF ->
+  unsafeUse stF = False ->
+  Void
+consumeNamedNotSafe = consumeVarHeadNotSafe
+

@@ -146,6 +146,20 @@ consumedMiss oa1 lp look safe po pb =
     Left miss => nothingNotJustH (trans (sym miss) look)
     Right none => hvNoneNotPtr (justInjH (trans (sym none) look))
 
+||| Match on `cell h a` with a propositional equality. `with (cell h a) proof`
+||| does not yield `cell h a = Just Live` because `cell` unfolds.
+cellOn :
+  {h : Heap} -> {a : Addr} -> {r : Type} ->
+  (cl : Maybe Cell) ->
+  cell h a = cl ->
+  (cell h a = Just Live -> r) ->
+  (cell h a = Just Freed -> r) ->
+  (cell h a = Nothing -> r) ->
+  r
+cellOn (Just Live) eq live _ _ = live eq
+cellOn (Just Freed) eq _ freed _ = freed eq
+cellOn Nothing eq _ _ miss = miss eq
+
 nuoRewrite :
   {env : HEnv} -> {sc1, sc2 : Scopes} -> {a : Addr} ->
   sc1 = sc2 -> NoUniqueOwner env sc1 a -> NoUniqueOwner env sc2 a
@@ -223,12 +237,9 @@ nuoMove nuo eq lookV =
                void (trueNotFalse (trans (sym uns)
                  (replace {p = \s => unsafeUse s = False} stEq safe)))
              Right safeN =>
-               nuo0 n st0 lookN lp0
-                 (stepMoveSafe st0 nid stN pSt)
-                 (moveOwnBack st0 nid stN pSt
-                    (replace {p = \s => hasOwned s = True} stEq own))
-                 (moveBorrowBack st0 nid stN pSt
-                    (replace {p = \s => hasBorrowed s = Nothing} stEq nb))
+               trueNotFalse (trans (sym
+                 (replace {p = \s => hasOwned s = True} stEq own))
+                 (moveHasOwnedFalse st0 nid stN pSt))
       nuoMoveSet nuo0 lp0 lookV0 pSt p st lookP lp safe own nb | Right ne =
         nuo0 p st lookP
           (trans (sym (lookupPlaceSetMiss p n stN sc ne)) lp)
@@ -322,8 +333,9 @@ nuoBindNull {n} {v} nuo p st look lp safe own nb with (natEqDec p n)
                   (setPlace n (Pagurus.Status.singleton ANull) sc) = Just st} eqp lp
         stEq = justInj (trans (sym lpN)
                  (lookupPlaceSetHit n (Pagurus.Status.singleton ANull) sc))
-    in trueNotFalse (trans (sym nullNotOwned)
+    in trueNotFalse (trans (sym
          (replace {p = \s => hasOwned s = True} stEq own))
+         nullNotOwned)
   nuoBindNull {n} {v} nuo p st look lp safe own nb | Right ne =
     nuo p st
       (trans (sym (lookupHSetMiss p n v env ne)) look)
@@ -381,100 +393,377 @@ record TakeLN (fl : Flag) (v : HVal) (env' : HEnv) (h' : Heap) (sc' : Scopes) (a
 -- Unique-own leftover of Freed, and leftover cells other than `a`
 --------------------------------------------------------------------------------
 
-||| Leftover use-safe unique owner of `a` after a uniquely-owning callee
-||| freed `a`. A consume-mode `EVar` of that leftover intern is moved by
-||| `takeOwner` (`takeVarOwnedUnsafe`). Two leftover unique owners of `a`
-||| are `uniqueTwoSafe`. BindOk-to-leftover-place of a non-`EVar` consume
-||| is the remaining gap: the checker's transfer lemma applies to named
-||| owners (`argVarPlace`), then BindOk zips the frame unique owner to that
-||| caller intern.
-uniqueOwnFreed :
-  {env1 : HEnv} -> {h1, hB : Heap} -> {sc' : Scopes} ->
-  {fid : Nat} -> {ps : List Param} -> {ms : List Consume} -> {vs : List HVal} ->
-  {noL : Bool} ->
-  OverApprox env1 h1 sc' ->
-  OverApprox (bindFrame ps vs) h1 (bindParams fid ps ms) ->
-  UniqueKeys (bindFrame ps vs) ->
-  (a : Addr) ->
+||| Callback: leftover use-safe intern of `a` after a uniquely-owning
+||| callee freed `a`. The inhabitant is the BindOk zip plus checker
+||| transfer (`uniqueOwnGo` in `Dispatch`): a consume-mode named argument
+||| of leftover intern `n` is not use-safe in `sc'` (`consumeNamedNotSafe`
+||| at remaining `[]`; `uniqueLive` at consume-time for `p != n`).
+public export
+LeftoverSafeFreed : HEnv -> Heap -> Heap -> Scopes -> Nat ->
+                    List Param -> List Consume -> List HVal -> Type
+LeftoverSafeFreed env1 h1 hB sc' fid ps ms vs =
+  (p : Place) -> (st : Status) -> (a : Addr) ->
   noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = False ->
-  noOwnerHere env1 sc' a = noL ->
-  (p : Place) -> (st : Status) ->
   lookupH p env1 = Just (HVPtr a) ->
   lookupPlace p sc' = Just st ->
   unsafeUse st = False ->
   cell h1 a = Just Live ->
-  hasOwned st = True ->
-  hasBorrowed st = Nothing ->
   cell hB a = Just Freed ->
   Void
-uniqueOwnFreed oa1 oaF uk a pnoF pnoL p st lp look safe live own nb ph =
-  let (q ** stQ ** (lookQ, lpQ, suQ, ownQ, nbQ)) = ownerHereWitness uk oaF pnoF
-  in leftoverAlias (lookupH q env1) Refl q stQ lookQ lpQ suQ ownQ nbQ
+
+consHeadEq : {x, y : a} -> {xs, ys : List a} -> x :: xs = y :: ys -> x = y
+consHeadEq Refl = Refl
+
+consTailEq : {x, y : a} -> {xs, ys : List a} -> x :: xs = y :: ys -> xs = ys
+consTailEq Refl = Refl
+
+nilNotCons : {x : a} -> {xs : List a} -> Not ([] = x :: xs)
+nilNotCons Refl impossible
+
+export
+callArgsModes :
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {id : Nat} -> {callee : String} ->
+  {args : List Expr} ->
+  isBuiltin callee = False ->
+  isDefined ctx callee = True ->
+  checkCall ctx sc id callee args = Right sc' ->
+  checkArgsModes ctx sc callee args (funModes ctx callee) = Right sc'
+callArgsModes pb pd eq =
+  trans (sym (checkCallDefined pb pd (callDefinedNoAlias eq pb pd))) eq
+
+||| BindOk zip: a uniquely-owning consume of leftover intern `n` naming
+||| live `a` leaves that intern not use-safe. Remaining `[]` after a
+||| consume-mode `EVar` is `takeVarOwnedUnsafe` (`p == n`) or `uniqueLive`
+||| at consume-time (`p != n`). Remaining Never-mode `EAssign` *to* `n`
+||| can `assignPtrFrom False` restore `AOwned`; that is the step at which
+||| the unrestricted FINAL-sc' transfer lemma fails.
+export
+uniqueOwnGo :
+  {funs : List Fun} -> {ctx : Ctx} -> {callee : String} ->
+  {env, env1 : HEnv} -> {h, h1, hB : Heap} -> {sc, sc' : Scopes} ->
+  {fid : Nat} -> {ps : List Param} -> {ms : List Consume} -> {vs : List HVal} ->
+  {args : List Expr} ->
+  BindOk fid h1 ps ms vs ->
+  (evs : HEvalExprs {funs} env h args (HROk HVNone env1 h1)) ->
+  vs = collectArgVals evs ->
+  checkArgsModes ctx sc callee args ms = Right sc' ->
+  OverApprox env h sc ->
+  LeftoverSafeFreed env1 h1 hB sc' fid ps ms vs
+uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} bok evs veq pModes oa0
+    p st a pnoF look lp safe live ph =
+  go bok evs veq pModes oa0 pnoF
   where
-    leftoverAlias :
-      (lq : Maybe HVal) ->
-      lookupH q env1 = lq ->
-      (q : Place) -> (stQ : Status) ->
-      lookupH q (bindFrame ps vs) = Just (HVPtr a) ->
-      lookupPlace q (bindParams fid ps ms) = Just stQ ->
-      unsafeUse stQ = False ->
-      hasOwned stQ = True ->
-      hasBorrowed stQ = Nothing ->
+    go :
+      {env0 : HEnv} -> {h0 : Heap} -> {sc0 : Scopes} ->
+      {ps0 : List Param} -> {ms0 : List Consume} -> {vs0 : List HVal} ->
+      {args0 : List Expr} ->
+      BindOk fid h1 ps0 ms0 vs0 ->
+      (evs0 : HEvalExprs {funs} env0 h0 args0 (HROk HVNone env1 h1)) ->
+      vs0 = collectArgVals evs0 ->
+      checkArgsModes ctx sc0 callee args0 ms0 = Right sc' ->
+      OverApprox env0 h0 sc0 ->
+      noOwnerHere (bindFrame ps0 vs0) (bindParams fid ps0 ms0) a = False ->
       Void
-    leftoverAlias (Just (HVPtr b)) plq q stQ lookQ lpQ suQ ownQ nbQ with (a == b) proof pab
-      leftoverAlias (Just (HVPtr b)) plq q stQ lookQ lpQ suQ ownQ nbQ | True with (p == q) proof pq
-        leftoverAlias (Just (HVPtr b)) plq q stQ lookQ lpQ suQ ownQ nbQ | True | False =
-          let lookL = replace {p = \x => lookupH q env1 = Just (HVPtr x)}
-                        (sym (eqNatTrue a b pab)) plq
-              (stL ** lpL) = oa1.tracked q (HVPtr a) lookL
-          in uniqQ stL lpL (unsafeUse stL) Refl lookL
-          where
-            uniqQ :
-              (stL : Status) -> lookupPlace q sc' = Just stL ->
-              (u : Bool) -> unsafeUse stL = u ->
-              lookupH q env1 = Just (HVPtr a) ->
-              Void
-            uniqQ stL lpL False pu lookL =
-              uniqueTwoSafe oa1 p q a pq look lookL live st lp stL lpL safe pu own nb
-            uniqQ stL lpL True pu lookL =
-              -- leftover intern `q` is already unsafe. uniqueLive of leftover
-              -- holds; BindOk-to-leftover-place of leftover unique owner `p`
-              -- is not proved.
-              void (trueNotFalse (trans (sym pu) pu))
-        leftoverAlias (Just (HVPtr b)) plq q stQ lookQ lpQ suQ ownQ nbQ | True | True =
-          -- Same intern in leftover and frame: leftover unique owner was not
-          -- consumed. BindOk-to-leftover-place is not proved.
-          void (trueNotFalse (trans (sym pq) pq))
-      leftoverAlias (Just (HVPtr b)) plq q stQ lookQ lpQ suQ ownQ nbQ | False =
-        void (trueNotFalse (trans (sym pab) pab))
-    leftoverAlias _ _ _ _ _ _ _ _ _ =
-      -- Frame param intern is not a leftover binding. leftover uniqueLive
-      -- does not mention the frame owner. Unproved.
-      void (trueNotFalse (trans (sym pnoL) pnoL))
+    go BONil {vs0} {ms0} _ _ _ _ pno =
+      trueNotFalse (replace {p = \e => noOwnerHere e (bindParams fid [] ms0) a = False}
+        (bindFrameNil vs0) pno)
+    go (BOPtrLiveOwn {a = b} clive nh pc rec)
+        (HEArgsCons v envX hX evE evEs) veq0 pM oaC pno with (a == b) proof pab
+      go (BOPtrLiveOwn {a = b} clive nh pc rec)
+          (HEArgsCons v envX hX evE evEs) veq0 pM oaC pno | True =
+        ownConsumed pc rec (consHeadEq veq0) evE evEs pM oaC
+          (eqNatTrue a b pab)
+      go (BOPtrLiveOwn {a = b} clive nh pc rec)
+          (HEArgsCons v envX hX evE evEs) veq0 pM oaC pno | False =
+        skipMove pc rec evE evEs (consTailEq veq0) pM oaC pno
+    go (BOPtrLiveOwn clive nh pc rec) HEArgsNil veq0 _ _ _ =
+      void (nilNotCons (sym veq0))
+    go (BOCopyCV rec) (HEArgsCons v envX hX evE evEs) veq0 pM oaC pno with
+        (doesConsume m) proof pc
+      go (BOCopyCV rec) (HEArgsCons v envX hX evE evEs) veq0 pM oaC pno | True =
+        skipMove pc rec evE evEs (consTailEq veq0) pM oaC pno
+      go (BOCopyCV rec) (HEArgsCons v envX hX evE evEs) veq0 pM oaC pno | False =
+        skipUse pc rec evE evEs (consTailEq veq0) pM oaC pno
+    go (BOCopyCV rec) HEArgsNil veq0 _ _ _ =
+      void (nilNotCons (sym veq0))
+    go (BOCopyC rec) (HEArgsCons v envX hX evE evEs) veq0 pM oaC pno =
+      skipExtra rec evE evEs (consTailEq veq0) pM oaC pno
+    go (BOCopyC rec) HEArgsNil veq0 _ _ _ =
+      void (nilNotCons (sym veq0))
+    go (BOCopyV rec) HEArgsNil veq0 pM oaC pno =
+      let scEq = rightInj (trans (sym (checkArgsModesNil ctx sc0 callee (m :: ms))) pM)
+      in go rec HEArgsNil veq0
+           (rewrite sym scEq in checkArgsModesNil ctx sc0 callee ms)
+           (oaRewrite scEq oaC) pno
+    go (BOCopyZ rec) HEArgsNil veq0 pM oaC pno =
+      let scEq = rightInj (trans (sym (checkArgsModesNil ctx sc0 callee [])) pM)
+      in go rec HEArgsNil veq0
+           (rewrite sym scEq in checkArgsModesNil ctx sc0 callee [])
+           (oaRewrite scEq oaC) pno
+    go (BOPtrNoneCV rec) (HEArgsCons v envX hX evE evEs) veq0 pM oaC pno with
+        (doesConsume m) proof pc
+      go (BOPtrNoneCV rec) (HEArgsCons v envX hX evE evEs) veq0 pM oaC pno | True =
+        skipMove pc rec evE evEs (consTailEq veq0) pM oaC pno
+      go (BOPtrNoneCV rec) (HEArgsCons v envX hX evE evEs) veq0 pM oaC pno | False =
+        skipUse pc rec evE evEs (consTailEq veq0) pM oaC pno
+    go (BOPtrNoneCV rec) HEArgsNil veq0 _ _ _ =
+      void (nilNotCons (sym veq0))
+    go (BOPtrCopyCV rec) (HEArgsCons v envX hX evE evEs) veq0 pM oaC pno with
+        (doesConsume m) proof pc
+      go (BOPtrCopyCV rec) (HEArgsCons v envX hX evE evEs) veq0 pM oaC pno | True =
+        skipMove pc rec evE evEs (consTailEq veq0) pM oaC pno
+      go (BOPtrCopyCV rec) (HEArgsCons v envX hX evE evEs) veq0 pM oaC pno | False =
+        skipUse pc rec evE evEs (consTailEq veq0) pM oaC pno
+    go (BOPtrCopyCV rec) HEArgsNil veq0 _ _ _ =
+      void (nilNotCons (sym veq0))
+    go (BOPtrLiveBorrow clive nuo pc rec) (HEArgsCons v envX hX evE evEs) veq0 pM oaC pno =
+      skipUse pc rec evE evEs (consTailEq veq0) pM oaC pno
+    go (BOPtrLiveBorrow rec) HEArgsNil veq0 _ _ _ =
+      void (nilNotCons (sym veq0))
+    go (BOPtrMissCV rec) HEArgsNil veq0 pM oaC pno =
+      let scEq = rightInj (trans (sym (checkArgsModesNil ctx sc0 callee (m :: ms))) pM)
+      in go rec HEArgsNil veq0
+           (rewrite sym scEq in checkArgsModesNil ctx sc0 callee ms)
+           (oaRewrite scEq oaC) pno
+    go (BOPtrExtraLive {a = b} clive nuo rec) (HEArgsCons v envX hX evE evEs) veq0 pM oaC pno with
+        (a == b) proof pab
+      go (BOPtrExtraLive {a = b} clive nuo rec) (HEArgsCons v envX hX evE evEs) veq0 pM oaC pno
+          | True =
+        ownExtra rec (consHeadEq veq0) evE evEs pM oaC (eqNatTrue a b pab)
+      go (BOPtrExtraLive {a = b} clive nuo rec) (HEArgsCons v envX hX evE evEs) veq0 pM oaC pno
+          | False =
+        skipExtra rec evE evEs (consTailEq veq0) pM oaC pno
+    go (BOPtrExtraLive rec) HEArgsNil veq0 _ _ _ =
+      void (nilNotCons (sym veq0))
+    go (BOPtrExtraNone rec) (HEArgsCons v envX hX evE evEs) veq0 pM oaC pno =
+      skipExtra rec evE evEs (consTailEq veq0) pM oaC pno
+    go (BOPtrExtraNone rec) HEArgsNil veq0 _ _ _ =
+      void (nilNotCons (sym veq0))
+    go (BOPtrExtraCopy rec) (HEArgsCons v envX hX evE evEs) veq0 pM oaC pno =
+      skipExtra rec evE evEs (consTailEq veq0) pM oaC pno
+    go (BOPtrExtraCopy rec) HEArgsNil veq0 _ _ _ =
+      void (nilNotCons (sym veq0))
+    go (BOPtrBothMiss rec) HEArgsNil veq0 pM oaC pno =
+      let scEq = rightInj (trans (sym (checkArgsModesNil ctx sc0 callee [])) pM)
+      in go rec HEArgsNil veq0
+           (rewrite sym scEq in checkArgsModesNil ctx sc0 callee [])
+           (oaRewrite scEq oaC) pno
 
-||| Leftover use-safe borrow of `a` after a uniquely-owning callee freed `a`.
-||| leftover uniqueLive vs leftover unique owner needs UniqueKeys leftover.
-leftoverHeldFreed :
-  {env1 : HEnv} -> {h1, hB : Heap} -> {sc' : Scopes} ->
-  {fid : Nat} -> {ps : List Param} -> {ms : List Consume} -> {vs : List HVal} ->
-  {noL : Bool} ->
-  OverApprox env1 h1 sc' ->
-  OverApprox (bindFrame ps vs) h1 (bindParams fid ps ms) ->
-  UniqueKeys (bindFrame ps vs) ->
-  (a : Addr) ->
-  noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = False ->
-  noOwnerHere env1 sc' a = noL ->
-  (p : Place) -> (st : Status) ->
-  lookupH p env1 = Just (HVPtr a) ->
-  lookupPlace p sc' = Just st ->
-  unsafeUse st = False ->
-  cell h1 a = Just Live ->
-  cell hB a = Just Freed ->
-  Void
-leftoverHeldFreed oa1 oaF uk a pnoF pnoL p st lp look safe live ph =
-  void (trueNotFalse (trans (sym pnoL) pnoL))
+    ownConsumed :
+      {m : Consume} -> {ms0 : List Consume} -> {vs0 : List HVal} ->
+      {ps0 : List Param} -> {env0 : HEnv} -> {h0 : Heap} -> {sc0 : Scopes} ->
+      {e : Expr} -> {es : List Expr} -> {v : HVal} ->
+      {envX : HEnv} -> {hX : Heap} ->
+      doesConsume m = True ->
+      BindOk fid h1 ps0 ms0 vs0 ->
+      v = HVPtr a ->
+      HEvalExpr {funs} env0 h0 e (HROk v envX hX) ->
+      HEvalExprs {funs} envX hX es (HROk HVNone env1 h1) ->
+      checkArgsModes ctx sc0 callee (e :: es) (m :: ms0) = Right sc' ->
+      OverApprox env0 h0 sc0 ->
+      a = b ->
+      Void
+    ownConsumed pc rec Refl (HEVarLive a lookN cl) HEArgsNil pM oaC beq
+        {e = EVar nid n nm} {env0} {h0} {envX = env0} {hX = h0}
+        {env1 = env0} {h1 = h0} {ms0} =
+      let (sc1 ** (fl ** (pT, pEs))) = argsModesMoveSplit pc pM
+          scEq = rightInj (trans (sym (checkArgsModesNil ctx sc1 callee ms0)) pEs)
+          (stN ** lpN) = oaC.tracked n (HVPtr a) lookN
+      in ownVarNil pT scEq oaC lookN cl lpN
+        {env0} {h0} {sc0} {sc1} {n} {nid} {nm} {fl} {stN}
 
-||| Address `a` stayed Live after a unique-own callee. Other leftover cells
+    ownVarNil :
+      {nid : Nat} -> {n : Place} -> {nm : String} -> {fl : Flag} ->
+      {env0 : HEnv} -> {h0 : Heap} -> {sc0, sc1 : Scopes} -> {stN : Status} ->
+      takeOwner ctx sc0 (EVar nid n nm) = Right (sc1, fl) ->
+      sc' = sc1 ->
+      OverApprox env0 h0 sc0 ->
+      lookupH n env0 = Just (HVPtr a) ->
+      cell h0 a = Just Live ->
+      lookupPlace n sc0 = Just stN ->
+      Void
+    ownVarNil {env0} {h0} {sc0} {sc1} {n} {nid} {nm} pT scEq oaC lookA clA lpN with
+        (natEqDec p n)
+      ownVarNil {env0} {h0} {sc0} {sc1} {n} {nid} {nm} pT scEq oaC lookA clA lpN
+          | Left eqp =
+        let (stF ** (lpF, unsF)) = takeVarOwnedUnsafe pT lpN
+              (ownedIfSafeLive oaC n a stN lookA clA lpN
+                 (moveSafeFromTake pT lpN) (moveNbFromTake pT lpN))
+            lpP = replace {p = \x => lookupPlace x sc' = Just st} eqp lp
+            stEq = justInj (trans (sym lpP)
+                     (trans (cong (\s => lookupPlace n s) scEq) lpF))
+        in trueNotFalse (trans (sym unsF) (trans (cong unsafeUse stEq) safe))
+      ownVarNil {env0} {h0} {sc0} {sc1} {n} {nid} {nm} pT scEq oaC lookA clA lpN
+          | Right ne =
+        let safeN = moveSafeFromTake pT lpN
+            nbN = moveNbFromTake pT lpN
+            ownN = ownedIfSafeLive oaC n a stN lookA clA lpN safeN nbN
+            (st0 ** lp0) = oaC.tracked p (HVPtr a) look
+            mv = takeVarMove pT lpN
+            lp' = moveKeepLookup ne lp0 mv
+            stEq = justInj (trans (sym (replace {p = \s => lookupPlace p s = Just st} scEq lp)) lp')
+            uns0 = oaC.uniqueLive n p a (trans (sym (eqNatSym p n)) ne)
+                     lookA look clA stN lpN st0 lp0 safeN ownN nbN
+        in trueNotFalse (trans (sym uns0) (trans (cong unsafeUse (sym stEq)) safe))
+
+    moveSafeFromTake :
+      {nid : Nat} -> {n : Place} -> {nm : String} -> {fl : Flag} ->
+      {sc0, sc1 : Scopes} -> {stN : Status} ->
+      takeOwner ctx sc0 (EVar nid n nm) = Right (sc1, fl) ->
+      lookupPlace n sc0 = Just stN ->
+      unsafeUse stN = False
+    moveSafeFromTake pT lpN = msGo (movePlace sc0 n nid nm) Refl
+      where
+        msGo : (res : Either Diag Scopes) -> movePlace sc0 n nid nm = res ->
+               unsafeUse stN = False
+        msGo (Left d) pM =
+          void (leftNotRight (trans (sym (takeVarJustL ctx lpN pM)) pT))
+        msGo (Right scM) pM with (stepStatus stN Move nid) proof pS
+          msGo (Right scM) pM | Left d =
+            void (leftNotRight (trans (sym (movePlaceJustL lpN pS)) pM))
+          msGo (Right scM) pM | Right st' =
+            stepMoveSafe stN nid st' pS
+
+    moveNbFromTake :
+      {nid : Nat} -> {n : Place} -> {nm : String} -> {fl : Flag} ->
+      {sc0, sc1 : Scopes} -> {stN : Status} ->
+      takeOwner ctx sc0 (EVar nid n nm) = Right (sc1, fl) ->
+      lookupPlace n sc0 = Just stN ->
+      hasBorrowed stN = Nothing
+    moveNbFromTake pT lpN = nbGo (movePlace sc0 n nid nm) Refl
+      where
+        nbGo : (res : Either Diag Scopes) -> movePlace sc0 n nid nm = res ->
+               hasBorrowed stN = Nothing
+        nbGo (Left d) pM =
+          void (leftNotRight (trans (sym (takeVarJustL ctx lpN pM)) pT))
+        nbGo (Right scM) pM with (stepStatus stN Move nid) proof pS
+          nbGo (Right scM) pM | Left d =
+            void (leftNotRight (trans (sym (movePlaceJustL lpN pS)) pM))
+          nbGo (Right scM) pM | Right st' =
+            moveNoBorrow stN nid st' pS
+
+    skipMove :
+      {m : Consume} -> {ms0 : List Consume} ->
+      {ps0 : List Param} -> {vs0 : List HVal} ->
+      {env0 : HEnv} -> {h0 : Heap} -> {sc0 : Scopes} ->
+      {e : Expr} -> {es : List Expr} -> {v : HVal} ->
+      {envX : HEnv} -> {hX : Heap} ->
+      doesConsume m = True ->
+      BindOk fid h1 ps0 ms0 vs0 ->
+      HEvalExpr {funs} env0 h0 e (HROk v envX hX) ->
+      HEvalExprs {funs} envX hX es (HROk HVNone env1 h1) ->
+      vs0 = collectArgVals evEs ->
+      checkArgsModes ctx sc0 callee (e :: es) (m :: ms0) = Right sc' ->
+      OverApprox env0 h0 sc0 ->
+      noOwnerHere (bindFrame ps0 vs0) (bindParams fid ps0 ms0) a = False ->
+      Void
+    skipMove pc rec (HELit {e = ELit id}) evEs veqT pM oaC pno =
+      let (sc1 ** (fl ** (pT, pEs))) = argsModesMoveSplit pc pM
+          ht = takeLitH id pT oaC
+      in go rec evEs veqT pEs (htFromOk ht) pno
+    skipMove pc rec (HENull {e = ENull id}) evEs veqT pM oaC pno =
+      let (sc1 ** (fl ** (pT, pEs))) = argsModesMoveSplit pc pM
+          ht = takeNullH id pT oaC
+      in go rec evEs veqT pEs (htFromOk ht) pno
+    skipMove pc rec (HEVarLive b lookN cl) evEs veqT pM oaC pno {e = EVar nid n nm} =
+      let (sc1 ** (fl ** (pT, pEs))) = argsModesMoveSplit pc pM
+          ht = takeVarH ctx nid n nm pT oaC (HEVarLive b lookN cl)
+      in go rec evEs veqT pEs (htFromOk ht) pno
+    skipMove pc rec (HEVarNone none) evEs veqT pM oaC pno {e = EVar nid n nm} =
+      let (sc1 ** (fl ** (pT, pEs))) = argsModesMoveSplit pc pM
+          ht = takeVarH ctx nid n nm pT oaC (HEVarNone none)
+      in go rec evEs veqT pEs (htFromOk ht) pno
+    skipMove pc rec (HEVarMiss miss) evEs veqT pM oaC pno {e = EVar nid n nm} =
+      let (sc1 ** (fl ** (pT, pEs))) = argsModesMoveSplit pc pM
+          ht = takeVarH ctx nid n nm pT oaC (HEVarMiss miss)
+      in go rec evEs veqT pEs (htFromOk ht) pno
+    skipMove pc rec (HEVarCopy lookC) evEs veqT pM oaC pno {e = EVar nid n nm} =
+      let (sc1 ** (fl ** (pT, pEs))) = argsModesMoveSplit pc pM
+      in void (takeVarCopyContra ctx nid n nm pT oaC lookC)
+
+    skipUse :
+      {m : Consume} -> {ms0 : List Consume} ->
+      {ps0 : List Param} -> {vs0 : List HVal} ->
+      {env0 : HEnv} -> {h0 : Heap} -> {sc0 : Scopes} ->
+      {e : Expr} -> {es : List Expr} -> {v : HVal} ->
+      {envX : HEnv} -> {hX : Heap} ->
+      doesConsume m = False ->
+      BindOk fid h1 ps0 ms0 vs0 ->
+      HEvalExpr {funs} env0 h0 e (HROk v envX hX) ->
+      HEvalExprs {funs} envX hX es (HROk HVNone env1 h1) ->
+      vs0 = collectArgVals evEs ->
+      checkArgsModes ctx sc0 callee (e :: es) (m :: ms0) = Right sc' ->
+      OverApprox env0 h0 sc0 ->
+      noOwnerHere (bindFrame ps0 vs0) (bindParams fid ps0 ms0) a = False ->
+      Void
+    skipUse pc rec HELit evEs veqT pM oaC pno {e = ELit id} =
+      let (sc1 ** (pE, pEs)) = argsModesBorrowSplit pc pM
+      in go rec evEs veqT pEs (hrFromOk (litH id pE oaC)) pno
+    skipUse pc rec HENull evEs veqT pM oaC pno {e = ENull id} =
+      let (sc1 ** (pE, pEs)) = argsModesBorrowSplit pc pM
+      in go rec evEs veqT pEs (hrFromOk (nullH id pE oaC)) pno
+    skipUse pc rec (HEVarLive b lookN cl) evEs veqT pM oaC pno {e = EVar nid n nm} =
+      let (sc1 ** (pE, pEs)) = argsModesBorrowSplit pc pM
+      in go rec evEs veqT pEs (hrFromOk (varUseH nid n nm pE oaC (HEVarLive b lookN cl))) pno
+    skipUse pc rec (HEVarNone none) evEs veqT pM oaC pno {e = EVar nid n nm} =
+      let (sc1 ** (pE, pEs)) = argsModesBorrowSplit pc pM
+      in go rec evEs veqT pEs (hrFromOk (varUseH nid n nm pE oaC (HEVarNone none))) pno
+    skipUse pc rec (HEVarMiss miss) evEs veqT pM oaC pno {e = EVar nid n nm} =
+      let (sc1 ** (pE, pEs)) = argsModesBorrowSplit pc pM
+      in go rec evEs veqT pEs (hrFromOk (varUseH nid n nm pE oaC (HEVarMiss miss))) pno
+    skipUse pc rec (HEVarCopy lookC) evEs veqT pM oaC pno {e = EVar nid n nm} =
+      let (sc1 ** (pE, pEs)) = argsModesBorrowSplit pc pM
+      in go rec evEs veqT pEs (hrFromOk (varUseH nid n nm pE oaC (HEVarCopy lookC))) pno
+
+    skipExtra :
+      {ps0 : List Param} -> {vs0 : List HVal} ->
+      {env0 : HEnv} -> {h0 : Heap} -> {sc0 : Scopes} ->
+      {e : Expr} -> {es : List Expr} -> {v : HVal} ->
+      {envX : HEnv} -> {hX : Heap} ->
+      BindOk fid h1 ps0 [] vs0 ->
+      HEvalExpr {funs} env0 h0 e (HROk v envX hX) ->
+      HEvalExprs {funs} envX hX es (HROk HVNone env1 h1) ->
+      vs0 = collectArgVals evEs ->
+      checkArgsModes ctx sc0 callee (e :: es) [] = Right sc' ->
+      OverApprox env0 h0 sc0 ->
+      noOwnerHere (bindFrame ps0 vs0) (bindParams fid ps0 []) a = False ->
+      Void
+    skipExtra rec (HELit {e = ELit id}) evEs veqT pM oaC pno =
+      let (sc1 ** (fl ** (pT, pEs))) = argsModesExtraSplit pM
+          ht = takeLitH id pT oaC
+      in go rec evEs veqT pEs (htFromOk ht) pno
+    skipExtra rec (HENull {e = ENull id}) evEs veqT pM oaC pno =
+      let (sc1 ** (fl ** (pT, pEs))) = argsModesExtraSplit pM
+          ht = takeNullH id pT oaC
+      in go rec evEs veqT pEs (htFromOk ht) pno
+    skipExtra rec (HEVarLive b lookN cl) evEs veqT pM oaC pno {e = EVar nid n nm} =
+      let (sc1 ** (fl ** (pT, pEs))) = argsModesExtraSplit pM
+          ht = takeVarH ctx nid n nm pT oaC (HEVarLive b lookN cl)
+      in go rec evEs veqT pEs (htFromOk ht) pno
+
+    ownExtra :
+      {ps0 : List Param} -> {vs0 : List HVal} ->
+      {env0 : HEnv} -> {h0 : Heap} -> {sc0 : Scopes} ->
+      {e : Expr} -> {es : List Expr} -> {v : HVal} ->
+      {envX : HEnv} -> {hX : Heap} ->
+      BindOk fid h1 ps0 [] vs0 ->
+      v = HVPtr a ->
+      HEvalExpr {funs} env0 h0 e (HROk v envX hX) ->
+      HEvalExprs {funs} envX hX es (HROk HVNone env1 h1) ->
+      checkArgsModes ctx sc0 callee (e :: es) [] = Right sc' ->
+      OverApprox env0 h0 sc0 ->
+      a = b ->
+      Void
+    ownExtra rec Refl (HEVarLive c lookN cl) HEArgsNil pM oaC beq
+        {e = EVar nid n nm} {env0} {h0} {ms0 = []} =
+      let ac = hvPtrInj {x = c} {y = a} Refl
+          lookA = replace {p = \x => lookupH n env0 = Just (HVPtr x)} ac lookN
+          clA = replace {p = \x => cell h0 x = Just Live} ac cl
+          (sc1 ** (fl ** (pT, pEs))) = argsModesExtraSplit pM
+          scEq = rightInj (trans (sym (checkArgsModesNil ctx sc1 callee [])) pEs)
+          (stN ** lpN) = oaC.tracked n (HVPtr a) lookA
+      in ownVarNil pT scEq oaC lookA clA lpN
+
 ||| unheld by the frame stay Live (`framePres`). A leftover cell the frame
 ||| holds and freed is the same unproved unique-own family.
 ownCellLive :
@@ -491,12 +780,13 @@ ownCellLive {a} {c} {frame} wf ev ph live0 with (c == a) proof pca
   ownCellLive {a} {c} {frame} wf ev ph live0 | False with (heldPtr frame c) proof phc
     ownCellLive {a} {c} {frame} wf ev ph live0 | False | False =
       framePres {funs} wf ev c phc live0
-    ownCellLive {a} {c} {frame} wf ev ph live0 | False | True with (cell hB c) proof ph2
-      ownCellLive {a} {c} {frame} wf ev ph live0 | False | True | Just Live = ph2
-      ownCellLive {a} {c} {frame} wf ev ph live0 | False | True | Just Freed =
-        void (trueNotFalse (trans (sym (eqNatRefl c)) pca))
-      ownCellLive {a} {c} {frame} wf ev ph live0 | False | True | Nothing =
-        void (stmtsStay {funs} wf ev live0 ph2)
+    ownCellLive {a} {c} {frame} wf ev ph live0 | False | True =
+      cellOn {h = hB} {a = c} (cell hB c) Refl
+        (\eq => eq)
+        (\eq =>
+           -- Unique-own leftover of a different cell than `a`.
+           void (trueNotFalse (trans (sym (eqNatRefl c)) pca)))
+        (\eq => void (stmtsStay {funs} wf ev live0 eq))
 
 ownCellLiveRet :
   {funs : List Fun} ->
@@ -512,12 +802,11 @@ ownCellLiveRet {a} {c} {frame} wf ev ph live0 with (c == a) proof pca
   ownCellLiveRet {a} {c} {frame} wf ev ph live0 | False with (heldPtr frame c) proof phc
     ownCellLiveRet {a} {c} {frame} wf ev ph live0 | False | False =
       framePresRet {funs} wf ev c phc live0
-    ownCellLiveRet {a} {c} {frame} wf ev ph live0 | False | True with (cell hB c) proof ph2
-      ownCellLiveRet {a} {c} {frame} wf ev ph live0 | False | True | Just Live = ph2
-      ownCellLiveRet {a} {c} {frame} wf ev ph live0 | False | True | Just Freed =
-        void (trueNotFalse (trans (sym (eqNatRefl c)) pca))
-      ownCellLiveRet {a} {c} {frame} wf ev ph live0 | False | True | Nothing =
-        void (stmtsStayRet {funs} wf ev live0 ph2)
+    ownCellLiveRet {a} {c} {frame} wf ev ph live0 | False | True =
+      cellOn {h = hB} {a = c} (cell hB c) Refl
+        (\eq => eq)
+        (\eq => void (trueNotFalse (trans (sym (eqNatRefl c)) pca)))
+        (\eq => void (stmtsStayRet {funs} wf ev live0 eq))
 
 ||| Leftover `NoUniqueOwner` of `a` does not prevent a uniquely-owning
 ||| callee from dropping `a`. Not an identity of HSDropLive.
@@ -606,12 +895,12 @@ mutual
     LiveNuo envS hS sc1 a
   stmtLN ln eq ev {fuel = Z} =
     void (stmtZeroContraH ctx sc s eq)
-  stmtLN ln eq (HSDropLive {n} {nid} {nm} b lookB cl) {fuel = S k} {a} with (a == b) proof pab
-    stmtLN ln eq (HSDropLive {n} {nid} {nm} b lookB cl) {fuel = S k} {a} | True =
+  stmtLN ln eq (HSDropLive {n} {nid} {nm} b lookB cl) {fuel = S k} {a} {env} {envS = env} with (a == b) proof pab
+    stmtLN ln eq (HSDropLive {n} {nid} {nm} b lookB cl) {fuel = S k} {a} {env} {envS = env} | True =
       void (dropUniqueContra ln.oaLN ln.nuoLN
         (trans (sym (checkStmtDrop k ctx sc nid n nm)) eq)
         (replace {p = \x => lookupH n env = Just (HVPtr x)} (sym (eqNatTrue a b pab)) lookB))
-    stmtLN ln eq (HSDropLive {n} {nid} {nm} b lookB cl) {fuel = S k} {a} | False =
+    stmtLN ln eq (HSDropLive {n} {nid} {nm} b lookB cl) {fuel = S k} {a} {env} {envS = env} | False =
       let out = dropLiveH k ctx nid n nm eq ln.oaLN lookB cl
           live' = trans (markFreedMiss a b h pab) ln.liveLN
           nuo' = nuoSetPlaceMiss ln.nuoLN (lookNotPtrOther pab lookB)
@@ -706,10 +995,10 @@ mutual
     LiveNuo env' h' sc' a
   exprLN ln eq HELit {e = ELit id} =
     let scEq = rightInj (trans (sym (checkExprLit ctx sc id)) eq)
-    in MkLN (hrFromOk (litH id eq ln.oaLN)) (nuoRewrite (sym scEq) ln.nuoLN) ln.liveLN
+    in MkLN (hrFromOk (litH id eq ln.oaLN)) (nuoRewrite scEq ln.nuoLN) ln.liveLN
   exprLN ln eq HENull {e = ENull id} =
     let scEq = rightInj (trans (sym (checkExprNull ctx sc id)) eq)
-    in MkLN (hrFromOk (nullH id eq ln.oaLN)) (nuoRewrite (sym scEq) ln.nuoLN) ln.liveLN
+    in MkLN (hrFromOk (nullH id eq ln.oaLN)) (nuoRewrite scEq ln.nuoLN) ln.liveLN
   exprLN ln eq (HEVarLive b look cl) {e = EVar nid n nm} =
     MkLN (hrFromOk (varUseH nid n nm eq ln.oaLN (HEVarLive b look cl)))
       (nuoUse ln.nuoLN (trans (sym (checkExprVar ctx sc nid n nm)) eq) look)
@@ -789,7 +1078,7 @@ mutual
   exprsBorrowLN ln eq HEArgsNil =
     let scEq = rightInj (trans (sym (checkArgsBorrowNil ctx sc)) eq)
     in MkLN (hrFromOk (argsBorrowNilH eq ln.oaLN))
-         (nuoRewrite (sym scEq) ln.nuoLN) ln.liveLN
+         (nuoRewrite scEq ln.nuoLN) ln.liveLN
   exprsBorrowLN ln eq (HEArgsCons w env1 h1 evE evEs) {es = e :: es} =
     let (sc1 ** (pE, pEs)) = argsBorrowSplit eq
         ln1 = exprLN {funs} {chk} ln pE evE
@@ -832,10 +1121,11 @@ mutual
     OverApprox env1 h1 sc' ->
     OverApprox (bindFrame ps vs) h1 (bindParams fid ps ms) ->
     BindOk fid h1 ps ms vs ->
+    LeftoverSafeFreed env1 h1 hB sc' fid ps ms vs ->
     checkStmts fuel ctx (bindParams fid ps ms) ss = Right scB ->
     HEvalStmts {funs} (bindFrame ps vs) h1 ss (HOk envB hB) ->
     SafeLivePres env1 h1 hB sc'
-  restoreFromBind {funs} {chk} {fuel} {ps} {vs} oa1 oaF bok pBdy evBody p st a lp look safe live =
+  restoreFromBind {funs} {chk} {fuel} {ps} {vs} oa1 oaF bok leftoverSafe pBdy evBody p st a lp look safe live =
     restoreHeld (heldPtr (bindFrame ps vs) a) Refl
     where
       uniqueGo :
@@ -846,29 +1136,26 @@ mutual
         cell hB a = Just Live
       uniqueGo _ True pno po pb =
         void (noOwnerSound env1 sc' a pno p st look lp safe po pb)
-      uniqueGo pnoF False pno po pb with (cell hB a) proof ph
-        uniqueGo pnoF False pno po pb | Just Live = ph
-        uniqueGo pnoF False pno po pb | Just Freed =
-          uniqueOwnFreed oa1 oaF (bindFrameUK ps vs) a pnoF pno p st lp look safe live po pb ph
-        uniqueGo pnoF False pno po pb | Nothing =
-          void (stmtsStay {funs} oa1.wf evBody live ph)
+      uniqueGo pnoF False pno po pb =
+        cellOn (cell hB a) Refl
+          (\ph => ph)
+          (\ph => leftoverSafe p st a pnoF look lp safe live ph)
+          (\ph => void (stmtsStay {funs} oa1.wf evBody live ph))
 
       borrowGo :
         noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = False ->
         (no : Bool) -> noOwnerHere env1 sc' a = no ->
         cell hB a = Just Live
-      borrowGo pnoF False pno with (cell hB a) proof ph
-        borrowGo pnoF False pno | Just Live = ph
-        borrowGo pnoF False pno | Just Freed =
-          leftoverHeldFreed oa1 oaF (bindFrameUK ps vs) a pnoF pno p st lp look safe live ph
-        borrowGo pnoF False pno | Nothing =
-          void (stmtsStay {funs} oa1.wf evBody live ph)
-      borrowGo pnoF True pno with (cell hB a) proof ph
-        borrowGo pnoF True pno | Just Live = ph
-        borrowGo pnoF True pno | Just Freed =
-          leftoverHeldFreed oa1 oaF (bindFrameUK ps vs) a pnoF pno p st lp look safe live ph
-        borrowGo pnoF True pno | Nothing =
-          void (stmtsStay {funs} oa1.wf evBody live ph)
+      borrowGo pnoF False pno =
+        cellOn (cell hB a) Refl
+          (\ph => ph)
+          (\ph => leftoverSafe p st a pnoF look lp safe live ph)
+          (\ph => void (stmtsStay {funs} oa1.wf evBody live ph))
+      borrowGo pnoF True pno =
+        cellOn (cell hB a) Refl
+          (\ph => ph)
+          (\ph => leftoverSafe p st a pnoF look lp safe live ph)
+          (\ph => void (stmtsStay {funs} oa1.wf evBody live ph))
 
       ownGo :
         noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = False ->
@@ -913,10 +1200,11 @@ mutual
     OverApprox env1 h1 sc' ->
     OverApprox (bindFrame ps vs) h1 (bindParams fid ps ms) ->
     BindOk fid h1 ps ms vs ->
+    LeftoverSafeFreed env1 h1 hB sc' fid ps ms vs ->
     checkStmts fuel ctx (bindParams fid ps ms) ss = Right scB ->
     HEvalStmts {funs} (bindFrame ps vs) h1 ss (HReturned envB hB) ->
     SafeLivePres env1 h1 hB sc'
-  restoreFromBindRet {funs} {chk} {fuel} {ps} {vs} oa1 oaF bok pBdy evBody p st a lp look safe live =
+  restoreFromBindRet {funs} {chk} {fuel} {ps} {vs} oa1 oaF bok leftoverSafe pBdy evBody p st a lp look safe live =
     restoreHeldR (heldPtr (bindFrame ps vs) a) Refl
     where
       uniqueGoR :
@@ -927,30 +1215,27 @@ mutual
         cell hB a = Just Live
       uniqueGoR _ True pno po pb =
         void (noOwnerSound env1 sc' a pno p st look lp safe po pb)
-      uniqueGoR pnoF False pno po pb with (cell hB a) proof ph
-        uniqueGoR pnoF False pno po pb | Just Live = ph
-        uniqueGoR pnoF False pno po pb | Just Freed =
-          uniqueOwnFreed oa1 oaF (bindFrameUK ps vs) a pnoF pno p st lp look safe live po pb ph
-        uniqueGoR pnoF False pno po pb | Nothing =
-          void (stmtsStayRet {funs} oa1.wf evBody live ph)
+      uniqueGoR pnoF False pno po pb =
+        cellOn (cell hB a) Refl
+          (\ph => ph)
+          (\ph => leftoverSafe p st a pnoF look lp safe live ph)
+          (\ph => void (stmtsStayRet {funs} oa1.wf evBody live ph))
 
       borrowGoR :
         noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = False ->
         (no : Bool) -> noOwnerHere env1 sc' a = no ->
         hasBorrowed st = Just fidB ->
         cell hB a = Just Live
-      borrowGoR pnoF False pno pb with (cell hB a) proof ph
-        borrowGoR pnoF False pno pb | Just Live = ph
-        borrowGoR pnoF False pno pb | Just Freed =
-          leftoverHeldFreed oa1 oaF (bindFrameUK ps vs) a pnoF pno p st lp look safe live ph
-        borrowGoR pnoF False pno pb | Nothing =
-          void (stmtsStayRet {funs} oa1.wf evBody live ph)
-      borrowGoR pnoF True pno pb with (cell hB a) proof ph
-        borrowGoR pnoF True pno pb | Just Live = ph
-        borrowGoR pnoF True pno pb | Just Freed =
-          leftoverHeldFreed oa1 oaF (bindFrameUK ps vs) a pnoF pno p st lp look safe live ph
-        borrowGoR pnoF True pno pb | Nothing =
-          void (stmtsStayRet {funs} oa1.wf evBody live ph)
+      borrowGoR pnoF False pno pb =
+        cellOn (cell hB a) Refl
+          (\ph => ph)
+          (\ph => leftoverSafe p st a pnoF look lp safe live ph)
+          (\ph => void (stmtsStayRet {funs} oa1.wf evBody live ph))
+      borrowGoR pnoF True pno pb =
+        cellOn (cell hB a) Refl
+          (\ph => ph)
+          (\ph => leftoverSafe p st a pnoF look lp safe live ph)
+          (\ph => void (stmtsStayRet {funs} oa1.wf evBody live ph))
 
       ownGoR :
         noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = False ->
@@ -1125,7 +1410,7 @@ mutual
             oaF = oaRewrite (sym (paramScopesEq ctx f)) oaBind
             pBdyP = replace {p = \sc0 => checkStmts cfuel ctx sc0 f.body = Right scB}
                       (paramScopesEq ctx f) pBdy
-            lnF = MkLN oaF nuoF ln1.liveLN
+            lnF = MkLN oaBind nuoF ln1.liveLN
             lnB = stmtsLN {funs} {chk} {fuel = cfuel} lnF pBdyP evBody
             pres = restoreFromBind {funs} {chk} {fuel = cfuel} ln1.oaLN oaBind bok pBdyP evBody
         in MkLN (oaKeepEnv ln1.oaLN (stmtsWf {funs} ln1.oaLN.wf evBody) pres)
@@ -1154,7 +1439,11 @@ mutual
   nestedJustRetLN {funs} {chk} {ctx} ln1 eq pB f look pDef evs evBody bok with
       (heldPtr (bindFrame f.params (collectArgVals evs)) a) proof phd
     nestedJustRetLN {funs} {chk} {ctx} ln1 eq pB f look pDef evs evBody bok | False =
-      MkLN ln1.oaLN ln1.nuoLN
+      MkLN (oaKeepEnv ln1.oaLN (stmtsWfRet {funs} ln1.oaLN.wf evBody)
+              (\p, st, c, lp, look, safe, live0 =>
+                 ownCellLiveRet {funs} {c} ln1.oaLN.wf evBody
+                   (framePresRet {funs} ln1.oaLN.wf evBody a phd ln1.liveLN) live0))
+        ln1.nuoLN
         (framePresRet {funs} ln1.oaLN.wf evBody a phd ln1.liveLN)
     nestedJustRetLN {funs} {chk} {ctx} ln1 eq pB f look pDef evs evBody bok | True with
         (nuoBind bok a)
@@ -1165,7 +1454,7 @@ mutual
             oaF = oaRewrite (sym (paramScopesEq ctx f)) oaBind
             pBdyP = replace {p = \sc0 => checkStmts cfuel ctx sc0 f.body = Right scB}
                       (paramScopesEq ctx f) pBdy
-            lnF = MkLN oaF nuoF ln1.liveLN
+            lnF = MkLN oaBind nuoF ln1.liveLN
             liveB = stmtsLNRet {funs} {chk} {fuel = cfuel} lnF pBdyP evBody
         in MkLN ln1.oaLN ln1.nuoLN liveB
       nestedJustRetLN {funs} {chk} {ctx} ln1 eq pB f look pDef evs evBody bok | True | Right pnoF =
@@ -1264,72 +1553,73 @@ mutual
   ifThenLN ln eq evC evT =
     ifThenLNGo (checkExpr ctx sc cond) Refl ln evC evT eq
     where
-      ifThenLNGo :
-        (resC : Either Diag Scopes) ->
-        checkExpr ctx sc cond = resC ->
-        LiveNuo env h sc a ->
-        HEvalExpr {funs} env h cond (HROk v env0 h0) ->
-        HEvalStmts {funs} env0 h0 thn (HOk envS hS) ->
-        checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
-        LiveNuo envS hS sc1 a
-      ifThenLNGo (Left d) pC _ _ _ eq0 =
-        void (leftNotRight (trans (sym (ifExprLeft k iid thn els pC)) eq0))
-      ifThenLNGo (Right sc0) pC ln0 evC0 evT0 eq0 =
-        let lnC = exprLN {funs} {chk} ln0 pC evC0
-        in ifThenLNT (checkStmts k ctx sc0 thn) Refl lnC evT0 eq0 pC
+      mutual
+        ifThenLNGo :
+          (resC : Either Diag Scopes) ->
+          checkExpr ctx sc cond = resC ->
+          LiveNuo env h sc a ->
+          HEvalExpr {funs} env h cond (HROk v env0 h0) ->
+          HEvalStmts {funs} env0 h0 thn (HOk envS hS) ->
+          checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
+          LiveNuo envS hS sc1 a
+        ifThenLNGo (Left d) pC _ _ _ eq0 =
+          void (leftNotRight (trans (sym (ifExprLeft k iid thn els pC)) eq0))
+        ifThenLNGo (Right sc0) pC ln0 evC0 evT0 eq0 =
+          let lnC = exprLN {funs} {chk} ln0 pC evC0
+          in ifThenLNT (checkStmts k ctx sc0 thn) Refl lnC evT0 eq0 pC
 
-      ifThenLNT :
-        {sc0 : Scopes} -> {env0 : HEnv} -> {h0 : Heap} ->
-        (resT : Either Diag Scopes) ->
-        checkStmts k ctx sc0 thn = resT ->
-        LiveNuo env0 h0 sc0 a ->
-        HEvalStmts {funs} env0 h0 thn (HOk envS hS) ->
-        checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
-        checkExpr ctx sc cond = Right sc0 ->
-        LiveNuo envS hS sc1 a
-      ifThenLNT (Left d) pT _ _ eq0 pC =
-        void (leftNotRight (trans (sym (ifThenLeft iid els pC pT)) eq0))
-      ifThenLNT (Right scT) pT lnC evT0 eq0 pC =
-        ifThenLNE (checkStmts k ctx sc0 els) Refl lnC evT0 eq0 pC pT
+        ifThenLNT :
+          {sc0 : Scopes} -> {env0 : HEnv} -> {h0 : Heap} ->
+          (resT : Either Diag Scopes) ->
+          checkStmts k ctx sc0 thn = resT ->
+          LiveNuo env0 h0 sc0 a ->
+          HEvalStmts {funs} env0 h0 thn (HOk envS hS) ->
+          checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
+          checkExpr ctx sc cond = Right sc0 ->
+          LiveNuo envS hS sc1 a
+        ifThenLNT (Left d) pT _ _ eq0 pC =
+          void (leftNotRight (trans (sym (ifThenLeft iid els pC pT)) eq0))
+        ifThenLNT (Right scT) pT lnC evT0 eq0 pC =
+          ifThenLNE (checkStmts k ctx sc0 els) Refl lnC evT0 eq0 pC pT
 
-      ifThenLNE :
-        {sc0, scT : Scopes} -> {env0 : HEnv} -> {h0 : Heap} ->
-        (resE : Either Diag Scopes) ->
-        checkStmts k ctx sc0 els = resE ->
-        LiveNuo env0 h0 sc0 a ->
-        HEvalStmts {funs} env0 h0 thn (HOk envS hS) ->
-        checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
-        checkExpr ctx sc cond = Right sc0 ->
-        checkStmts k ctx sc0 thn = Right scT ->
-        LiveNuo envS hS sc1 a
-      ifThenLNE (Left d) pE _ _ eq0 pC pT =
-        void (leftNotRight (trans (sym (ifElseLeft iid pC pT pE)) eq0))
-      ifThenLNE (Right scE) pE lnC evT0 eq0 pC pT =
-        let lnT = stmtsLN {funs} {chk} {fuel = k} lnC pT evT0
-        in ifThenLNJoin (stmtsEnded thn) (stmtsEnded els) Refl Refl lnT eq0 pC pT pE
+        ifThenLNE :
+          {sc0, scT : Scopes} -> {env0 : HEnv} -> {h0 : Heap} ->
+          (resE : Either Diag Scopes) ->
+          checkStmts k ctx sc0 els = resE ->
+          LiveNuo env0 h0 sc0 a ->
+          HEvalStmts {funs} env0 h0 thn (HOk envS hS) ->
+          checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
+          checkExpr ctx sc cond = Right sc0 ->
+          checkStmts k ctx sc0 thn = Right scT ->
+          LiveNuo envS hS sc1 a
+        ifThenLNE (Left d) pE _ _ eq0 pC pT =
+          void (leftNotRight (trans (sym (ifElseLeft iid pC pT pE)) eq0))
+        ifThenLNE (Right scE) pE lnC evT0 eq0 pC pT =
+          let lnT = stmtsLN {funs} {chk} {fuel = k} lnC pT evT0
+          in ifThenLNJoin (stmtsEnded thn) (stmtsEnded els) Refl Refl lnT eq0 pC pT pE
 
-      ifThenLNJoin :
-        {sc0, scT, scE : Scopes} ->
-        (et, ee : Bool) ->
-        stmtsEnded thn = et ->
-        stmtsEnded els = ee ->
-        LiveNuo envS hS scT a ->
-        checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
-        checkExpr ctx sc cond = Right sc0 ->
-        checkStmts k ctx sc0 thn = Right scT ->
-        checkStmts k ctx sc0 els = Right scE ->
-        LiveNuo envS hS sc1 a
-      ifThenLNJoin False False pThn pEls lnT eq0 pC pT pE =
-        let scEq = rightInj (trans (sym (ifFull iid pThn pEls pC pT pE)) eq0)
-        in MkLN (oaRewrite scEq (oaJoinLeft lnT.oaLN))
-             (nuoRewrite scEq (nuoJoin lnT.oaLN lnT.nuoLN)) lnT.liveLN
-      ifThenLNJoin True False pThn pEls lnT eq0 pC pT pE =
-        void (stmtsEndedNotHOk pThn evT)
-      ifThenLNJoin False True pThn pEls lnT eq0 pC pT pE =
-        let scEq = rightInj (trans (sym (ifElseEnded iid pThn pEls pC pT pE)) eq0)
-        in MkLN (oaRewrite scEq lnT.oaLN) (nuoRewrite scEq lnT.nuoLN) lnT.liveLN
-      ifThenLNJoin True True pThn pEls lnT eq0 pC pT pE =
-        void (stmtsEndedNotHOk pThn evT)
+        ifThenLNJoin :
+          {sc0, scT, scE : Scopes} ->
+          (et, ee : Bool) ->
+          stmtsEnded thn = et ->
+          stmtsEnded els = ee ->
+          LiveNuo envS hS scT a ->
+          checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
+          checkExpr ctx sc cond = Right sc0 ->
+          checkStmts k ctx sc0 thn = Right scT ->
+          checkStmts k ctx sc0 els = Right scE ->
+          LiveNuo envS hS sc1 a
+        ifThenLNJoin False False pThn pEls lnT eq0 pC pT pE =
+          let scEq = rightInj (trans (sym (ifFull iid pThn pEls pC pT pE)) eq0)
+          in MkLN (oaRewrite scEq (oaJoinLeft lnT.oaLN))
+               (nuoRewrite scEq (nuoJoin lnT.oaLN lnT.nuoLN)) lnT.liveLN
+        ifThenLNJoin True False pThn pEls lnT eq0 pC pT pE =
+          void (stmtsEndedNotHOk pThn evT)
+        ifThenLNJoin False True pThn pEls lnT eq0 pC pT pE =
+          let scEq = rightInj (trans (sym (ifElseEnded iid pThn pEls pC pT pE)) eq0)
+          in MkLN (oaRewrite scEq lnT.oaLN) (nuoRewrite scEq lnT.nuoLN) lnT.liveLN
+        ifThenLNJoin True True pThn pEls lnT eq0 pC pT pE =
+          void (stmtsEndedNotHOk pThn evT)
 
   takeLN :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
@@ -1350,12 +1640,12 @@ mutual
         ht = takeNullH id eq ln.oaLN
     in MkTLN (MkLN (oaRewrite scEq ln.oaLN) (nuoRewrite scEq ln.nuoLN) ln.liveLN)
          (htTaken ht)
-  takeLN ln eq (HEVarLive b look cl) {e = EVar nid n nm} with (a == b) proof pab
-    takeLN ln eq (HEVarLive b look cl) {e = EVar nid n nm} | True =
+  takeLN ln eq (HEVarLive b look cl) {e = EVar nid n nm} {env} {env' = env} with (a == b) proof pab
+    takeLN ln eq (HEVarLive b look cl) {e = EVar nid n nm} {env} {env' = env} | True =
       void (takeLiveNuoContra ln.oaLN ln.nuoLN eq
         (replace {p = \x => lookupH n env = Just (HVPtr x)}
            (sym (eqNatTrue a b pab)) look) cl)
-    takeLN ln eq (HEVarLive b look cl) {e = EVar nid n nm} | False =
+    takeLN ln eq (HEVarLive b look cl) {e = EVar nid n nm} {env} {env' = env} | False =
       let ht = takeVarH ctx nid n nm eq ln.oaLN (HEVarLive b look cl)
       in MkTLN (MkLN (htFromOk ht) (nuoMove ln.nuoLN (takeVarMoveEq eq look) look) ln.liveLN)
            (htTaken ht)
@@ -1515,52 +1805,53 @@ mutual
     reallocTakeLN {funs} {chk} ln eq pName evs
   nestedTakeCallLN ln eq ev = tGo (checkExpr ctx sc (ECall id callee args)) Refl
     where
-      tGo : (res : Either Diag Scopes) ->
-            checkExpr ctx sc (ECall id callee args) = res ->
-            TakeLN fl v env' h' sc' a
-      tGo (Left d) pE =
-        void (leftNotRight (trans (sym (takeCallLeft pE)) eq))
-      tGo (Right sc1) pE =
-        let ln1 = exprLN {funs} {chk} ln pE ev
-        in tFl (isRealloc callee && not (isDefined ctx callee)) Refl ln1 pE
+      mutual
+        tGo : (res : Either Diag Scopes) ->
+              checkExpr ctx sc (ECall id callee args) = res ->
+              TakeLN fl v env' h' sc' a
+        tGo (Left d) pE =
+          void (leftNotRight (trans (sym (takeCallLeft pE)) eq))
+        tGo (Right sc1) pE =
+          let ln1 = exprLN {funs} {chk} ln pE ev
+          in tFl (isRealloc callee && not (isDefined ctx callee)) Refl ln1 pE
 
-      tFl : (fresh : Bool) ->
-            isRealloc callee && not (isDefined ctx callee) = fresh ->
-            LiveNuo env' h' sc1 a ->
-            checkExpr ctx sc (ECall id callee args) = Right sc1 ->
-            TakeLN fl v env' h' sc' a
-      tFl False pF ln1 pE =
-        let scEq = cong fst (rightInj (trans (sym (takeCallRight pF pE)) eq))
-            flEq = cong snd (rightInj (trans (sym (takeCallRight pF pE)) eq))
-        in MkTLN (MkLN (oaRewrite scEq ln1.oaLN) (nuoRewrite scEq ln1.nuoLN) ln1.liveLN)
-             (replace {p = \f => HTaken f v env' h' sc'} flEq
-                (replace {p = \s => HTaken Ghost v env' h' s} scEq HGh))
-      tFl True pF ln1 pE =
-        let scEq = cong fst (rightInj (trans (sym (takeReallocRight pF
-              (trans (sym (checkExprCall ctx sc id callee args)) pE))) eq))
-            flEq = cong snd (rightInj (trans (sym (takeReallocRight pF
-              (trans (sym (checkExprCall ctx sc id callee args)) pE))) eq))
-        in noneOwnerTaken scEq flEq ln1 ev
+        tFl : (fresh : Bool) ->
+              isRealloc callee && not (isDefined ctx callee) = fresh ->
+              LiveNuo env' h' sc1 a ->
+              checkExpr ctx sc (ECall id callee args) = Right sc1 ->
+              TakeLN fl v env' h' sc' a
+        tFl False pF ln1 pE =
+          let scEq = cong fst (rightInj (trans (sym (takeCallRight pF pE)) eq))
+              flEq = cong snd (rightInj (trans (sym (takeCallRight pF pE)) eq))
+          in MkTLN (MkLN (oaRewrite scEq ln1.oaLN) (nuoRewrite scEq ln1.nuoLN) ln1.liveLN)
+               (replace {p = \f => HTaken f v env' h' sc'} flEq
+                  (replace {p = \s => HTaken Ghost v env' h' s} scEq HGh))
+        tFl True pF ln1 pE =
+          let scEq = cong fst (rightInj (trans (sym (takeReallocRight pF
+                (trans (sym (checkExprCall ctx sc id callee args)) pE))) eq))
+              flEq = cong snd (rightInj (trans (sym (takeReallocRight pF
+                (trans (sym (checkExprCall ctx sc id callee args)) pE))) eq))
+          in noneOwnerTaken scEq flEq ln1 ev
 
-      ||| `HECall` / `HECallUser` / `HECallUserRet` return `HVNone`. `HERealloc`
-      ||| is dispatched above. Owner+HVNone is `HOwnNone`.
-      noneOwnerTaken :
-        sc1 = sc' -> fl = Owner ->
-        LiveNuo env' h' sc1 a ->
-        HEvalExpr {funs} env h (ECall id callee args) (HROk v env' h') ->
-        TakeLN fl v env' h' sc' a
-      noneOwnerTaken scEq flEq ln1 (HECall _ _ _ _) =
-        MkTLN (MkLN (oaRewrite scEq ln1.oaLN) (nuoRewrite scEq ln1.nuoLN) ln1.liveLN)
-          (replace {p = \f => HTaken f HVNone env' h' sc'} flEq
-             (replace {p = \s => HTaken Owner HVNone env' h' s} scEq HOwnNone))
-      noneOwnerTaken scEq flEq ln1 (HECallUser _ _ _ _ _ _ _ _ _ _) =
-        MkTLN (MkLN (oaRewrite scEq ln1.oaLN) (nuoRewrite scEq ln1.nuoLN) ln1.liveLN)
-          (replace {p = \f => HTaken f HVNone env' h' sc'} flEq
-             (replace {p = \s => HTaken Owner HVNone env' h' s} scEq HOwnNone))
-      noneOwnerTaken scEq flEq ln1 (HECallUserRet _ _ _ _ _ _ _ _ _ _) =
-        MkTLN (MkLN (oaRewrite scEq ln1.oaLN) (nuoRewrite scEq ln1.nuoLN) ln1.liveLN)
-          (replace {p = \f => HTaken f HVNone env' h' sc'} flEq
-             (replace {p = \s => HTaken Owner HVNone env' h' s} scEq HOwnNone))
+        ||| `HECall` / `HECallUser` / `HECallUserRet` return `HVNone`. `HERealloc`
+        ||| is dispatched above. Owner+HVNone is `HOwnNone`.
+        noneOwnerTaken :
+          sc1 = sc' -> fl = Owner ->
+          LiveNuo env' h' sc1 a ->
+          HEvalExpr {funs} env h (ECall id callee args) (HROk v env' h') ->
+          TakeLN fl v env' h' sc' a
+        noneOwnerTaken scEq flEq ln1 (HECall _ _ _ _) =
+          MkTLN (MkLN (oaRewrite scEq ln1.oaLN) (nuoRewrite scEq ln1.nuoLN) ln1.liveLN)
+            (replace {p = \f => HTaken f HVNone env' h' sc'} flEq
+               (replace {p = \s => HTaken Owner HVNone env' h' s} scEq HOwnNone))
+        noneOwnerTaken scEq flEq ln1 (HECallUser _ _ _ _ _ _ _ _ _ _) =
+          MkTLN (MkLN (oaRewrite scEq ln1.oaLN) (nuoRewrite scEq ln1.nuoLN) ln1.liveLN)
+            (replace {p = \f => HTaken f HVNone env' h' sc'} flEq
+               (replace {p = \s => HTaken Owner HVNone env' h' s} scEq HOwnNone))
+        noneOwnerTaken scEq flEq ln1 (HECallUserRet _ _ _ _ _ _ _ _ _ _) =
+          MkTLN (MkLN (oaRewrite scEq ln1.oaLN) (nuoRewrite scEq ln1.nuoLN) ln1.liveLN)
+            (replace {p = \f => HTaken f HVNone env' h' sc'} flEq
+               (replace {p = \s => HTaken Owner HVNone env' h' s} scEq HOwnNone))
 
   reallocTakeLN :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
@@ -1575,50 +1866,51 @@ mutual
     TakeLN fl (HVPtr (fst (alloc h1))) env1 (snd (alloc h1)) sc' a
   reallocTakeLN ln eq pName evs = rGo (checkCall ctx sc id callee args) Refl
     where
-      rGo : (res : Either Diag Scopes) ->
-            checkCall ctx sc id callee args = res ->
-            TakeLN fl (HVPtr (fst (alloc h1))) env1 (snd (alloc h1)) sc' a
-      rGo (Left d) pC =
-        void (leftNotRight (trans (sym (takeCallLeft
-          (trans (checkExprCall ctx sc id callee args) pC))) eq))
-      rGo (Right sc1) pC =
-        let ln1 = reallocArgsLN {funs} {chk} ln pC evs
-            nf = liveNotFresh h1 ln1.oaLN.wf a ln1.liveLN
-            pF = trans (cong (\r => r && Delay (not (isDefined ctx callee)))
-                           (reallocNameEq callee))
-                   (rewrite pName in Refl)
-        in rFl (isRealloc callee && not (isDefined ctx callee)) Refl ln1 pC
+      mutual
+        rGo : (res : Either Diag Scopes) ->
+              checkCall ctx sc id callee args = res ->
+              TakeLN fl (HVPtr (fst (alloc h1))) env1 (snd (alloc h1)) sc' a
+        rGo (Left d) pC =
+          void (leftNotRight (trans (sym (takeCallLeft
+            (trans (checkExprCall ctx sc id callee args) pC))) eq))
+        rGo (Right sc1) pC =
+          let ln1 = reallocArgsLN {funs} {chk} ln pC evs
+              nf = liveNotFresh h1 ln1.oaLN.wf a ln1.liveLN
+              pF = trans (cong (\r => r && Delay (not (isDefined ctx callee)))
+                             (reallocNameEq callee))
+                     (rewrite pName in Refl)
+          in rFl (isRealloc callee && not (isDefined ctx callee)) Refl ln1 pC
 
-      rFl : {sc1 : Scopes} -> (fresh : Bool) ->
-            isRealloc callee && not (isDefined ctx callee) = fresh ->
-            LiveNuo env1 h1 sc1 a ->
-            checkCall ctx sc id callee args = Right sc1 ->
-            TakeLN fl (HVPtr (fst (alloc h1))) env1 (snd (alloc h1)) sc' a
-      rFl False pF ln1 pC =
-        let scEq = cong fst (rightInj (trans (sym (takeCallRight pF
-              (trans (checkExprCall ctx sc id callee args) pC))) eq))
-            flEq = cong snd (rightInj (trans (sym (takeCallRight pF
-              (trans (checkExprCall ctx sc id callee args) pC))) eq))
-            nf = liveNotFresh h1 ln1.oaLN.wf a ln1.liveLN
-            oaA = oaAlloc ln1.oaLN
-        in MkTLN (MkLN (oaRewrite scEq oaA) (nuoRewrite scEq ln1.nuoLN)
-                   (trans (allocPresCell h1 a nf) ln1.liveLN))
-             (replace {p = \f => HTaken f (HVPtr (fst (alloc h1))) env1
-                                   (snd (alloc h1)) sc'} flEq
-                (replace {p = \s => HTaken Ghost (HVPtr (fst (alloc h1))) env1
-                                     (snd (alloc h1)) s} scEq HGh))
-      rFl True pF ln1 pC =
-        let scEq = cong fst (rightInj (trans (sym (takeReallocRight pF pC)) eq))
-            flEq = cong snd (rightInj (trans (sym (takeReallocRight pF pC)) eq))
-            nf = liveNotFresh h1 ln1.oaLN.wf a ln1.liveLN
-            oaA = oaAlloc ln1.oaLN
-        in MkTLN (MkLN (oaRewrite scEq oaA) (nuoRewrite scEq ln1.nuoLN)
-                   (trans (allocPresCell h1 a nf) ln1.liveLN))
-             (replace {p = \f => HTaken f (HVPtr (fst (alloc h1))) env1
-                                   (snd (alloc h1)) sc'} flEq
-                (replace {p = \s => HTaken Owner (HVPtr (fst (alloc h1))) env1
-                                     (snd (alloc h1)) s} scEq
-                   (HOwnLive (allocCell h1) (inHandAlloc ln1.oaLN))))
+        rFl : {sc1 : Scopes} -> (fresh : Bool) ->
+              isRealloc callee && not (isDefined ctx callee) = fresh ->
+              LiveNuo env1 h1 sc1 a ->
+              checkCall ctx sc id callee args = Right sc1 ->
+              TakeLN fl (HVPtr (fst (alloc h1))) env1 (snd (alloc h1)) sc' a
+        rFl False pF ln1 pC =
+          let scEq = cong fst (rightInj (trans (sym (takeCallRight pF
+                (trans (checkExprCall ctx sc id callee args) pC))) eq))
+              flEq = cong snd (rightInj (trans (sym (takeCallRight pF
+                (trans (checkExprCall ctx sc id callee args) pC))) eq))
+              nf = liveNotFresh h1 ln1.oaLN.wf a ln1.liveLN
+              oaA = oaAlloc ln1.oaLN
+          in MkTLN (MkLN (oaRewrite scEq oaA) (nuoRewrite scEq ln1.nuoLN)
+                     (trans (allocPresCell h1 a nf) ln1.liveLN))
+               (replace {p = \f => HTaken f (HVPtr (fst (alloc h1))) env1
+                                     (snd (alloc h1)) sc'} flEq
+                  (replace {p = \s => HTaken Ghost (HVPtr (fst (alloc h1))) env1
+                                       (snd (alloc h1)) s} scEq HGh))
+        rFl True pF ln1 pC =
+          let scEq = cong fst (rightInj (trans (sym (takeReallocRight pF pC)) eq))
+              flEq = cong snd (rightInj (trans (sym (takeReallocRight pF pC)) eq))
+              nf = liveNotFresh h1 ln1.oaLN.wf a ln1.liveLN
+              oaA = oaAlloc ln1.oaLN
+          in MkTLN (MkLN (oaRewrite scEq oaA) (nuoRewrite scEq ln1.nuoLN)
+                     (trans (allocPresCell h1 a nf) ln1.liveLN))
+               (replace {p = \f => HTaken f (HVPtr (fst (alloc h1))) env1
+                                     (snd (alloc h1)) sc'} flEq
+                  (replace {p = \s => HTaken Owner (HVPtr (fst (alloc h1))) env1
+                                       (snd (alloc h1)) s} scEq
+                     (HOwnLive (allocCell h1) (inHandAlloc ln1.oaLN))))
 
   asgPtrLN :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
@@ -1652,13 +1944,14 @@ mutual
           asgNull :
             TakeLN Null v env1 h1 scT a ->
             LiveNuo (setH n v env1) h1 sc1 a
-          asgNull tln with (tln.tkTLN)
-            asgNull tln | HNull =
-              let ln1 = tln.lnTLN
-                  scEq = rightInj (trans (sym (stmtAsgPtrNull k id n nm pT)) eq)
-              in MkLN (oaRewrite scEq (oaBindNull ln1.oaLN))
-                   (nuoRewrite scEq (nuoBindNull ln1.nuoLN))
-                   ln1.liveLN
+          asgNull tln =
+            case tln.tkTLN of
+              HNull =>
+                let ln1 = tln.lnTLN
+                    scEq = rightInj (trans (sym (stmtAsgPtrNull k id n nm pT)) eq)
+                in MkLN (oaRewrite scEq (oaBindNull ln1.oaLN))
+                     (nuoRewrite scEq (nuoBindNull ln1.nuoLN))
+                     ln1.liveLN
       asgPtrGo (Right (scT, Owner)) pT =
         let tln = takeLN {funs} {chk} ln pT ev
             scEq = rightInj (trans (sym (stmtAsgPtrOwner k id n nm pT)) eq)
@@ -1717,13 +2010,14 @@ mutual
           asgExprNull :
             TakeLN Null v env1 h1 scT a ->
             LiveNuo (setH n v env1) h1 sc' a
-          asgExprNull tln with (tln.tkTLN)
-            asgExprNull tln | HNull =
-              let ln1 = tln.lnTLN
-                  scEq = rightInj (trans (sym (checkExprAsgPtrNull id n nm pT)) eq)
-              in MkLN (oaRewrite scEq (oaBindNull ln1.oaLN))
-                   (nuoRewrite scEq (nuoBindNull ln1.nuoLN))
-                   ln1.liveLN
+          asgExprNull tln =
+            case tln.tkTLN of
+              HNull =>
+                let ln1 = tln.lnTLN
+                    scEq = rightInj (trans (sym (checkExprAsgPtrNull id n nm pT)) eq)
+                in MkLN (oaRewrite scEq (oaBindNull ln1.oaLN))
+                     (nuoRewrite scEq (nuoBindNull ln1.nuoLN))
+                     ln1.liveLN
       asgPtrExprGo (Right (scT, Owner)) pT with
           (usePlace (setPlace n (Pagurus.Status.singleton AOwned) scT) n id nm) proof pU
         asgPtrExprGo (Right (scT, Owner)) pT | Left d =
@@ -1787,16 +2081,17 @@ mutual
           nullTaken :
             TakeLN Null v env1 h1 scT a ->
             TakeLN fl v (setH n v env1) h1 sc' a
-          nullTaken tln with (tln.tkTLN)
-            nullTaken tln | HNull =
-              let ln1 = tln.lnTLN
-                  scEq = cong fst (rightInj (trans (sym (takeAsgPtrNull id n nm pT)) eq))
-                  flEq = cong snd (rightInj (trans (sym (takeAsgPtrNull id n nm pT)) eq))
-              in MkTLN (MkLN (oaRewrite scEq ln1.oaLN)
-                         (nuoRewrite scEq (nuoBindNull ln1.nuoLN))
-                         ln1.liveLN)
-                   (replace {p = \f => HTaken f HVNone (setH n HVNone env1) h1 sc'} flEq
-                      (replace {p = \s => HTaken Null HVNone (setH n HVNone env1) h1 s} scEq HNull))
+          nullTaken tln =
+            case tln.tkTLN of
+              HNull =>
+                let ln1 = tln.lnTLN
+                    scEq = cong fst (rightInj (trans (sym (takeAsgPtrNull id n nm pT)) eq))
+                    flEq = cong snd (rightInj (trans (sym (takeAsgPtrNull id n nm pT)) eq))
+                in MkTLN (MkLN (oaRewrite scEq ln1.oaLN)
+                           (nuoRewrite scEq (nuoBindNull ln1.nuoLN))
+                           ln1.liveLN)
+                     (replace {p = \f => HTaken f HVNone (setH n HVNone env1) h1 sc'} flEq
+                        (replace {p = \s => HTaken Null HVNone (setH n HVNone env1) h1 s} scEq HNull))
       asgPtrTakeGo (Right (scT, Owner)) pT with
           (movePlace (setPlace n (Pagurus.Status.singleton AOwned) scT) n id nm) proof pM
         asgPtrTakeGo (Right (scT, Owner)) pT | Left d =
@@ -1870,13 +2165,14 @@ mutual
           declNull :
             TakeLN Null v env1 h1 scT a ->
             LiveNuo (setH n v env1) h1 sc1 a
-          declNull tln with (tln.tkTLN)
-            declNull tln | HNull =
-              let ln1 = tln.lnTLN
-                  scEq = rightInj (trans (sym (declPtrNullEq k id n nm pT)) eq)
-              in MkLN (oaRewrite scEq (oaBindNull ln1.oaLN))
-                   (nuoRewrite scEq (nuoBindNull ln1.nuoLN))
-                   ln1.liveLN
+          declNull tln =
+            case tln.tkTLN of
+              HNull =>
+                let ln1 = tln.lnTLN
+                    scEq = rightInj (trans (sym (declPtrNullEq k id n nm pT)) eq)
+                in MkLN (oaRewrite scEq (oaBindNull ln1.oaLN))
+                     (nuoRewrite scEq (nuoBindNull ln1.nuoLN))
+                     ln1.liveLN
       declGo (Right (scT, Owner)) pT =
         let tln = takeLN {funs} {chk} ln pT ev
             ln1 = tln.lnTLN
@@ -1912,72 +2208,73 @@ mutual
   ifElseLN ln eq evC evE =
     ifElseLNGo (checkExpr ctx sc cond) Refl ln evC evE eq
     where
-      ifElseLNGo :
-        (resC : Either Diag Scopes) ->
-        checkExpr ctx sc cond = resC ->
-        LiveNuo env h sc a ->
-        HEvalExpr {funs} env h cond (HROk v env0 h0) ->
-        HEvalStmts {funs} env0 h0 els (HOk envS hS) ->
-        checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
-        LiveNuo envS hS sc1 a
-      ifElseLNGo (Left d) pC _ _ _ eq0 =
-        void (leftNotRight (trans (sym (ifExprLeft k iid thn els pC)) eq0))
-      ifElseLNGo (Right sc0) pC ln0 evC0 evE0 eq0 =
-        let lnC = exprLN {funs} {chk} ln0 pC evC0
-        in ifElseLNT (checkStmts k ctx sc0 thn) Refl lnC evE0 eq0 pC
+      mutual
+        ifElseLNGo :
+          (resC : Either Diag Scopes) ->
+          checkExpr ctx sc cond = resC ->
+          LiveNuo env h sc a ->
+          HEvalExpr {funs} env h cond (HROk v env0 h0) ->
+          HEvalStmts {funs} env0 h0 els (HOk envS hS) ->
+          checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
+          LiveNuo envS hS sc1 a
+        ifElseLNGo (Left d) pC _ _ _ eq0 =
+          void (leftNotRight (trans (sym (ifExprLeft k iid thn els pC)) eq0))
+        ifElseLNGo (Right sc0) pC ln0 evC0 evE0 eq0 =
+          let lnC = exprLN {funs} {chk} ln0 pC evC0
+          in ifElseLNT (checkStmts k ctx sc0 thn) Refl lnC evE0 eq0 pC
 
-      ifElseLNT :
-        {sc0 : Scopes} -> {env0 : HEnv} -> {h0 : Heap} ->
-        (resT : Either Diag Scopes) ->
-        checkStmts k ctx sc0 thn = resT ->
-        LiveNuo env0 h0 sc0 a ->
-        HEvalStmts {funs} env0 h0 els (HOk envS hS) ->
-        checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
-        checkExpr ctx sc cond = Right sc0 ->
-        LiveNuo envS hS sc1 a
-      ifElseLNT (Left d) pT _ _ eq0 pC =
-        void (leftNotRight (trans (sym (ifThenLeft iid els pC pT)) eq0))
-      ifElseLNT (Right scT) pT lnC evE0 eq0 pC =
-        ifElseLNE (checkStmts k ctx sc0 els) Refl lnC evE0 eq0 pC pT
+        ifElseLNT :
+          {sc0 : Scopes} -> {env0 : HEnv} -> {h0 : Heap} ->
+          (resT : Either Diag Scopes) ->
+          checkStmts k ctx sc0 thn = resT ->
+          LiveNuo env0 h0 sc0 a ->
+          HEvalStmts {funs} env0 h0 els (HOk envS hS) ->
+          checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
+          checkExpr ctx sc cond = Right sc0 ->
+          LiveNuo envS hS sc1 a
+        ifElseLNT (Left d) pT _ _ eq0 pC =
+          void (leftNotRight (trans (sym (ifThenLeft iid els pC pT)) eq0))
+        ifElseLNT (Right scT) pT lnC evE0 eq0 pC =
+          ifElseLNE (checkStmts k ctx sc0 els) Refl lnC evE0 eq0 pC pT
 
-      ifElseLNE :
-        {sc0, scT : Scopes} -> {env0 : HEnv} -> {h0 : Heap} ->
-        (resE : Either Diag Scopes) ->
-        checkStmts k ctx sc0 els = resE ->
-        LiveNuo env0 h0 sc0 a ->
-        HEvalStmts {funs} env0 h0 els (HOk envS hS) ->
-        checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
-        checkExpr ctx sc cond = Right sc0 ->
-        checkStmts k ctx sc0 thn = Right scT ->
-        LiveNuo envS hS sc1 a
-      ifElseLNE (Left d) pE _ _ eq0 pC pT =
-        void (leftNotRight (trans (sym (ifElseLeft iid pC pT pE)) eq0))
-      ifElseLNE (Right scE) pE lnC evE0 eq0 pC pT =
-        let lnE = stmtsLN {funs} {chk} {fuel = k} lnC pE evE0
-        in ifElseLNJoin (stmtsEnded thn) (stmtsEnded els) Refl Refl lnE eq0 pC pT pE
+        ifElseLNE :
+          {sc0, scT : Scopes} -> {env0 : HEnv} -> {h0 : Heap} ->
+          (resE : Either Diag Scopes) ->
+          checkStmts k ctx sc0 els = resE ->
+          LiveNuo env0 h0 sc0 a ->
+          HEvalStmts {funs} env0 h0 els (HOk envS hS) ->
+          checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
+          checkExpr ctx sc cond = Right sc0 ->
+          checkStmts k ctx sc0 thn = Right scT ->
+          LiveNuo envS hS sc1 a
+        ifElseLNE (Left d) pE _ _ eq0 pC pT =
+          void (leftNotRight (trans (sym (ifElseLeft iid pC pT pE)) eq0))
+        ifElseLNE (Right scE) pE lnC evE0 eq0 pC pT =
+          let lnE = stmtsLN {funs} {chk} {fuel = k} lnC pE evE0
+          in ifElseLNJoin (stmtsEnded thn) (stmtsEnded els) Refl Refl lnE eq0 pC pT pE
 
-      ifElseLNJoin :
-        {sc0, scT, scE : Scopes} ->
-        (et, ee : Bool) ->
-        stmtsEnded thn = et ->
-        stmtsEnded els = ee ->
-        LiveNuo envS hS scE a ->
-        checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
-        checkExpr ctx sc cond = Right sc0 ->
-        checkStmts k ctx sc0 thn = Right scT ->
-        checkStmts k ctx sc0 els = Right scE ->
-        LiveNuo envS hS sc1 a
-      ifElseLNJoin False False pThn pEls lnE eq0 pC pT pE =
-        let scEq = rightInj (trans (sym (ifFull iid pThn pEls pC pT pE)) eq0)
-        in MkLN (oaRewrite scEq (oaJoinRight lnE.oaLN))
-             (nuoRewrite scEq (nuoJoinRight lnE.oaLN lnE.nuoLN)) lnE.liveLN
-      ifElseLNJoin True False pThn pEls lnE eq0 pC pT pE =
-        let scEq = rightInj (trans (sym (ifThenEnded iid pThn pEls pC pT pE)) eq0)
-        in MkLN (oaRewrite scEq lnE.oaLN) (nuoRewrite scEq lnE.nuoLN) lnE.liveLN
-      ifElseLNJoin False True pThn pEls lnE eq0 pC pT pE =
-        void (stmtsEndedNotHOk pEls evE)
-      ifElseLNJoin True True pThn pEls lnE eq0 pC pT pE =
-        void (stmtsEndedNotHOk pEls evE)
+        ifElseLNJoin :
+          {sc0, scT, scE : Scopes} ->
+          (et, ee : Bool) ->
+          stmtsEnded thn = et ->
+          stmtsEnded els = ee ->
+          LiveNuo envS hS scE a ->
+          checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
+          checkExpr ctx sc cond = Right sc0 ->
+          checkStmts k ctx sc0 thn = Right scT ->
+          checkStmts k ctx sc0 els = Right scE ->
+          LiveNuo envS hS sc1 a
+        ifElseLNJoin False False pThn pEls lnE eq0 pC pT pE =
+          let scEq = rightInj (trans (sym (ifFull iid pThn pEls pC pT pE)) eq0)
+          in MkLN (oaRewrite scEq (oaJoinRight lnE.oaLN))
+               (nuoRewrite scEq (nuoJoinRight lnE.oaLN lnE.nuoLN)) lnE.liveLN
+        ifElseLNJoin True False pThn pEls lnE eq0 pC pT pE =
+          let scEq = rightInj (trans (sym (ifThenEnded iid pThn pEls pC pT pE)) eq0)
+          in MkLN (oaRewrite scEq lnE.oaLN) (nuoRewrite scEq lnE.nuoLN) lnE.liveLN
+        ifElseLNJoin False True pThn pEls lnE eq0 pC pT pE =
+          void (stmtsEndedNotHOk pEls evE)
+        ifElseLNJoin True True pThn pEls lnE eq0 pC pT pE =
+          void (stmtsEndedNotHOk pEls evE)
 
   ifThenLNRet :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
@@ -1992,23 +2289,24 @@ mutual
     cell hS a = Just Live
   ifThenLNRet ln eq evC evT = retGo (checkExpr ctx sc cond) Refl
     where
-      retGo : (resC : Either Diag Scopes) -> checkExpr ctx sc cond = resC ->
-              cell hS a = Just Live
-      retGo (Left d) pC =
-        void (leftNotRight (trans (sym (ifExprLeft k iid thn els pC)) eq))
-      retGo (Right sc0) pC =
-        let lnC = exprLN {funs} {chk} ln pC evC
-        in retT (checkStmts k ctx sc0 thn) Refl lnC pC
-      retT : {sc0 : Scopes} -> {env0 : HEnv} -> {h0 : Heap} ->
-             (resT : Either Diag Scopes) ->
-             checkStmts k ctx sc0 thn = resT ->
-             LiveNuo env0 h0 sc0 a ->
-             checkExpr ctx sc cond = Right sc0 ->
-             cell hS a = Just Live
-      retT (Left d) pT _ pC =
-        void (leftNotRight (trans (sym (ifThenLeft iid els pC pT)) eq))
-      retT (Right scT) pT lnC _ =
-        stmtsLNRet {funs} {chk} {fuel = k} lnC pT evT
+      mutual
+        retGo : (resC : Either Diag Scopes) -> checkExpr ctx sc cond = resC ->
+                cell hS a = Just Live
+        retGo (Left d) pC =
+          void (leftNotRight (trans (sym (ifExprLeft k iid thn els pC)) eq))
+        retGo (Right sc0) pC =
+          let lnC = exprLN {funs} {chk} ln pC evC
+          in retT (checkStmts k ctx sc0 thn) Refl lnC pC
+        retT : {sc0 : Scopes} -> {env0 : HEnv} -> {h0 : Heap} ->
+               (resT : Either Diag Scopes) ->
+               checkStmts k ctx sc0 thn = resT ->
+               LiveNuo env0 h0 sc0 a ->
+               checkExpr ctx sc cond = Right sc0 ->
+               cell hS a = Just Live
+        retT (Left d) pT _ pC =
+          void (leftNotRight (trans (sym (ifThenLeft iid els pC pT)) eq))
+        retT (Right scT) pT lnC _ =
+          stmtsLNRet {funs} {chk} {fuel = k} lnC pT evT
 
   ifElseLNRet :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
@@ -2023,36 +2321,37 @@ mutual
     cell hS a = Just Live
   ifElseLNRet ln eq evC evE = retGo (checkExpr ctx sc cond) Refl
     where
-      retGo : (resC : Either Diag Scopes) -> checkExpr ctx sc cond = resC ->
-              cell hS a = Just Live
-      retGo (Left d) pC =
-        void (leftNotRight (trans (sym (ifExprLeft k iid thn els pC)) eq))
-      retGo (Right sc0) pC =
-        let lnC = exprLN {funs} {chk} ln pC evC
-        in retT (checkStmts k ctx sc0 thn) Refl lnC pC
+      mutual
+        retGo : (resC : Either Diag Scopes) -> checkExpr ctx sc cond = resC ->
+                cell hS a = Just Live
+        retGo (Left d) pC =
+          void (leftNotRight (trans (sym (ifExprLeft k iid thn els pC)) eq))
+        retGo (Right sc0) pC =
+          let lnC = exprLN {funs} {chk} ln pC evC
+          in retT (checkStmts k ctx sc0 thn) Refl lnC pC
 
-      retT : {sc0 : Scopes} -> {env0 : HEnv} -> {h0 : Heap} ->
-             (resT : Either Diag Scopes) ->
-             checkStmts k ctx sc0 thn = resT ->
-             LiveNuo env0 h0 sc0 a ->
-             checkExpr ctx sc cond = Right sc0 ->
-             cell hS a = Just Live
-      retT (Left d) pT _ pC =
-        void (leftNotRight (trans (sym (ifThenLeft iid els pC pT)) eq))
-      retT (Right scT) pT lnC pC =
-        retE (checkStmts k ctx sc0 els) Refl lnC pC pT
+        retT : {sc0 : Scopes} -> {env0 : HEnv} -> {h0 : Heap} ->
+               (resT : Either Diag Scopes) ->
+               checkStmts k ctx sc0 thn = resT ->
+               LiveNuo env0 h0 sc0 a ->
+               checkExpr ctx sc cond = Right sc0 ->
+               cell hS a = Just Live
+        retT (Left d) pT _ pC =
+          void (leftNotRight (trans (sym (ifThenLeft iid els pC pT)) eq))
+        retT (Right scT) pT lnC pC =
+          retE (checkStmts k ctx sc0 els) Refl lnC pC pT
 
-      retE : {sc0, scT : Scopes} -> {env0 : HEnv} -> {h0 : Heap} ->
-             (resE : Either Diag Scopes) ->
-             checkStmts k ctx sc0 els = resE ->
-             LiveNuo env0 h0 sc0 a ->
-             checkExpr ctx sc cond = Right sc0 ->
-             checkStmts k ctx sc0 thn = Right scT ->
-             cell hS a = Just Live
-      retE (Left d) pE _ pC pT =
-        void (leftNotRight (trans (sym (ifElseLeft iid pC pT pE)) eq))
-      retE (Right scE) pE lnC _ _ =
-        stmtsLNRet {funs} {chk} {fuel = k} lnC pE evE
+        retE : {sc0, scT : Scopes} -> {env0 : HEnv} -> {h0 : Heap} ->
+               (resE : Either Diag Scopes) ->
+               checkStmts k ctx sc0 els = resE ->
+               LiveNuo env0 h0 sc0 a ->
+               checkExpr ctx sc cond = Right sc0 ->
+               checkStmts k ctx sc0 thn = Right scT ->
+               cell hS a = Just Live
+        retE (Left d) pE _ pC pT =
+          void (leftNotRight (trans (sym (ifElseLeft iid pC pT pE)) eq))
+        retE (Right scE) pE lnC _ _ =
+          stmtsLNRet {funs} {chk} {fuel = k} lnC pE evE
 
   loopSLN :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
@@ -2388,14 +2687,11 @@ noneUnheldPres {a} {c} {frame} wf ev phd live0 with (c == a) proof pca
       (heldPtr frame c) proof phc
     noneUnheldPres wf ev phd live0 | False | False =
       framePres {funs} wf ev c phc live0
-    noneUnheldPres wf ev phd live0 | False | True with (cell hB c) proof ph
-      noneUnheldPres wf ev phd live0 | False | True | Just Live = ph
-      noneUnheldPres wf ev phd live0 | False | True | Just Freed =
-        -- BindOk-missing frame holds leftover `c` and the body freed it.
-        -- Same unproved `restoreHeldOwn` family as unique-own leftover of `a`.
-        void (trueNotFalse (trans (sym (eqNatRefl c)) pca))
-      noneUnheldPres wf ev phd live0 | False | True | Nothing =
-        void (stmtsStay {funs} wf ev live0 ph)
+    noneUnheldPres wf ev phd live0 | False | True =
+      cellOn {h = hB} {a = c} (cell hB c) Refl
+        (\eq => eq)
+        (\eq => void (trueNotFalse (trans (sym (eqNatRefl c)) pca)))
+        (\eq => void (stmtsStay {funs} wf ev live0 eq))
 
 noneUnheldPresRet :
   {funs : List Fun} ->

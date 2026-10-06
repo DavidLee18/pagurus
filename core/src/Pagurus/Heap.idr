@@ -126,6 +126,15 @@ setH : Place -> HVal -> HEnv -> HEnv
 setH n v [] = [(n, v)]
 setH n v ((k, x) :: xs) = if n == k then (n, v) :: xs else (k, x) :: setH n v xs
 
+||| A copy value is not a heap pointer; binding it as a pointer parameter
+||| would put `HVCopy` under a use-safe `AOwned`/`ABorrowed` and break
+||| `OverApprox`. Treat it as empty (the modelled C fragment does not pass
+||| integers to pointer parameters).
+public export
+ptrArg : HVal -> HVal
+ptrArg HVCopy = HVNone
+ptrArg v = v
+
 ||| Callee frame: pointer parameters receive the corresponding argument values.
 ||| Copy parameters are not heap-tracked. Missing values become `HVNone`.
 public export
@@ -137,7 +146,7 @@ bindFrame (p :: ps) [] =
     Copy => bindFrame ps []
 bindFrame (p :: ps) (v :: vs) =
   case p.ty of
-    Ptr => setH p.place v (bindFrame ps vs)
+    Ptr => setH p.place (ptrArg v) (bindFrame ps vs)
     Copy => bindFrame ps vs
 
 export
@@ -535,3 +544,62 @@ liveNotFreed Refl impossible
 export
 trueNotFalse : Not (True = False)
 trueNotFalse Refl impossible
+
+export
+bindFrameNil : (vs : List HVal) -> bindFrame [] vs = []
+bindFrameNil _ = Refl
+
+export
+ltNotEq : (a, b : Nat) -> a < b = True -> a == b = False
+ltNotEq Z Z prf = void (falseNotTrue prf)
+ltNotEq Z (S _) _ = Refl
+ltNotEq (S _) Z prf = void (falseNotTrue prf)
+ltNotEq (S a) (S b) prf = ltNotEq a b prf
+
+export
+liveLtNext : (h : Heap) -> HeapWF h -> (a : Addr) ->
+             cell h a = Just Live -> a < h.next = True
+liveLtNext (MkHeap cells nxt) (ItWF b) a live = boundLookup b a Live live
+
+export
+liveNotFresh : (h : Heap) -> HeapWF h -> (a : Addr) ->
+               cell h a = Just Live -> a == h.next = False
+liveNotFresh h wf a live = ltNotEq a h.next (liveLtNext h wf a live)
+
+export
+justLtNext : (h : Heap) -> HeapWF h -> (a : Addr) -> {cl : Cell} ->
+             cell h a = Just cl -> a < h.next = True
+justLtNext (MkHeap cells nxt) (ItWF b) a prf = boundLookup b a cl prf
+
+export
+justNotFresh : (h : Heap) -> HeapWF h -> (a : Addr) -> {cl : Cell} ->
+               cell h a = Just cl -> a == h.next = False
+justNotFresh h wf a prf = ltNotEq a h.next (justLtNext h wf a prf)
+
+||| `markFreed` never unmaps a cell that was already present.
+export
+markFreedNotGone :
+  (h : Heap) -> (a, b : Addr) -> {cl : Cell} ->
+  cell h a = Just cl ->
+  Not (cell (markFreed b h) a = Nothing)
+markFreedNotGone h a b prf eq with (a == b) proof pab
+  markFreedNotGone h a b prf eq | True =
+    nothingNotJustH (trans (sym eq)
+      (replace {p = \x => cell (markFreed b h) x = Just Freed}
+         (sym (eqNatTrue a b pab)) (markFreedHit b h)))
+  markFreedNotGone h a b prf eq | False =
+    nothingNotJustH (trans (sym eq) (trans (markFreedMiss a b h pab) prf))
+
+||| `alloc` never unmaps a cell that was already present.
+export
+allocNotGone :
+  (h : Heap) -> HeapWF h -> (a : Addr) -> {cl : Cell} ->
+  cell h a = Just cl ->
+  Not (cell (snd (alloc h)) a = Nothing)
+allocNotGone h wf a prf eq =
+  nothingNotJustH (trans (sym eq) (trans (allocPresCell h a (justNotFresh h wf a prf)) prf))
+
+export
+orFalse : {x, y : Bool} -> x || y = False -> (x = False, y = False)
+orFalse {x = False} {y = False} Refl = (Refl, Refl)
+orFalse {x = True} prf = void (trueNotFalse prf)

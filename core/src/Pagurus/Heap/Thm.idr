@@ -11,16 +11,20 @@ import Pagurus.Heap.Fits
 
 %default total
 
+leftNotRight : {0 d : a} -> {0 x : b} -> Not (Left d = Right x)
+leftNotRight Refl impossible
+
 public export
 data HSafeOut : HOutcome -> Scopes -> Type where
   HOutOk : {env' : HEnv} -> {h' : Heap} ->
            OverApprox env' h' sc' -> HSafeOut (HOk env' h') sc'
-  HOutRet : HSafeOut (HReturned env' h') sc'
+  HOutRet : {env' : HEnv} -> {h' : Heap} ->
+            HeapWF h' -> HSafeOut (HReturned env' h') sc'
 
 export
 hFromOut : HSafeOut o sc' -> Not (IsHCrash o)
 hFromOut (HOutOk _) hit = okNotHit hit
-hFromOut (HOutRet) hit = retNotHit hit
+hFromOut (HOutRet _) hit = retNotHit hit
 
 export
 hCrashNotOk : HSafeOut (HCrashOut c) sc -> Void
@@ -37,16 +41,24 @@ hOutRewrite Refl s = s
 export
 hJoinOutL : {scT, scE : Scopes} -> HSafeOut o scT -> HSafeOut o (joinScopes scT scE)
 hJoinOutL (HOutOk oa) = HOutOk (oaJoinLeft oa)
-hJoinOutL (HOutRet) = HOutRet
+hJoinOutL (HOutRet wf) = HOutRet wf
 
 export
 hJoinOutR : {scT, scE : Scopes} -> HSafeOut o scE -> HSafeOut o (joinScopes scT scE)
 hJoinOutR (HOutOk oa) = HOutOk (oaJoinRight oa)
-hJoinOutR (HOutRet) = HOutRet
+hJoinOutR (HOutRet wf) = HOutRet wf
 
 export
 hFromOk : HSafeOut (HOk env' h') sc' -> OverApprox env' h' sc'
 hFromOk (HOutOk oa) = oa
+
+export
+hOutWf : HSafeOut (HOk env' h') sc' -> HeapWF h'
+hOutWf (HOutOk oa) = oa.wf
+
+export
+hRetWf : HSafeOut (HReturned env' h') sc' -> HeapWF h'
+hRetWf (HOutRet wf) = wf
 
 public export
 data HSafeRes : HResult -> Scopes -> Type where
@@ -71,7 +83,7 @@ hResToOut (HROutOk oa) = HOutOk oa
 
 export
 hResToRet : HSafeRes (HROk v env' h') sc' -> HSafeOut (HReturned env' h') sc'
-hResToRet (HROutOk _) = HOutRet
+hResToRet (HROutOk oa) = HOutRet oa.wf
 
 export
 hrCrashNotOk : HSafeRes (HRCrash c) sc -> Void
@@ -155,7 +167,7 @@ CheckAcceptedNoHeapCrash =
   checkStmts fuel ctx sc ss = Right sc' ->
   (env : HEnv) -> (h : Heap) ->
   OverApprox env h sc ->
-  (o : HOutcome) -> HEvalStmts [] env h ss o ->
+  (o : HOutcome) -> HEvalStmts env h ss o ->
   Not (IsHCrash o)
 
 ||| Every defined function in the unit was accepted at this fuel.
@@ -185,22 +197,26 @@ checkedLookup {funs = g :: gs} (FCons ok rest) look with (g.name == n)
     checkedLookup rest look
 
 ||| If `checkFun` accepts a defined function, its body is heap-crash-free
-||| from an over-approximation of `paramScopes` (per-argument `funModes`).
-||| Instantiates the intra theorem at `funs = []` (calls in the body do not
-||| run callees; that is the remaining interprocedural OA gap, see README).
+||| from an over-approximation of `paramScopes` (per-argument `funModes`),
+||| under any translation unit whose defined functions were accepted at
+||| the same fuel (`FunsChecked`). `HEvalStmts` uses that unit, so
+||| `HECallUser` / `HSCallUser` (callee bodies) are covered.
 public export
 CheckFunNoHeapCrash : Type
 CheckFunNoHeapCrash =
+  {funs : List Fun} ->
   (fuel : Nat) -> (ctx : Ctx) -> (f : Fun) ->
   checkFun fuel ctx f = Right () ->
   f.defined = True ->
+  FunsChecked fuel ctx funs ->
   (env : HEnv) -> (h : Heap) ->
   OverApprox env h (paramScopes ctx f) ->
-  (o : HOutcome) -> HEvalStmts [] env h f.body o ->
+  (o : HOutcome) -> HEvalStmts {funs} env h f.body o ->
   Not (IsHCrash o)
 
 ||| If `checkProgram` accepts the unit, every defined function's body is
-||| heap-crash-free from an over-approximation of its `paramScopes`.
+||| heap-crash-free from an over-approximation of its `paramScopes`,
+||| under heap eval of *that* translation unit (`p.functions`).
 public export
 CheckProgramNoHeapCrash : Type
 CheckProgramNoHeapCrash =
@@ -210,5 +226,25 @@ CheckProgramNoHeapCrash =
   findFun p.functions f.name = Just f ->
   (env : HEnv) -> (h : Heap) ->
   OverApprox env h (paramScopes (mkProgCtx p.functions) f) ->
-  (o : HOutcome) -> HEvalStmts [] env h f.body o ->
+  (o : HOutcome) -> HEvalStmts {funs = p.functions} env h f.body o ->
   Not (IsHCrash o)
+
+checkFunOkBodyGo :
+  {fuel : Nat} -> {ctx : Ctx} -> {f : Fun} ->
+  f.defined = True ->
+  checkFun fuel ctx f = Right () ->
+  (res : Either Diag Scopes) ->
+  checkStmts fuel ctx (paramScopes ctx f) f.body = res ->
+  (sc' : Scopes ** checkStmts fuel ctx (paramScopes ctx f) f.body = Right sc')
+checkFunOkBodyGo pDef ok (Left d) pB =
+  void (leftNotRight (trans (sym (checkFunDefLeft pDef pB)) ok))
+checkFunOkBodyGo pDef ok (Right sc') pB = (sc' ** pB)
+
+export
+checkFunOkBody :
+  {fuel : Nat} -> {ctx : Ctx} -> {f : Fun} ->
+  f.defined = True ->
+  checkFun fuel ctx f = Right () ->
+  (sc' : Scopes ** checkStmts fuel ctx (paramScopes ctx f) f.body = Right sc')
+checkFunOkBody pDef ok =
+  checkFunOkBodyGo pDef ok (checkStmts fuel ctx (paramScopes ctx f) f.body) Refl

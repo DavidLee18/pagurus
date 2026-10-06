@@ -112,6 +112,64 @@ doesConsume Never = False
 doesConsume May = True
 doesConsume Always = True
 
+||| Place of a variable argument; other forms are not tracked as aliases.
+public export
+argVarPlace : Expr -> Maybe Place
+argVarPlace (EVar _ p _) = Just p
+argVarPlace _ = Nothing
+
+public export
+placeIn : Place -> List Place -> Bool
+placeIn _ [] = False
+placeIn p (q :: qs) = (p == q) || placeIn p qs
+
+||| Places of Never (borrow) `EVar` arguments. Extra args beyond `modes`
+||| are treated as consumed, matching `consumeHead [] = Always`.
+public export
+borrowPlaces : List Expr -> List Consume -> List Place
+borrowPlaces [] _ = []
+borrowPlaces (e :: es) [] = borrowPlaces es []
+borrowPlaces (e :: es) (m :: ms) =
+  case (doesConsume m, argVarPlace e) of
+    (False, Just p) => p :: borrowPlaces es ms
+    _ => borrowPlaces es ms
+
+||| Places of May/Always (consume) `EVar` arguments, including extras.
+public export
+consumePlaces : List Expr -> List Consume -> List Place
+consumePlaces [] _ = []
+consumePlaces (e :: es) [] =
+  case argVarPlace e of
+    Just p => p :: consumePlaces es []
+    Nothing => consumePlaces es []
+consumePlaces (e :: es) (m :: ms) =
+  case (doesConsume m, argVarPlace e) of
+    (True, Just p) => p :: consumePlaces es ms
+    _ => consumePlaces es ms
+
+public export
+placesOverlap : List Place -> List Place -> Bool
+placesOverlap [] _ = False
+placesOverlap (p :: ps) qs = placeIn p qs || placesOverlap ps qs
+
+||| True when the same tracked owner (or an alias of it, via the same
+||| interned place) is passed to a borrowed (Never) parameter and also to
+||| a consuming (May/Always) parameter. Consuming arguments are still
+||| checked against each other by `checkArgsModes` / `takeOwner`.
+public export
+mixedAlias : List Expr -> List Consume -> Bool
+mixedAlias es ms = placesOverlap (borrowPlaces es ms) (consumePlaces es ms)
+
+||| Call-site mixed borrow+consume of the same owner.
+public export
+mixedAliasDiag : Nat -> String -> Expr -> Diag
+mixedAliasDiag nid callee e =
+  MkDiag KUnproven
+    ("aliased pointer passed as both a borrow and a consume to `" ++ callee ++ "`")
+    (exprId e) "passed here"
+    [(nid, "called here")]
+    "the same owner (or an alias of it) is passed to a Never parameter and a May/Always parameter; after the callee consumes it, the borrowed name would be a use-after-free"
+
 ||| Extra arguments beyond the summarised parameter list are treated as
 ||| consumed (variadic / unknown tail). Empty list therefore heads at Always.
 public export
@@ -123,6 +181,18 @@ public export
 consumeTail : List Consume -> List Consume
 consumeTail [] = []
 consumeTail (_ :: ms) = ms
+
+||| First overlapping consume-side `EVar` used for the diagnostic span.
+public export
+mixedAliasArg : List Expr -> List Consume -> Expr
+mixedAliasArg [] _ = EUnsupported 0 "mixed alias"
+mixedAliasArg (e :: es) ms =
+  case argVarPlace e of
+    Just p =>
+      if placeIn p (borrowPlaces (e :: es) ms) && placeIn p (consumePlaces (e :: es) ms)
+        then e
+        else mixedAliasArg es (consumeTail ms)
+    Nothing => mixedAliasArg es (consumeTail ms)
 
 public export
 record Ctx where
@@ -300,7 +370,32 @@ summarise (S k) funs acc =
       next = map (\f => (f.name, joinModes (lookupNamedList acc f.name) (paramModes acc f))) defs
   in if eqNamedModes next acc then acc else summarise k funs next
 
+||| Nested consume of a borrow-argument place (e.g. `f(p, g(p))` where `g`
+||| consumes `p`). Direct Never+May/Always of the same `EVar` is `mixedAlias`.
 export
+nestedMixed : Ctx -> List Expr -> List Consume -> Bool
+nestedMixed ctx es ms = nestedGo ctx.summaries (borrowPlaces es ms) es
+  where
+    exprHits : List (String, List Consume) -> Place -> Expr -> Bool
+    exprHits acc p e = doesConsume (consumeInExpr acc p e)
+
+    argsHit : List (String, List Consume) -> Place -> List Expr -> Bool
+    argsHit _ _ [] = False
+    argsHit acc p (e :: rest) = exprHits acc p e || argsHit acc p rest
+
+    nestedGo : List (String, List Consume) -> List Place -> List Expr -> Bool
+    nestedGo _ [] _ = False
+    nestedGo acc (p :: ps) es0 = argsHit acc p es0 || nestedGo acc ps es0
+
+||| True when the call aliases a borrow with a consume, including nested
+||| callees in later arguments.
+public export
+aliasBad : Ctx -> List Expr -> String -> Bool
+aliasBad ctx args callee =
+  mixedAlias args (funModes ctx callee)
+    || nestedMixed ctx args (funModes ctx callee)
+
+public export
 paramStatus : Consume -> Nat -> Status
 paramStatus Never fid = Pagurus.Status.singleton (ABorrowed fid)
 paramStatus May _ = Pagurus.Status.singleton AOwned
@@ -321,6 +416,7 @@ paramStatusAlways : (fid : Nat) ->
   paramStatus Always fid = Pagurus.Status.singleton AOwned
 paramStatusAlways _ = Refl
 
+public export
 bindParams : Nat -> List Param -> List Consume -> Env
 bindParams _ [] _ = []
 bindParams fid (p :: ps) [] =
@@ -601,13 +697,20 @@ mutual
   checkRealloc _ sc [] = Right sc
   checkRealloc ctx sc (e :: es) = reallocTail ctx es (takeOwner ctx sc e)
 
+  public export
+  definedCallFrom : Bool -> Ctx -> Scopes -> Nat -> String -> List Expr -> List Consume -> Either Diag Scopes
+  definedCallFrom True _ _ nid callee args modes =
+    Left (mixedAliasDiag nid callee (mixedAliasArg args modes))
+  definedCallFrom False ctx sc _ callee args modes =
+    checkArgsModes ctx sc callee args modes
+
   export
   checkCall : Ctx -> Scopes -> Nat -> String -> List Expr -> Either Diag Scopes
   checkCall ctx sc id callee args =
     if isBuiltin callee
       then checkArgsBorrow ctx sc args
       else if isDefined ctx callee
-        then checkArgsModes ctx sc callee args (funModes ctx callee)
+        then definedCallFrom (aliasBad ctx args callee) ctx sc id callee args (funModes ctx callee)
         else if isRealloc callee
           then checkRealloc ctx sc args
           else Left (MkDiag KUnsupported
@@ -777,10 +880,42 @@ checkFunDefCase :
 checkFunDefCase prf = rewrite prf in Refl
 
 export
+paramScopesEq : (ctx : Ctx) -> (f : Fun) ->
+  paramScopes ctx f = bindParams f.id f.params (funModes ctx f.name)
+paramScopesEq _ _ = Refl
+
+export
 paramScopesNil : (ctx : Ctx) -> (f : Fun) ->
   f.params = [] ->
   paramScopes ctx f = []
 paramScopesNil ctx f prf = rewrite prf in Refl
+
+export
+bindParamsNil : (fid : Nat) -> (ms : List Consume) -> bindParams fid [] ms = []
+bindParamsNil _ _ = Refl
+
+export
+borrowPlacesNilModes : (es : List Expr) -> borrowPlaces es [] = []
+borrowPlacesNilModes [] = Refl
+borrowPlacesNilModes (_ :: es) = borrowPlacesNilModes es
+
+export
+mixedAliasNilModes : (es : List Expr) -> mixedAlias es [] = False
+mixedAliasNilModes es = rewrite borrowPlacesNilModes es in Refl
+
+export
+nestedMixedNilModes : (ctx : Ctx) -> (es : List Expr) -> nestedMixed ctx es [] = False
+nestedMixedNilModes ctx es = rewrite borrowPlacesNilModes es in Refl
+
+export
+aliasBadNilModes :
+  {ctx : Ctx} -> {callee : String} -> {args : List Expr} ->
+  funModes ctx callee = [] ->
+  aliasBad ctx args callee = False
+aliasBadNilModes {ctx} {callee} {args} prf =
+  rewrite prf in
+    rewrite mixedAliasNilModes args in
+      rewrite nestedMixedNilModes ctx args in Refl
 
 export
 checkFunsFromNil : (fuel : Nat) -> (ctx : Ctx) ->
@@ -970,14 +1105,88 @@ checkCallRealloc :
 checkCallRealloc pb pr pd = rewrite pb in rewrite pd in rewrite pr in Refl
 
 export
+definedCallFromFalse :
+  {ctx : Ctx} -> {sc : Scopes} -> {nid : Nat} -> {callee : String} ->
+  {args : List Expr} -> {modes : List Consume} ->
+  definedCallFrom False ctx sc nid callee args modes =
+    checkArgsModes ctx sc callee args modes
+definedCallFromFalse = Refl
+
+export
+definedCallFromTrue :
+  {ctx : Ctx} -> {sc : Scopes} -> {nid : Nat} -> {callee : String} ->
+  {args : List Expr} -> {modes : List Consume} ->
+  definedCallFrom True ctx sc nid callee args modes =
+    Left (mixedAliasDiag nid callee (mixedAliasArg args modes))
+definedCallFromTrue = Refl
+
+export
 checkCallDefined :
   {ctx : Ctx} -> {sc : Scopes} -> {nid : Nat} -> {callee : String} ->
   {args : List Expr} ->
   isBuiltin callee = False ->
   isDefined ctx callee = True ->
+  aliasBad ctx args callee = False ->
   checkCall ctx sc nid callee args =
     checkArgsModes ctx sc callee args (funModes ctx callee)
-checkCallDefined pb pd = rewrite pb in rewrite pd in Refl
+checkCallDefined pb pd pbad = rewrite pb in rewrite pd in rewrite pbad in Refl
+
+export
+checkCallMixedAlias :
+  {ctx : Ctx} -> {sc : Scopes} -> {nid : Nat} -> {callee : String} ->
+  {args : List Expr} ->
+  isBuiltin callee = False ->
+  isDefined ctx callee = True ->
+  aliasBad ctx args callee = True ->
+  checkCall ctx sc nid callee args =
+    Left (mixedAliasDiag nid callee (mixedAliasArg args (funModes ctx callee)))
+checkCallMixedAlias pb pd pbad = rewrite pb in rewrite pd in rewrite pbad in Refl
+
+leftNotRightChk : {0 d : a} -> {0 x : b} -> Not (Left d = Right x)
+leftNotRightChk Refl impossible
+
+rightInjChk : Right x = Right y -> x = y
+rightInjChk Refl = Refl
+
+export
+callDefinedNoAlias :
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {nid : Nat} -> {callee : String} ->
+  {args : List Expr} ->
+  checkCall ctx sc nid callee args = Right sc' ->
+  isBuiltin callee = False ->
+  isDefined ctx callee = True ->
+  aliasBad ctx args callee = False
+callDefinedNoAlias eq pb pd with (aliasBad ctx args callee) proof pbad
+  callDefinedNoAlias eq pb pd | False = Refl
+  callDefinedNoAlias eq pb pd | True =
+    void (leftNotRightChk (trans (sym (checkCallMixedAlias pb pd pbad)) eq))
+
+||| A call with no arguments does not change scopes.
+export
+callNilScope :
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {nid : Nat} -> {callee : String} ->
+  checkCall ctx sc nid callee [] = Right sc' ->
+  sc' = sc
+callNilScope eq =
+  nilGo (isBuiltin callee) Refl (isDefined ctx callee) Refl (isRealloc callee) Refl
+  where
+    nilGo :
+      (b : Bool) -> isBuiltin callee = b ->
+      (d : Bool) -> isDefined ctx callee = d ->
+      (r : Bool) -> isRealloc callee = r ->
+      sc' = sc
+    nilGo True pb _ _ _ _ =
+      sym (rightInjChk (trans (sym (trans (checkCallBuiltin {args = []} pb)
+                                  (checkArgsBorrowNil ctx sc))) eq))
+    nilGo False pb True pd _ _ =
+      let pbad = callDefinedNoAlias {args = []} eq pb pd
+      in sym (rightInjChk (trans (sym (trans (checkCallDefined {args = []} pb pd pbad)
+                                     (checkArgsModesNil ctx sc callee (funModes ctx callee)))) eq))
+    nilGo False pb False pd True pr =
+      sym (rightInjChk (trans (sym (trans (checkCallRealloc {args = []} pb pr pd)
+                                  (checkReallocNil ctx sc))) eq))
+    nilGo False pb False pd False pr =
+      void (leftNotRightChk (trans (sym (checkCallOpaque {args = []} pb pr pd)) eq))
 
 export
 assignPtrLeft :
@@ -1502,6 +1711,22 @@ argsBorrowRight :
 argsBorrowRight _ prf = rewrite prf in Refl
 
 export
+argsBorrowSplit :
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {e : Expr} -> {es : List Expr} ->
+  checkArgsBorrow ctx sc (e :: es) = Right sc' ->
+  (sc1 ** (checkExpr ctx sc e = Right sc1, checkArgsBorrow ctx sc1 es = Right sc'))
+argsBorrowSplit eq = splitGo (checkExpr ctx sc e) Refl
+  where
+    splitGo :
+      (res : Either Diag Scopes) ->
+      checkExpr ctx sc e = res ->
+      (sc1 ** (checkExpr ctx sc e = Right sc1, checkArgsBorrow ctx sc1 es = Right sc'))
+    splitGo (Left d) pE =
+      void (leftNotRightChk (trans (sym (argsBorrowLeft es pE)) eq))
+    splitGo (Right sc1) pE =
+      (sc1 ** (pE, trans (sym (argsBorrowRight es pE)) eq))
+
+export
 argsMoveLeft :
   (es : List Expr) ->
   {ctx : Ctx} -> {sc : Scopes} -> {e : Expr} -> {d : Diag} ->
@@ -1604,6 +1829,65 @@ argsModesExtraRight :
   checkArgsModes ctx sc callee (e :: es) [] =
     checkArgsModes ctx sc1 callee es []
 argsModesExtraRight _ pT = rewrite pT in Refl
+
+export
+argsModesBorrowSplit :
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {e : Expr} -> {es : List Expr} ->
+  {callee : String} -> {m : Consume} -> {ms : List Consume} ->
+  doesConsume m = False ->
+  checkArgsModes ctx sc callee (e :: es) (m :: ms) = Right sc' ->
+  (sc1 ** (checkExpr ctx sc e = Right sc1,
+           checkArgsModes ctx sc1 callee es ms = Right sc'))
+argsModesBorrowSplit pc eq = splitGo (checkExpr ctx sc e) Refl
+  where
+    splitGo :
+      (res : Either Diag Scopes) ->
+      checkExpr ctx sc e = res ->
+      (sc1 ** (checkExpr ctx sc e = Right sc1,
+               checkArgsModes ctx sc1 callee es ms = Right sc'))
+    splitGo (Left d) pE =
+      void (leftNotRightChk (trans (sym (argsModesBorrowLeft es ms pc pE)) eq))
+    splitGo (Right sc1) pE =
+      (sc1 ** (pE, trans (sym (argsModesBorrowRight es ms pc pE)) eq))
+
+export
+argsModesMoveSplit :
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {e : Expr} -> {es : List Expr} ->
+  {callee : String} -> {m : Consume} -> {ms : List Consume} ->
+  doesConsume m = True ->
+  checkArgsModes ctx sc callee (e :: es) (m :: ms) = Right sc' ->
+  (sc1 ** (fl : Flag ** (takeOwner ctx sc e = Right (sc1, fl),
+           checkArgsModes ctx sc1 callee es ms = Right sc')))
+argsModesMoveSplit pc eq = splitGo (takeOwner ctx sc e) Refl
+  where
+    splitGo :
+      (res : Either Diag (Scopes, Flag)) ->
+      takeOwner ctx sc e = res ->
+      (sc1 ** (fl : Flag ** (takeOwner ctx sc e = Right (sc1, fl),
+               checkArgsModes ctx sc1 callee es ms = Right sc')))
+    splitGo (Left d) pT =
+      void (leftNotRightChk (trans (sym (argsModesMoveLeft es ms pc pT)) eq))
+    splitGo (Right (sc1, fl)) pT =
+      (sc1 ** (fl ** (pT, trans (sym (argsModesMoveRight es ms pc pT)) eq)))
+
+export
+argsModesExtraSplit :
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {e : Expr} -> {es : List Expr} ->
+  {callee : String} ->
+  checkArgsModes ctx sc callee (e :: es) [] = Right sc' ->
+  (sc1 ** (fl : Flag ** (takeOwner ctx sc e = Right (sc1, fl),
+           checkArgsModes ctx sc1 callee es [] = Right sc')))
+argsModesExtraSplit eq = splitGo (takeOwner ctx sc e) Refl
+  where
+    splitGo :
+      (res : Either Diag (Scopes, Flag)) ->
+      takeOwner ctx sc e = res ->
+      (sc1 ** (fl : Flag ** (takeOwner ctx sc e = Right (sc1, fl),
+               checkArgsModes ctx sc1 callee es [] = Right sc')))
+    splitGo (Left d) pT =
+      void (leftNotRightChk (trans (sym (argsModesExtraLeft es pT)) eq))
+    splitGo (Right (sc1, fl)) pT =
+      (sc1 ** (fl ** (pT, trans (sym (argsModesExtraRight es pT)) eq)))
 
 export
 stmtsConsLeft :

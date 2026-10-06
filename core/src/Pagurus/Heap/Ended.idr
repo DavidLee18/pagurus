@@ -12,9 +12,9 @@ import Pagurus.Heap.Eval
 mutual
   export
   stmtEndedNotHOk :
-    {s : Stmt} -> {env, env' : HEnv} -> {h, h' : Heap} ->
+    {funs : List Fun} -> {s : Stmt} -> {env, env' : HEnv} -> {h, h' : Heap} ->
     stmtEnds s = True ->
-    HEvalStmt [] env h s (HOk env' h') ->
+    HEvalStmt {funs} env h s (HOk env' h') ->
     Void
   stmtEndedNotHOk {s = SReturn _ _} _ HSRetNone impossible
   stmtEndedNotHOk {s = SReturn _ _} _ (HSRetCrash _) impossible
@@ -35,9 +35,9 @@ mutual
 
   export
   stmtsEndedNotHOk :
-    {ss : List Stmt} -> {env, env' : HEnv} -> {h, h' : Heap} ->
+    {funs : List Fun} -> {ss : List Stmt} -> {env, env' : HEnv} -> {h, h' : Heap} ->
     stmtsEnded ss = True ->
-    HEvalStmts [] env h ss (HOk env' h') ->
+    HEvalStmts {funs} env h ss (HOk env' h') ->
     Void
   stmtsEndedNotHOk {ss = []} p _ = void (falseNotTrue p)
   stmtsEndedNotHOk {ss = s :: rest} pEnds (HSConsOk _ _ evS evSS) =

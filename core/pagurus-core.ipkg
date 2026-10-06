@@ -31,6 +31,8 @@ modules = Pagurus.IR
         , Pagurus.Heap.Eval
         , Pagurus.Heap.Fits
         , Pagurus.Heap.Update
+        , Pagurus.Heap.Frame
+        , Pagurus.Heap.Pres
         , Pagurus.Heap.Act
         , Pagurus.Heap.Drop
         , Pagurus.Heap.Thm
@@ -45,6 +47,8 @@ modules = Pagurus.IR
         , Pagurus.Heap.Decl
         , Pagurus.Heap.If
         , Pagurus.Heap.Return
+        , Pagurus.Heap.Restore
+        , Pagurus.Heap.Dispatch
         , Pagurus.Heap.Expr
         , Pagurus.Heap.Stmt
         , Pagurus.Heap.Program

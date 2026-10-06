@@ -54,7 +54,7 @@ callDefinedSafe :
   EvalModes ctx c args (funModes ctx callee) o ->
   SafeOut o sc'
 callDefinedSafe ih pb pd eq r evs =
-  ih (trans (sym (checkCallDefined pb pd)) eq) r evs
+  ih (trans (sym (checkCallDefined pb pd (callDefinedNoAlias eq pb pd))) eq) r evs
 
 export
 callReallocSafe :

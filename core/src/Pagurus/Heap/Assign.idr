@@ -189,7 +189,7 @@ inHandAfterBindMove {n} {id} {sc} live oaB pM with
     in replace {p = \s => InHand (setH n (HVPtr a) env) h s a} scEq
          (inHandMoved oaB (lookupHSetHit n (HVPtr a) env) live
             (lookupPlaceSetHit n (Pagurus.Status.singleton AOwned) sc)
-            ownedSafeUse uns)
+            ownedSafeUse ownedNoBorrow uns)
 
 takenAfterBindMove :
   {n : Place} -> {id : Nat} -> {nm : String} ->

@@ -13,6 +13,7 @@ import Pagurus.Heap.Eval
 import Pagurus.Heap.Fits
 import Pagurus.Heap.Update
 import Pagurus.Heap.Act
+import Pagurus.Heap.Frame
 import Pagurus.Heap.Thm
 
 %default total
@@ -42,8 +43,20 @@ dropLiveH fuel ctx nid n nm eq oa look live with (dropHeapOk oa (dropEq fuel ctx
   dropLiveH fuel ctx nid n nm eq oa look live | Right (b ** (lookB, liveB, (st ** (lp, safe, (stN ** (scEq, uns)))))) =
     let sameA = hvPtrInj (justInjH (trans (sym lookB) look))
         liveA = replace {p = \x => cell h x = Just Live} sameA liveB
-    in HOutOk (oaRewrite (sym scEq)
-         (oaDropLive {a = a} {st = st} {st' = stN} oa look liveA lp safe uns))
+    in dropLiveGo liveA (stepStatus st Drop nid) Refl
+    where
+      dropLiveGo :
+        cell h a = Just Live ->
+        (res : Either Diag Status) ->
+        stepStatus st Drop nid = res ->
+        HSafeOut (HOk env (markFreed a h)) sc'
+      dropLiveGo liveA (Left d) pS =
+        void (leftNotRight (trans (sym (dropPlaceJustL lp pS))
+          (dropEq fuel ctx nid n nm eq)))
+      dropLiveGo liveA (Right stD) pS =
+        HOutOk (oaRewrite (sym scEq)
+          (oaDropLive {a = a} {st = st} {st' = stN} oa look liveA lp safe
+            (dropBorrowBack st nid stD pS) uns))
 
 export
 dropMissH :
@@ -157,13 +170,47 @@ dropCopyContra oa eq look with (dropHeapOk oa eq)
   dropCopyContra oa eq look | Right (b ** (lookB, _, _)) =
       void (hvCopyNotPtr (justInjH (trans (sym look) lookB)))
 
+||| An accepted `free` of a live cell requires a use-safe unique owner.
+||| `NoUniqueOwner` therefore forbids `HSDropLive` of that address.
+export
+dropUniqueContra :
+  {env : HEnv} -> {h : Heap} -> {sc, sc' : Scopes} ->
+  {n : Place} -> {nid : Nat} -> {nm : String} -> {a : Addr} ->
+  OverApprox env h sc ->
+  NoUniqueOwner env sc a ->
+  dropPlace sc n nid nm = Right sc' ->
+  lookupH n env = Just (HVPtr a) ->
+  Void
+dropUniqueContra oa nuo eq look with (dropHeapOk oa eq)
+  dropUniqueContra oa nuo eq look | Left (Left miss) =
+    void (nothingNotJustH (trans (sym miss) look))
+  dropUniqueContra oa nuo eq look | Left (Right none) =
+    void (hvNoneNotPtr (justInjH (trans (sym none) look)))
+  dropUniqueContra oa nuo eq look | Right (b ** (lookB, liveB, (st ** (lp, safe, (stN ** (_, _)))))) =
+    let same = hvPtrInj (justInjH (trans (sym lookB) look))
+        liveA = replace {p = \x => cell h x = Just Live} same liveB
+    in dropUniqueGo (stepStatus st Drop nid) Refl liveA
+    where
+      dropUniqueGo :
+        (res : Either Diag Status) ->
+        stepStatus st Drop nid = res ->
+        cell h a = Just Live ->
+        Void
+      dropUniqueGo (Left d) pS _ =
+        void (leftNotRight (trans (sym (dropPlaceJustL lp pS)) eq))
+      dropUniqueGo (Right stD) pS liveA =
+        nuo n st look lp safe
+          (ownedIfSafeLive oa n a st look liveA lp safe (dropBorrowBack st nid stD pS))
+          (dropBorrowBack st nid stD pS)
+
 export
 dropStmtH :
   (fuel : Nat) -> (ctx : Ctx) -> (nid : Nat) -> (n : Place) -> (nm : String) ->
+  {funs : List Fun} ->
   {sc, sc' : Scopes} -> {env : HEnv} -> {h : Heap} -> {o : HOutcome} ->
   checkStmt (S fuel) ctx sc (SDrop nid n nm) = Right sc' ->
   OverApprox env h sc ->
-  HEvalStmt [] env h (SDrop nid n nm) o ->
+  HEvalStmt {funs} env h (SDrop nid n nm) o ->
   HSafeOut o sc'
 dropStmtH fuel ctx nid n nm eq oa (HSDropLive a look live) =
   dropLiveH fuel ctx nid n nm eq oa look live

@@ -66,9 +66,10 @@ seqRetH ss ih eq (Left _) pS =
   void (leftNotRight (trans (sym (stmtsConsLeft ss pS)) eq))
 seqRetH ss ih eq (Right sc1) pS =
   case ih sc1 pS of
-    HOutRet => HOutRet
+    HOutRet wf => HOutRet wf
 
 seqOkCont :
+  {funs : List Fun} ->
   (ss : List Stmt) ->
   {fuel : Nat} -> {ctx : Ctx} -> {sc, sc', sc1 : Scopes} ->
   {s : Stmt} -> {env, env1 : HEnv} -> {h, h1 : Heap} -> {o : HOutcome} ->
@@ -83,7 +84,7 @@ seqOkCont :
   checkStmt fuel ctx sc s = Right sc1 ->
   (ret : Bool) ->
   isReturnStmt s = ret ->
-  HEvalStmt [] env h s (HOk env1 h1) ->
+  HEvalStmt {funs} env h s (HOk env1 h1) ->
   HSafeOut o sc'
 seqOkCont ss ihS ihSS eq pS True pRet evS =
   void (stmtEndedNotHOk (isReturnEnds pRet) evS)
@@ -92,6 +93,7 @@ seqOkCont ss ihS ihSS eq pS False pRet _ =
 
 export
 seqOkH :
+  {funs : List Fun} ->
   (ss : List Stmt) ->
   {fuel : Nat} -> {ctx : Ctx} -> {sc, sc' : Scopes} ->
   {s : Stmt} -> {env, env1 : HEnv} -> {h, h1 : Heap} -> {o : HOutcome} ->
@@ -105,7 +107,7 @@ seqOkH :
   checkStmts (S fuel) ctx sc (s :: ss) = Right sc' ->
   (res : Either Diag Scopes) ->
   checkStmt fuel ctx sc s = res ->
-  HEvalStmt [] env h s (HOk env1 h1) ->
+  HEvalStmt {funs} env h s (HOk env1 h1) ->
   HSafeOut o sc'
 seqOkH ss ihS ihSS eq (Left _) pS _ =
   void (leftNotRight (trans (sym (stmtsConsLeft ss pS)) eq))

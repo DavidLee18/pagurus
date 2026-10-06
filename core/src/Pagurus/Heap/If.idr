@@ -16,14 +16,14 @@ import Pagurus.Heap.Ended
 
 export
 hEndOut :
-  {ss : List Stmt} -> {env : HEnv} -> {h : Heap} ->
+  {funs : List Fun} -> {ss : List Stmt} -> {env : HEnv} -> {h : Heap} ->
   {scFrom, scTo : Scopes} -> {o : HOutcome} ->
   stmtsEnded ss = True ->
-  HEvalStmts [] env h ss o ->
+  HEvalStmts {funs} env h ss o ->
   HSafeOut o scFrom ->
   HSafeOut o scTo
 hEndOut p ev (HOutOk _) = void (stmtsEndedNotHOk p ev)
-hEndOut _ _ HOutRet = HOutRet
+hEndOut _ _ (HOutRet wf) = HOutRet wf
 
 export
 ifCondCrashH :
@@ -44,6 +44,7 @@ ifCondCrashH fuel iid thn els ih eq (Right sc1) pC =
 mutual
   export
   ifThenH :
+    {funs : List Fun} ->
     (fuel : Nat) -> (iid : Nat) ->
     {ctx : Ctx} -> {sc, sc' : Scopes} ->
     {cond : Expr} -> {thn, els : List Stmt} ->
@@ -55,7 +56,7 @@ mutual
              checkStmts fuel ctx sc0 thn = Right scT ->
              OverApprox env0 h0 sc0 ->
              HSafeOut o scT) ->
-    HEvalStmts [] env0 h0 thn o ->
+    HEvalStmts {funs} env0 h0 thn o ->
     checkStmt (S fuel) ctx sc (SIf iid cond thn els) = Right sc' ->
     (resC : Either Diag Scopes) ->
     checkExpr ctx sc cond = resC ->
@@ -67,6 +68,7 @@ mutual
       (checkStmts fuel ctx sc0 thn) Refl
 
   ifThenGoT :
+    {funs : List Fun} ->
     (fuel : Nat) -> (iid : Nat) ->
     {ctx : Ctx} -> {sc, sc', sc0 : Scopes} -> {env0 : HEnv} -> {h0 : Heap} ->
     {cond : Expr} -> {thn, els : List Stmt} -> {o : HOutcome} ->
@@ -74,7 +76,7 @@ mutual
              checkStmts fuel ctx sc0X thn = Right scT ->
              OverApprox env0 h0 sc0X ->
              HSafeOut o scT) ->
-    HEvalStmts [] env0 h0 thn o ->
+    HEvalStmts {funs} env0 h0 thn o ->
     checkStmt (S fuel) ctx sc (SIf iid cond thn els) = Right sc' ->
     checkExpr ctx sc cond = Right sc0 ->
     OverApprox env0 h0 sc0 ->
@@ -87,6 +89,7 @@ mutual
     ifThenGoE fuel iid ihThn evT eq pC pT r0 (checkStmts fuel ctx sc0 els) Refl
 
   ifThenGoE :
+    {funs : List Fun} ->
     (fuel : Nat) -> (iid : Nat) ->
     {ctx : Ctx} -> {sc, sc', sc0, scT : Scopes} -> {env0 : HEnv} -> {h0 : Heap} ->
     {cond : Expr} -> {thn, els : List Stmt} -> {o : HOutcome} ->
@@ -94,7 +97,7 @@ mutual
              checkStmts fuel ctx sc0X thn = Right scX ->
              OverApprox env0 h0 sc0X ->
              HSafeOut o scX) ->
-    HEvalStmts [] env0 h0 thn o ->
+    HEvalStmts {funs} env0 h0 thn o ->
     checkStmt (S fuel) ctx sc (SIf iid cond thn els) = Right sc' ->
     checkExpr ctx sc cond = Right sc0 ->
     checkStmts fuel ctx sc0 thn = Right scT ->
@@ -109,6 +112,7 @@ mutual
       (stmtsEnded thn) (stmtsEnded els) Refl Refl
 
   ifThenJoin :
+    {funs : List Fun} ->
     (fuel : Nat) -> (iid : Nat) ->
     {ctx : Ctx} -> {sc, sc', sc0, scT, scE : Scopes} -> {env0 : HEnv} -> {h0 : Heap} ->
     {cond : Expr} -> {thn, els : List Stmt} -> {o : HOutcome} ->
@@ -116,7 +120,7 @@ mutual
              checkStmts fuel ctx sc0X thn = Right scX ->
              OverApprox env0 h0 sc0X ->
              HSafeOut o scX) ->
-    HEvalStmts [] env0 h0 thn o ->
+    HEvalStmts {funs} env0 h0 thn o ->
     checkStmt (S fuel) ctx sc (SIf iid cond thn els) = Right sc' ->
     checkExpr ctx sc cond = Right sc0 ->
     checkStmts fuel ctx sc0 thn = Right scT ->
@@ -142,6 +146,7 @@ mutual
 mutual
   export
   ifElseH :
+    {funs : List Fun} ->
     (fuel : Nat) -> (iid : Nat) ->
     {ctx : Ctx} -> {sc, sc' : Scopes} ->
     {cond : Expr} -> {thn, els : List Stmt} ->
@@ -153,7 +158,7 @@ mutual
              checkStmts fuel ctx sc0 els = Right scE ->
              OverApprox env0 h0 sc0 ->
              HSafeOut o scE) ->
-    HEvalStmts [] env0 h0 els o ->
+    HEvalStmts {funs} env0 h0 els o ->
     checkStmt (S fuel) ctx sc (SIf iid cond thn els) = Right sc' ->
     (resC : Either Diag Scopes) ->
     checkExpr ctx sc cond = resC ->
@@ -165,6 +170,7 @@ mutual
       (checkStmts fuel ctx sc0 thn) Refl
 
   ifElseGoT :
+    {funs : List Fun} ->
     (fuel : Nat) -> (iid : Nat) ->
     {ctx : Ctx} -> {sc, sc', sc0 : Scopes} -> {env0 : HEnv} -> {h0 : Heap} ->
     {cond : Expr} -> {thn, els : List Stmt} -> {o : HOutcome} ->
@@ -172,7 +178,7 @@ mutual
              checkStmts fuel ctx sc0X els = Right scE ->
              OverApprox env0 h0 sc0X ->
              HSafeOut o scE) ->
-    HEvalStmts [] env0 h0 els o ->
+    HEvalStmts {funs} env0 h0 els o ->
     checkStmt (S fuel) ctx sc (SIf iid cond thn els) = Right sc' ->
     checkExpr ctx sc cond = Right sc0 ->
     OverApprox env0 h0 sc0 ->
@@ -185,6 +191,7 @@ mutual
     ifElseGoE fuel iid ihEls evE eq pC pT r0 (checkStmts fuel ctx sc0 els) Refl
 
   ifElseGoE :
+    {funs : List Fun} ->
     (fuel : Nat) -> (iid : Nat) ->
     {ctx : Ctx} -> {sc, sc', sc0, scT : Scopes} -> {env0 : HEnv} -> {h0 : Heap} ->
     {cond : Expr} -> {thn, els : List Stmt} -> {o : HOutcome} ->
@@ -192,7 +199,7 @@ mutual
              checkStmts fuel ctx sc0X els = Right scE ->
              OverApprox env0 h0 sc0X ->
              HSafeOut o scE) ->
-    HEvalStmts [] env0 h0 els o ->
+    HEvalStmts {funs} env0 h0 els o ->
     checkStmt (S fuel) ctx sc (SIf iid cond thn els) = Right sc' ->
     checkExpr ctx sc cond = Right sc0 ->
     checkStmts fuel ctx sc0 thn = Right scT ->
@@ -207,6 +214,7 @@ mutual
       (stmtsEnded thn) (stmtsEnded els) Refl Refl
 
   ifElseJoin :
+    {funs : List Fun} ->
     (fuel : Nat) -> (iid : Nat) ->
     {ctx : Ctx} -> {sc, sc', sc0, scT, scE : Scopes} -> {env0 : HEnv} -> {h0 : Heap} ->
     {cond : Expr} -> {thn, els : List Stmt} -> {o : HOutcome} ->
@@ -214,7 +222,7 @@ mutual
              checkStmts fuel ctx sc0X els = Right scE ->
              OverApprox env0 h0 sc0X ->
              HSafeOut o scE) ->
-    HEvalStmts [] env0 h0 els o ->
+    HEvalStmts {funs} env0 h0 els o ->
     checkStmt (S fuel) ctx sc (SIf iid cond thn els) = Right sc' ->
     checkExpr ctx sc cond = Right sc0 ->
     checkStmts fuel ctx sc0 thn = Right scT ->

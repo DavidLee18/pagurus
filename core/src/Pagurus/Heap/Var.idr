@@ -43,10 +43,11 @@ varEq nid n nm eq = trans (sym (checkExprVar ctx sc nid n nm)) eq
 export
 varUseH :
   (nid : Nat) -> (n : Place) -> (nm : String) ->
+  {funs : List Fun} ->
   {ctx : Ctx} -> {sc, sc' : Scopes} -> {env : HEnv} -> {h : Heap} -> {o : HResult} ->
   checkExpr ctx sc (EVar nid n nm) = Right sc' ->
   OverApprox env h sc ->
-  HEvalExpr [] env h (EVar nid n nm) o ->
+  HEvalExpr {funs} env h (EVar nid n nm) o ->
   HSafeRes o sc'
 varUseH nid n nm eq oa (HEVarLive a look live) =
   HROutOk (oaUsePlace oa (varEq nid n nm eq))
@@ -154,7 +155,7 @@ takeVarLiveH ctx nid n nm eq oa look live = go (lookupPlace n sc) Refl
               scEq1 = rightInj (trans (sym (movePlaceJust pL pS)) pM)
               oa1 = oaMovePlace oa pM
               ih = replace {p = \s => InHand env h s a} scEq1
-                     (inHandMoved oa look live pL safe uns)
+                     (inHandMoved oa look live pL safe (moveNoBorrow (x :: xs) nid st' pS) uns)
           in htRewrite scEq (replace {p = \f => HTOut f (HROk (HVPtr a) env h) sc1} flEq
                (HTOk oa1 (HOwnLive live ih)))
 
@@ -248,10 +249,11 @@ takeVarCopyContra ctx nid n nm eq oa look = go (lookupPlace n sc) Refl
 export
 takeVarH :
   (ctx : Ctx) -> (nid : Nat) -> (n : Place) -> (nm : String) ->
+  {funs : List Fun} ->
   {sc, sc' : Scopes} -> {env : HEnv} -> {h : Heap} -> {fl : Flag} -> {o : HResult} ->
   takeOwner ctx sc (EVar nid n nm) = Right (sc', fl) ->
   OverApprox env h sc ->
-  HEvalExpr [] env h (EVar nid n nm) o ->
+  HEvalExpr {funs} env h (EVar nid n nm) o ->
   HTOut fl o sc'
 takeVarH ctx nid n nm eq oa (HEVarLive a look live) = takeVarLiveH ctx nid n nm eq oa look live
 takeVarH ctx nid n nm eq oa (HEVarFreed a look fr) = void (takeVarFreedContra ctx nid n nm eq oa look fr)

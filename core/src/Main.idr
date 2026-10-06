@@ -72,15 +72,15 @@ keepProgram : CheckProgramNoHeapCrash
 keepProgram = checkProgramNoHeapCrash
 
 keepHeapWitnesses :
-  ( (o : HOutcome) -> HEvalStmts [] [] InitHeap SsOk o -> Not (IsHCrash o)
-  , HEvalStmts [] [] InitHeap SsBad (HCrashOut (FreeFreed 1))
+  ( (o : HOutcome) -> HEvalStmts [] InitHeap SsOk o -> Not (IsHCrash o)
+  , HEvalStmts [] InitHeap SsBad (HCrashOut (FreeFreed 1))
   , {sc' : Scopes} -> Not (checkStmts 8 EmptyCtx [] SsBad = Right sc')
   )
 keepHeapWitnesses = (mallocFreeNoHeapCrash, doubleFreeHeapCrash, doubleFreeRejected)
 
 keepProgramWitnesses :
   ( checkProgram EmptyProg = Right ()
-  , (o : HOutcome) -> HEvalStmts [] [] InitHeap [] o -> Not (IsHCrash o)
+  , (o : HOutcome) -> HEvalStmts {funs = [EmptyMain]} [] InitHeap [] o -> Not (IsHCrash o)
   , HEvalExpr [BorrowG] [] InitHeap (ECall 0 "g" []) (HROk HVNone [] InitHeap)
   )
 keepProgramWitnesses = (emptyProgAccepted, emptyProgNoHeapCrash, userCallRunsBody)

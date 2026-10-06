@@ -326,6 +326,32 @@ fn fail_wrap_free_first_df_stays_rejected() {
     }
 }
 
+#[test]
+fn fail_mixed_borrow_consume_alias_is_rejected() {
+    for name in [
+        "mix_borrow_consume.c",
+        "mix_borrow_consume_rev.c",
+        "mix_borrow_consume_three.c",
+        "mix_borrow_consume_alias.c",
+        "mix_borrow_consume_may.c",
+    ] {
+        let diags = check(&fixture("fail", name));
+        assert!(
+            !diags.is_empty(),
+            "{name} must be rejected (Never+consume of the same owner), got a clean verdict"
+        );
+        let text = diags
+            .iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("borrow") || text.contains("moved") || text.contains("consume") || text.contains("alias"),
+            "{name} should mention borrow/consume aliasing, got:\n{text}"
+        );
+    }
+}
+
 fn unique_span_ids(d: &pagurus::Diagnostic) -> bool {
     let mut keys = vec![(d.span.line, d.span.column, d.primary_label.as_str())];
     for n in &d.notes {

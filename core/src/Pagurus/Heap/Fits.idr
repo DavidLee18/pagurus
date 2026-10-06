@@ -112,6 +112,27 @@ ownedSingletonOwned : hasOwned (Pagurus.Status.singleton AOwned) = True
 ownedSingletonOwned = Refl
 
 export
+ownedNoBorrow : hasBorrowed (Pagurus.Status.singleton AOwned) = Nothing
+ownedNoBorrow = Refl
+
+export
+borrowedNotOwned : (n : Nat) -> hasOwned (Pagurus.Status.singleton (ABorrowed n)) = False
+borrowedNotOwned _ = Refl
+
+export
+borrowedSafeUse : (n : Nat) -> unsafeUse (Pagurus.Status.singleton (ABorrowed n)) = False
+borrowedSafeUse _ = Refl
+
+export
+borrowedHasN : (n : Nat) -> hasBorrowed (Pagurus.Status.singleton (ABorrowed n)) = Just n
+borrowedHasN _ = Refl
+
+export
+borrowedIsBorrowed : (n : Nat) ->
+  hasBorrowed (Pagurus.Status.singleton (ABorrowed n)) = Nothing -> Void
+borrowedIsBorrowed n eq = nothingNotJustH (sym (trans (borrowedHasN n) eq))
+
+export
 hasOwnedHas : (st : Status) -> hasOwned st = True -> inSet AOwned st = True
 hasOwnedHas [] prf = void (falseNotTrue prf)
 hasOwnedHas (AOwned :: _) _ = rewrite eqAtomRefl AOwned in Refl
@@ -221,7 +242,10 @@ record OverApprox (env : HEnv) (h : Heap) (sc : Scopes) where
     lookupH p env = Just v ->
     isDeadTracked h v = True ->
     unsafeUse st = True
-  ||| At most one use-safe name per live address.
+  ||| At most one use-safe unique owner per live address. A status that is
+  ||| use-safe, `hasOwned`, and not borrowed is the unique holder; two
+  ||| `ABorrowed` names may alias the same live cell. Mixed owner+borrow of
+  ||| one address is rejected at call sites (`mixedAlias`).
   uniqueLive :
     (p, q : Place) -> (a : Addr) ->
     p == q = False ->
@@ -231,6 +255,8 @@ record OverApprox (env : HEnv) (h : Heap) (sc : Scopes) where
     (stP : Status) -> lookupPlace p sc = Just stP ->
     (stQ : Status) -> lookupPlace q sc = Just stQ ->
     unsafeUse stP = False ->
+    hasOwned stP = True ->
+    hasBorrowed stP = Nothing ->
     unsafeUse stQ = True
   ||| The empty atom-set is the unreachable-code token; it is never stored
   ||| against a heap binding. `dropPlace` of `[]` would otherwise free a live
@@ -255,7 +281,7 @@ oaEmpty : OverApprox [] InitHeap []
 oaEmpty = MkOA wfEmpty
   (\p, v, prf => void (nothingNotJustH prf))
   (\p, st, v, lp, _, _ => void (nothingNotJust lp))
-  (\p, q, a, ne, lp, lq, live, stP, lookP, stQ, lookQ, safeP =>
+  (\p, q, a, ne, lp, lq, live, stP, lookP, stQ, lookQ, safeP, ownP, nbP =>
      void (nothingNotJustH lp))
   (\p, lp => void (nothingNotJust lp))
   (\p, st, lp, _, _, _ => void (nothingNotJust lp))
@@ -307,6 +333,43 @@ inHandAlloc {env} {h} {sc} oa = MkInHand (allocCell h) hold
       oa.deadUnsafe q st (HVPtr h.next) lp look
         (isDeadTrackedWild h h.next (freshMiss h oa.wf))
 
+export
+ownedIfSafeLive :
+  {env : HEnv} -> {h : Heap} -> {sc : Scopes} ->
+  OverApprox env h sc ->
+  (p : Place) -> (a : Addr) -> (st : Status) ->
+  lookupH p env = Just (HVPtr a) ->
+  cell h a = Just Live ->
+  lookupPlace p sc = Just st ->
+  unsafeUse st = False ->
+  hasBorrowed st = Nothing ->
+  hasOwned st = True
+ownedIfSafeLive oa p a st look live lp safe nb with (hasOwned st) proof po
+  ownedIfSafeLive oa p a st look live lp safe nb | True = Refl
+  ownedIfSafeLive oa p a st look live lp safe nb | False =
+    case oa.safeNonOwnerMiss p st lp safe po nb of
+      Left miss => void (nothingNotJustH (trans (sym miss) look))
+      Right none => void (hvNoneNotPtrF (justInjH (trans (sym none) look)))
+
+||| A use-safe tracked pointer is a live cell (`deadUnsafe` contraposed).
+export
+oaLive :
+  {env : HEnv} -> {h : Heap} -> {sc : Scopes} ->
+  OverApprox env h sc ->
+  (p : Place) -> (st : Status) -> (a : Addr) ->
+  lookupPlace p sc = Just st ->
+  lookupH p env = Just (HVPtr a) ->
+  unsafeUse st = False ->
+  cell h a = Just Live
+oaLive {h} oa p st a lp look safe with (cell h a) proof pc
+  oaLive oa p st a lp look safe | Just Live = Refl
+  oaLive oa p st a lp look safe | Just Freed =
+    void (trueNotFalse (trans (sym (oa.deadUnsafe p st (HVPtr a) lp look
+      (isDeadTrackedFreed h a pc))) safe))
+  oaLive oa p st a lp look safe | Nothing =
+    void (trueNotFalse (trans (sym (oa.deadUnsafe p st (HVPtr a) lp look
+      (isDeadTrackedWild h a pc))) safe))
+
 --------------------------------------------------------------------------------
 -- Join
 --------------------------------------------------------------------------------
@@ -349,8 +412,10 @@ oaJoinLeft {xs} {ys} {env} {h} oa = MkOA oa.wf
            (stPj : Status) -> lookupPlace p (joinScopes xs ys) = Just stPj ->
            (stQj : Status) -> lookupPlace q (joinScopes xs ys) = Just stQj ->
            unsafeUse stPj = False ->
+           hasOwned stPj = True ->
+           hasBorrowed stPj = Nothing ->
            unsafeUse stQj = True
-    uniq p q a ne lp lq live stPj lpj stQj lqj safeP =
+    uniq p q a ne lp lq live stPj lpj stQj lqj safeP ownP nbP =
       let (stP ** lp0) = oa.tracked p (HVPtr a) lp
           (stQ ** lq0) = oa.tracked q (HVPtr a) lq
           (stP2 ** (lpj2, subP)) = joinScopesLookupLeft xs ys p stP lp0
@@ -358,8 +423,10 @@ oaJoinLeft {xs} {ys} {env} {h} oa = MkOA oa.wf
           eqP = justInj (trans (sym lpj2) lpj)
           eqQ = justInj (trans (sym lqj2) lqj)
           safeP0 = unsafeSafeDown subP (replace {p = \s => unsafeUse s = False} (sym eqP) safeP)
+          nbP0 = hasBorrowedDown subP (replace {p = \s => hasBorrowed s = Nothing} (sym eqP) nbP)
+          ownP0 = ownedIfSafeLive oa p a stP lp live lp0 safeP0 nbP0
       in replace {p = \s => unsafeUse s = True} eqQ
-           (unsafeUseSub subQ (oa.uniqueLive p q a ne lp lq live stP lp0 stQ lq0 safeP0))
+           (unsafeUseSub subQ (oa.uniqueLive p q a ne lp lq live stP lp0 stQ lq0 safeP0 ownP0 nbP0))
 
     em : (p : Place) -> lookupPlace p (joinScopes xs ys) = Just [] ->
          lookupH p env = Nothing
@@ -438,8 +505,10 @@ oaJoinRight {xs} {ys} {env} {h} oa = MkOA oa.wf
            (stPj : Status) -> lookupPlace p (joinScopes xs ys) = Just stPj ->
            (stQj : Status) -> lookupPlace q (joinScopes xs ys) = Just stQj ->
            unsafeUse stPj = False ->
+           hasOwned stPj = True ->
+           hasBorrowed stPj = Nothing ->
            unsafeUse stQj = True
-    uniq p q a ne lp lq live stPj lpj stQj lqj safeP =
+    uniq p q a ne lp lq live stPj lpj stQj lqj safeP ownP nbP =
       let (stP ** lp0) = oa.tracked p (HVPtr a) lp
           (stQ ** lq0) = oa.tracked q (HVPtr a) lq
           (stP2 ** (lpj2, subP)) = joinScopesLookupRight xs ys p stP lp0
@@ -447,8 +516,10 @@ oaJoinRight {xs} {ys} {env} {h} oa = MkOA oa.wf
           eqP = justInj (trans (sym lpj2) lpj)
           eqQ = justInj (trans (sym lqj2) lqj)
           safeP0 = unsafeSafeDown subP (replace {p = \s => unsafeUse s = False} (sym eqP) safeP)
+          nbP0 = hasBorrowedDown subP (replace {p = \s => hasBorrowed s = Nothing} (sym eqP) nbP)
+          ownP0 = ownedIfSafeLive oa p a stP lp live lp0 safeP0 nbP0
       in replace {p = \s => unsafeUse s = True} eqQ
-           (unsafeUseSub subQ (oa.uniqueLive p q a ne lp lq live stP lp0 stQ lq0 safeP0))
+           (unsafeUseSub subQ (oa.uniqueLive p q a ne lp lq live stP lp0 stQ lq0 safeP0 ownP0 nbP0))
 
     em : (p : Place) -> lookupPlace p (joinScopes xs ys) = Just [] ->
          lookupH p env = Nothing

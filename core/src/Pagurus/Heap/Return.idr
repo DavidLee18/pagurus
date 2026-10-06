@@ -22,16 +22,17 @@ retNoneH :
   OverApprox env h sc ->
   HSafeOut (HReturned env h) sc'
 retNoneH fuel ctx id eq oa =
-  HOutRet
+  HOutRet oa.wf
 
 export
 retVarH :
   (fuel : Nat) -> (ctx : Ctx) -> (rid : Nat) ->
   (nid : Nat) -> (n : Place) -> (nm : String) ->
+  {funs : List Fun} ->
   {sc, sc' : Scopes} -> {env : HEnv} -> {h : Heap} -> {o : HResult} ->
   checkStmt (S fuel) ctx sc (SReturn rid (Just (EVar nid n nm))) = Right sc' ->
   OverApprox env h sc ->
-  HEvalExpr [] env h (EVar nid n nm) o ->
+  HEvalExpr {funs} env h (EVar nid n nm) o ->
   (res : Either Diag (Scopes, Flag)) ->
   takeOwner ctx sc (EVar nid n nm) = res ->
   HSafeRes o sc'

@@ -126,7 +126,8 @@ callDefinedH :
   isDefined ctx callee = True ->
   checkCall ctx sc nid callee args = Right sc' ->
   HSafeRes o sc'
-callDefinedH ih pb pd eq = ih (trans (sym (checkCallDefined pb pd)) eq)
+callDefinedH ih pb pd eq =
+  ih (trans (sym (checkCallDefined pb pd (callDefinedNoAlias eq pb pd))) eq)
 
 export
 takeCallCrashH :

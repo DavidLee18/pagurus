@@ -411,6 +411,59 @@ stepUseOwnedBack : (st : Status) -> (nid : Nat) -> (st' : Status) ->
 stepUseOwnedBack st nid st' eq nf =
   notTrueIsFalse (\p => falseNotTrue (trans (sym nf) (stepUseOwnedFwd st nid st' eq p)))
 
+insertBorrowedOwnedBack : (n : Nat) -> (rest : Status) ->
+                          hasOwned (insertSorted (ABorrowed n) rest) = True ->
+                          hasOwned rest = True
+insertBorrowedOwnedBack n [] prf = void (falseNotTrue prf)
+insertBorrowedOwnedBack n (AEmpty :: xs) prf = insertBorrowedOwnedBack n xs prf
+insertBorrowedOwnedBack n (AOwned :: xs) _ = Refl
+insertBorrowedOwnedBack n (ABorrowed m :: xs) prf with (compare n m)
+  insertBorrowedOwnedBack n (ABorrowed m :: xs) prf | LT = prf
+  insertBorrowedOwnedBack n (ABorrowed m :: xs) prf | EQ = prf
+  insertBorrowedOwnedBack n (ABorrowed m :: xs) prf | GT = insertBorrowedOwnedBack n xs prf
+insertBorrowedOwnedBack n (AMoved m :: xs) prf = prf
+insertBorrowedOwnedBack n (AFreed m :: xs) prf = prf
+insertBorrowedOwnedBack n (ANull :: xs) prf = prf
+
+insertNullOwnedBack : (rest : Status) ->
+                      hasOwned (insertSorted ANull rest) = True ->
+                      hasOwned rest = True
+insertNullOwnedBack [] prf = void (falseNotTrue prf)
+insertNullOwnedBack (AEmpty :: xs) prf = insertNullOwnedBack xs prf
+insertNullOwnedBack (AOwned :: xs) _ = Refl
+insertNullOwnedBack (ABorrowed n :: xs) prf = insertNullOwnedBack xs prf
+insertNullOwnedBack (AMoved n :: xs) prf = insertNullOwnedBack xs prf
+insertNullOwnedBack (AFreed n :: xs) prf = insertNullOwnedBack xs prf
+insertNullOwnedBack (ANull :: xs) prf = prf
+
+||| Use never introduces `AOwned`, so a post-use unique owner was already owned.
+export
+stepUseOwnedFrom : (st : Status) -> (nid : Nat) -> (st' : Status) ->
+                   stepStatus st Use nid = Right st' ->
+                   hasOwned st' = True -> hasOwned st = True
+stepUseOwnedFrom [] _ _ Refl prf = void (falseNotTrue prf)
+stepUseOwnedFrom (x :: xs) nid st' eq own' with (stepAtom x Use nid) proof px
+  stepUseOwnedFrom (x :: xs) nid st' eq own' | Left d = void (leftNotRight eq)
+  stepUseOwnedFrom (x :: xs) nid st' eq own' | Right x' with (stepStatus xs Use nid) proof pxs
+    stepUseOwnedFrom (x :: xs) nid st' eq own' | Right x' | Left d = void (leftNotRight eq)
+    stepUseOwnedFrom (x :: xs) nid st' eq own' | Right x' | Right rest =
+      let stEq = rightInj eq
+          ownIns = replace {p = \s => hasOwned s = True} (sym stEq) own'
+      in fromGo x x' px ownIns (stepUseOwnedFrom xs nid rest pxs)
+      where
+        fromGo : (x, x' : Atom) ->
+                 stepAtom x Use nid = Right x' ->
+                 hasOwned (insertSorted x' rest) = True ->
+                 (hasOwned rest = True -> hasOwned xs = True) ->
+                 hasOwned (x :: xs) = True
+        fromGo AOwned AOwned Refl _ _ = Refl
+        fromGo (ABorrowed n) (ABorrowed n) Refl ownIns ih =
+          ih (insertBorrowedOwnedBack n rest ownIns)
+        fromGo ANull ANull Refl ownIns ih = ih (insertNullOwnedBack rest ownIns)
+        fromGo AEmpty _ Refl _ _ impossible
+        fromGo (AMoved _) _ Refl _ _ impossible
+        fromGo (AFreed _) _ Refl _ _ impossible
+
 export
 hasBorrowedConsEq : (x : Atom) -> (ys, zs : Status) ->
                     hasBorrowed ys = hasBorrowed zs ->

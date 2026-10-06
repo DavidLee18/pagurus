@@ -1,9 +1,8 @@
 ||| Whole-programme heap theorems over `checkFun` / `checkProgram`.
 |||
-||| Each accepted function body is the intra `CheckAcceptedNoHeapCrash`
-||| instance at `paramScopes` (per-argument `funModes`). Heap eval of a
-||| defined call *can* run the callee (`HECallUser`); the crash theorems
-||| below instantiate `funs = []` so those constructors are empty.
+||| Each accepted function body is heap-crash-free from an over-approximation
+||| of `paramScopes`. Heap eval uses the translation unit (`FunsChecked`), so
+||| `HECallUser` / `HSCallUser` run callee bodies.
 module Pagurus.Heap.Program
 
 import Pagurus.IR
@@ -19,32 +18,11 @@ import Pagurus.Heap.Stmt
 
 %default total
 
-checkFunOkBodyGo :
-  {fuel : Nat} -> {ctx : Ctx} -> {f : Fun} ->
-  f.defined = True ->
-  checkFun fuel ctx f = Right () ->
-  (res : Either Diag Scopes) ->
-  checkStmts fuel ctx (paramScopes ctx f) f.body = res ->
-  (sc' : Scopes ** checkStmts fuel ctx (paramScopes ctx f) f.body = Right sc')
-checkFunOkBodyGo pDef ok (Left d) pB =
-  void (leftNotRight (trans (sym (checkFunDefLeft pDef pB)) ok))
-checkFunOkBodyGo pDef ok (Right sc') pB = (sc' ** pB)
-
-export
-checkFunOkBody :
-  {fuel : Nat} -> {ctx : Ctx} -> {f : Fun} ->
-  f.defined = True ->
-  checkFun fuel ctx f = Right () ->
-  (sc' : Scopes ** checkStmts fuel ctx (paramScopes ctx f) f.body = Right sc')
-checkFunOkBody pDef ok =
-  checkFunOkBodyGo pDef ok (checkStmts fuel ctx (paramScopes ctx f) f.body) Refl
-
 export
 checkFunNoHeapCrash : CheckFunNoHeapCrash
-checkFunNoHeapCrash fuel ctx f ok pDef env h oa o ev =
+checkFunNoHeapCrash fuel ctx f ok pDef chk env h oa o ev =
   let (sc' ** pB) = checkFunOkBody pDef ok
-  in checkAcceptedNoHeapCrash fuel ctx (paramScopes ctx f) f.body sc' pB
-       env h oa o ev
+  in hFromOut (stmtsHSafe {chk} ev fuel (paramScopes ctx f) sc' pB oa)
 
 mutual
   export
@@ -82,4 +60,4 @@ checkProgramNoHeapCrash (MkProgram funs) ok f look env h oa o ev =
   let checked = programFunsChecked ok
       funOk = checkedLookup checked look
       pDef = findFunDefined look
-  in checkFunNoHeapCrash 2048 (mkProgCtx funs) f funOk pDef env h oa o ev
+  in checkFunNoHeapCrash 2048 (mkProgCtx funs) f funOk pDef checked env h oa o ev

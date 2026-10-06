@@ -39,7 +39,7 @@ aliasSameAddr :
   lookupH p env = Just (HVPtr a) ->
   cell h a = Just Live ->
   (env' : HEnv **
-    (HEvalStmt [] env h (SAssign 0 q "q" Ptr (EVar 1 p "p")) (HOk env' h),
+    (HEvalStmt env h (SAssign 0 q "q" Ptr (EVar 1 p "p")) (HOk env' h),
      lookupH p env' = Just (HVPtr a),
      lookupH q env' = Just (HVPtr a)))
 aliasSameAddr {env} {p} {q} {a} ne look live =
@@ -83,18 +83,18 @@ EnvP : HEnv
 EnvP = setH 0 (HVPtr 1) []
 
 evDeclMalloc :
-  HEvalStmt [] [] InitHeap MallocP (HOk EnvP HAfterMalloc)
+  HEvalStmt [] InitHeap MallocP (HOk EnvP HAfterMalloc)
 evDeclMalloc = HSDeclJustPtr (HVPtr 1) [] HAfterMalloc (HEMalloc [] InitHeap HEArgsNil)
 
 evFreeLive :
-  HEvalStmt [] EnvP HAfterMalloc FreeP (HOk EnvP (markFreed 1 HAfterMalloc))
+  HEvalStmt EnvP HAfterMalloc FreeP (HOk EnvP (markFreed 1 HAfterMalloc))
 evFreeLive =
   HSDropLive 1 (lookupHSetHit 0 (HVPtr 1) []) (allocCell InitHeap)
 
 ||| `p = malloc(); free(p); free(p)` crashes: second free of address 1.
 export
 doubleFreeHeapCrash :
-  HEvalStmts [] [] InitHeap SsBad (HCrashOut (FreeFreed 1))
+  HEvalStmts [] InitHeap SsBad (HCrashOut (FreeFreed 1))
 doubleFreeHeapCrash =
   HSConsOk EnvP HAfterMalloc evDeclMalloc
     (HSConsOk EnvP (markFreed 1 HAfterMalloc) evFreeLive
@@ -104,7 +104,7 @@ doubleFreeHeapCrash =
 ||| `p = malloc(); free(p)` has a successful heap execution.
 export
 mallocFreeHeapOk :
-  HEvalStmts [] [] InitHeap SsOk (HOk EnvP (markFreed 1 HAfterMalloc))
+  HEvalStmts [] InitHeap SsOk (HOk EnvP (markFreed 1 HAfterMalloc))
 mallocFreeHeapOk =
   HSConsOk EnvP HAfterMalloc evDeclMalloc
     (HSConsOk EnvP (markFreed 1 HAfterMalloc) evFreeLive HSNil)
@@ -197,7 +197,7 @@ doubleFreeRejected eq =
 ||| non-heap address.
 export
 mallocFreeNoHeapCrash :
-  (o : HOutcome) -> HEvalStmts [] [] InitHeap SsOk o -> Not (IsHCrash o)
+  (o : HOutcome) -> HEvalStmts [] InitHeap SsOk o -> Not (IsHCrash o)
 mallocFreeNoHeapCrash o ev =
   checkAcceptedNoHeapCrash 8 EmptyCtx [] SsOk ScFreed mallocFreeAccepted
     [] InitHeap oaEmpty o ev
@@ -221,9 +221,9 @@ emptyMainFunAccepted =
 
 export
 emptyMainNoHeapCrash :
-  (o : HOutcome) -> HEvalStmts [] [] InitHeap [] o -> Not (IsHCrash o)
+  (o : HOutcome) -> HEvalStmts [] InitHeap [] o -> Not (IsHCrash o)
 emptyMainNoHeapCrash o ev =
-  checkFunNoHeapCrash 8 EmptyCtx EmptyMain emptyMainFunAccepted Refl
+  checkFunNoHeapCrash 8 EmptyCtx EmptyMain emptyMainFunAccepted Refl FNil
     [] InitHeap
     (replace {p = \sc => OverApprox [] InitHeap sc}
        (sym (paramScopesNil EmptyCtx EmptyMain Refl)) oaEmpty)
@@ -251,7 +251,7 @@ emptyProgFind = Refl
 
 export
 emptyProgNoHeapCrash :
-  (o : HOutcome) -> HEvalStmts [] [] InitHeap [] o -> Not (IsHCrash o)
+  (o : HOutcome) -> HEvalStmts {funs = [EmptyMain]} [] InitHeap [] o -> Not (IsHCrash o)
 emptyProgNoHeapCrash o ev =
   checkProgramNoHeapCrash EmptyProg emptyProgAccepted EmptyMain emptyProgFind
     [] InitHeap
@@ -284,4 +284,4 @@ export
 userCallRunsBody :
   HEvalExpr [BorrowG] [] InitHeap (ECall 0 "g" []) (HROk HVNone [] InitHeap)
 userCallRunsBody =
-  HECallUser Refl BorrowG Refl Refl [] [] InitHeap HEArgsNil [] InitHeap HSNil
+  HECallUser Refl BorrowG Refl Refl [] InitHeap HEArgsNil [] InitHeap HSNil

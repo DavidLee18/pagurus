@@ -194,21 +194,23 @@ oaSetNone {n} {env} {h} {sc} oa = MkOA oa.wf track dead uniq
            (stP : Status) -> lookupPlace p (setPlace n (Pagurus.Status.singleton AEmpty) sc) = Just stP ->
            (stQ : Status) -> lookupPlace q (setPlace n (Pagurus.Status.singleton AEmpty) sc) = Just stQ ->
            unsafeUse stP = False ->
+           hasOwned stP = True ->
+           hasBorrowed stP = Nothing ->
            unsafeUse stQ = True
-    uniq p q a neq lp lq live stP lpP stQ lpQ safeP with (natEqDec p n)
-      uniq p q a neq lp lq live stP lpP stQ lpQ safeP | Left eqp =
+    uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP with (natEqDec p n)
+      uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP | Left eqp =
         let lpN = replace {p = \x => lookupH x (setH n HVNone env) = Just (HVPtr a)} eqp lp
         in void (hvNoneNotPtr (sym (justInjH (trans (sym lpN) (lookupHSetHit n HVNone env)))))
-      uniq p q a neq lp lq live stP lpP stQ lpQ safeP | Right nep with (natEqDec q n)
-        uniq p q a neq lp lq live stP lpP stQ lpQ safeP | Right nep | Left eqq =
+      uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP | Right nep with (natEqDec q n)
+        uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP | Right nep | Left eqq =
           let lqN = replace {p = \x => lookupH x (setH n HVNone env) = Just (HVPtr a)} eqq lq
           in void (hvNoneNotPtr (sym (justInjH (trans (sym lqN) (lookupHSetHit n HVNone env)))))
-        uniq p q a neq lp lq live stP lpP stQ lpQ safeP | Right nep | Right neqN =
+        uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP | Right nep | Right neqN =
           let lookP0 = trans (sym (lookupHSetMiss p n HVNone env nep)) lp
               lookQ0 = trans (sym (lookupHSetMiss q n HVNone env neqN)) lq
               lpP0 = trans (sym (lookupPlaceSetMiss p n (Pagurus.Status.singleton AEmpty) sc nep)) lpP
               lpQ0 = trans (sym (lookupPlaceSetMiss q n (Pagurus.Status.singleton AEmpty) sc neqN)) lpQ
-          in oa.uniqueLive p q a neq lookP0 lookQ0 live stP lpP0 stQ lpQ0 safeP
+          in oa.uniqueLive p q a neq lookP0 lookQ0 live stP lpP0 stQ lpQ0 safeP ownP nbP
 
 --------------------------------------------------------------------------------
 -- Weaken / alloc / bind / drop
@@ -247,8 +249,10 @@ oaWeaken {env} {h} {xs} {ys} sub oa = MkOA oa.wf track dead uniq em snm
            (stP : Status) -> lookupPlace p ys = Just stP ->
            (stQ : Status) -> lookupPlace q ys = Just stQ ->
            unsafeUse stP = False ->
+           hasOwned stP = True ->
+           hasBorrowed stP = Nothing ->
            unsafeUse stQ = True
-    uniq p q a ne lp lq live stP lpP stQ lpQ safeP =
+    uniq p q a ne lp lq live stP lpP stQ lpQ safeP ownP nbP =
       let (stP0 ** lpP0) = oa.tracked p (HVPtr a) lp
           (stQ0 ** lpQ0) = oa.tracked q (HVPtr a) lq
           (stP1 ** (lpP1, subP)) = sub p stP0 lpP0
@@ -257,9 +261,12 @@ oaWeaken {env} {h} {xs} {ys} sub oa = MkOA oa.wf track dead uniq em snm
           eqQ = justInj (trans (sym lpQ1) lpQ)
           safeP0 = unsafeSafeDown subP
                      (replace {p = \s => unsafeUse s = False} (sym eqP) safeP)
+          nbP0 = hasBorrowedDown subP
+                     (replace {p = \s => hasBorrowed s = Nothing} (sym eqP) nbP)
+          ownP0 = ownedIfSafeLive oa p a stP0 lp live lpP0 safeP0 nbP0
       in replace {p = \s => unsafeUse s = True} eqQ
            (unsafeUseSub subQ
-             (oa.uniqueLive p q a ne lp lq live stP0 lpP0 stQ0 lpQ0 safeP0))
+             (oa.uniqueLive p q a ne lp lq live stP0 lpP0 stQ0 lpQ0 safeP0 ownP0 nbP0))
 
     em : (p : Place) -> lookupPlace p ys = Just [] -> lookupH p env = Nothing
     em p lpj with (lookupH p env) proof pe
@@ -330,15 +337,19 @@ oaEqScopes {xs} {ys} eq oa = MkOA oa.wf track dead uniq em
            (stP : Status) -> lookupPlace p ys = Just stP ->
            (stQ : Status) -> lookupPlace q ys = Just stQ ->
            unsafeUse stP = False ->
+           hasOwned stP = True ->
+           hasBorrowed stP = Nothing ->
            unsafeUse stQ = True
-    uniq p q a ne lp lq live stP lpP stQ lpQ safeP =
+    uniq p q a ne lp lq live stP lpP stQ lpQ safeP ownP nbP =
       let (stP0 ** lpP0) = oa.tracked p (HVPtr a) lp
           (stQ0 ** lpQ0) = oa.tracked q (HVPtr a) lq
           eqP = justInj (trans (sym (trans (sym (eqEnvLookup xs ys eq p)) lpP0)) lpP)
           eqQ = justInj (trans (sym (trans (sym (eqEnvLookup xs ys eq q)) lpQ0)) lpQ)
           safeP0 = replace {p = \s => unsafeUse s = False} (sym eqP) safeP
+          ownP0 = replace {p = \s => hasOwned s = True} (sym eqP) ownP
+          nbP0 = replace {p = \s => hasBorrowed s = Nothing} (sym eqP) nbP
       in replace {p = \s => unsafeUse s = True} eqQ
-           (oa.uniqueLive p q a ne lp lq live stP0 lpP0 stQ0 lpQ0 safeP0)
+           (oa.uniqueLive p q a ne lp lq live stP0 lpP0 stQ0 lpQ0 safeP0 ownP0 nbP0)
 
     em : (p : Place) -> lookupPlace p ys = Just [] -> lookupH p env = Nothing
     em p lp = oa.emptyMiss p (trans (eqEnvLookup xs ys eq p) lp)
@@ -373,18 +384,20 @@ oaAlloc {env} {h} {sc} oa = MkOA (allocWF h oa.wf) oa.tracked dead uniq oa.empty
            (stP : Status) -> lookupPlace p sc = Just stP ->
            (stQ : Status) -> lookupPlace q sc = Just stQ ->
            unsafeUse stP = False ->
+           hasOwned stP = True ->
+           hasBorrowed stP = Nothing ->
            unsafeUse stQ = True
-    uniq p q a ne lp lq live stP lpP stQ lpQ safeP with (natEqDec a h.next)
-      uniq p q a ne lp lq live stP lpP stQ lpQ safeP | Left eqa =
+    uniq p q a ne lp lq live stP lpP stQ lpQ safeP ownP nbP with (natEqDec a h.next)
+      uniq p q a ne lp lq live stP lpP stQ lpQ safeP ownP nbP | Left eqa =
         let lookN = replace {p = \x => lookupH p env = Just (HVPtr x)} eqa lp
         in void (trueNotFalse
              (trans (sym (oa.deadUnsafe p stP (HVPtr h.next) lpP lookN
                             (isDeadTrackedWild h h.next (freshMiss h oa.wf))))
                     safeP))
-      uniq p q a ne lp lq live stP lpP stQ lpQ safeP | Right neN =
+      uniq p q a ne lp lq live stP lpP stQ lpQ safeP ownP nbP | Right neN =
         oa.uniqueLive p q a ne lp lq
           (trans (sym (allocPresCell h a neN)) live)
-          stP lpP stQ lpQ safeP
+          stP lpP stQ lpQ safeP ownP nbP
 
 export
 oaSetUnsafe :
@@ -427,21 +440,23 @@ oaSetUnsafe {n} {st'} {env} {h} {sc} oa uns = MkOA oa.wf track dead uniq
            (stP : Status) -> lookupPlace p (setPlace n st' sc) = Just stP ->
            (stQ : Status) -> lookupPlace q (setPlace n st' sc) = Just stQ ->
            unsafeUse stP = False ->
+           hasOwned stP = True ->
+           hasBorrowed stP = Nothing ->
            unsafeUse stQ = True
-    uniq p q a neq lp lq live stP lpP stQ lpQ safeP with (natEqDec p n)
-      uniq p q a neq lp lq live stP lpP stQ lpQ safeP | Left eqp =
+    uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP with (natEqDec p n)
+      uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP | Left eqp =
         let lpN = replace {p = \x => lookupPlace x (setPlace n st' sc) = Just stP} eqp lpP
             stEq = justInj (trans (sym lpN) (lookupPlaceSetHit n st' sc))
         in void (falseNotTrue (trans (sym (replace {p = \s => unsafeUse s = False} stEq safeP)) uns))
-      uniq p q a neq lp lq live stP lpP stQ lpQ safeP | Right nep with (natEqDec q n)
-        uniq p q a neq lp lq live stP lpP stQ lpQ safeP | Right nep | Left eqq =
+      uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP | Right nep with (natEqDec q n)
+        uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP | Right nep | Left eqq =
           let lqN = replace {p = \x => lookupPlace x (setPlace n st' sc) = Just stQ} eqq lpQ
               stEq = justInj (trans (sym lqN) (lookupPlaceSetHit n st' sc))
           in rewrite stEq in uns
-        uniq p q a neq lp lq live stP lpP stQ lpQ safeP | Right nep | Right neqN =
+        uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP | Right nep | Right neqN =
           let lpP0 = trans (sym (lookupPlaceSetMiss p n st' sc nep)) lpP
               lpQ0 = trans (sym (lookupPlaceSetMiss q n st' sc neqN)) lpQ
-          in oa.uniqueLive p q a neq lp lq live stP lpP0 stQ lpQ0 safeP
+          in oa.uniqueLive p q a neq lp lq live stP lpP0 stQ lpQ0 safeP ownP nbP
 
 export
 inHandMoved :
@@ -452,9 +467,10 @@ inHandMoved :
   cell h a = Just Live ->
   lookupPlace n sc = Just st ->
   unsafeUse st = False ->
+  hasBorrowed st = Nothing ->
   unsafeUse st' = True ->
   InHand env h (setPlace n st' sc) a
-inHandMoved {n} {a} {st'} {env} {h} {sc} oa look live lp safe uns =
+inHandMoved {n} {a} {st'} {env} {h} {sc} oa look live lp safe nb uns =
   MkInHand live hold
   where
     hold : (q : Place) -> (stQ : Status) ->
@@ -468,7 +484,8 @@ inHandMoved {n} {a} {st'} {env} {h} {sc} oa look live lp safe uns =
         in rewrite stEq in uns
       hold q stQ lq lpQ | Right ne =
         let lpQ0 = trans (sym (lookupPlaceSetMiss q n st' sc ne)) lpQ
-        in oa.uniqueLive n q a (trans (sym (eqNatSym q n)) ne) look lq live st lp stQ lpQ0 safe
+        in oa.uniqueLive n q a (trans (sym (eqNatSym q n)) ne) look lq live st lp stQ lpQ0
+             safe (ownedIfSafeLive oa n a st look live lp safe nb) nb
 
 export
 oaBindOwned :
@@ -522,32 +539,34 @@ oaBindOwned {n} {a} {env} {h} {sc} oa live ih = MkOA oa.wf track dead uniq
            (stP : Status) -> lookupPlace p (setPlace n (Pagurus.Status.singleton AOwned) sc) = Just stP ->
            (stQ : Status) -> lookupPlace q (setPlace n (Pagurus.Status.singleton AOwned) sc) = Just stQ ->
            unsafeUse stP = False ->
+           hasOwned stP = True ->
+           hasBorrowed stP = Nothing ->
            unsafeUse stQ = True
-    uniq p q b neq lp lq liveB stP lpP stQ lpQ safeP with (natEqDec p n)
-      uniq p q b neq lp lq liveB stP lpP stQ lpQ safeP | Left eqp with (natEqDec q n)
-        uniq p q b neq lp lq liveB stP lpP stQ lpQ safeP | Left eqp | Left eqq =
+    uniq p q b neq lp lq liveB stP lpP stQ lpQ safeP ownP nbP with (natEqDec p n)
+      uniq p q b neq lp lq liveB stP lpP stQ lpQ safeP ownP nbP | Left eqp with (natEqDec q n)
+        uniq p q b neq lp lq liveB stP lpP stQ lpQ safeP ownP nbP | Left eqp | Left eqq =
           void (eqNatFalse p q neq (trans eqp (sym eqq)))
-        uniq p q b neq lp lq liveB stP lpP stQ lpQ safeP | Left eqp | Right neqN =
+        uniq p q b neq lp lq liveB stP lpP stQ lpQ safeP ownP nbP | Left eqp | Right neqN =
           let lookN = replace {p = \x => lookupH x (setH n (HVPtr a) env) = Just (HVPtr b)} eqp lp
               bEq = justInjH (trans (sym lookN) (lookupHSetHit n (HVPtr a) env))
               lq0 = trans (sym (lookupHSetMiss q n (HVPtr a) env neqN)) lq
               lqA = replace {p = \x => lookupH q env = Just (HVPtr x)} (hvPtrInj bEq) lq0
               lpQ0 = trans (sym (lookupPlaceSetMiss q n (Pagurus.Status.singleton AOwned) sc neqN)) lpQ
           in ih.holdersUnsafe q stQ lqA lpQ0
-      uniq p q b neq lp lq liveB stP lpP stQ lpQ safeP | Right nep with (natEqDec q n)
-        uniq p q b neq lp lq liveB stP lpP stQ lpQ safeP | Right nep | Left eqq =
+      uniq p q b neq lp lq liveB stP lpP stQ lpQ safeP ownP nbP | Right nep with (natEqDec q n)
+        uniq p q b neq lp lq liveB stP lpP stQ lpQ safeP ownP nbP | Right nep | Left eqq =
           let lookN = replace {p = \x => lookupH x (setH n (HVPtr a) env) = Just (HVPtr b)} eqq lq
               bEq = justInjH (trans (sym lookN) (lookupHSetHit n (HVPtr a) env))
               lp0 = trans (sym (lookupHSetMiss p n (HVPtr a) env nep)) lp
               lpA = replace {p = \x => lookupH p env = Just (HVPtr x)} (hvPtrInj bEq) lp0
               lpP0 = trans (sym (lookupPlaceSetMiss p n (Pagurus.Status.singleton AOwned) sc nep)) lpP
           in void (trueNotFalse (trans (sym (ih.holdersUnsafe p stP lpA lpP0)) safeP))
-        uniq p q b neq lp lq liveB stP lpP stQ lpQ safeP | Right nep | Right neqN =
+        uniq p q b neq lp lq liveB stP lpP stQ lpQ safeP ownP nbP | Right nep | Right neqN =
           let lookP0 = trans (sym (lookupHSetMiss p n (HVPtr a) env nep)) lp
               lookQ0 = trans (sym (lookupHSetMiss q n (HVPtr a) env neqN)) lq
               lpP0 = trans (sym (lookupPlaceSetMiss p n (Pagurus.Status.singleton AOwned) sc nep)) lpP
               lpQ0 = trans (sym (lookupPlaceSetMiss q n (Pagurus.Status.singleton AOwned) sc neqN)) lpQ
-          in oa.uniqueLive p q b neq lookP0 lookQ0 liveB stP lpP0 stQ lpQ0 safeP
+          in oa.uniqueLive p q b neq lookP0 lookQ0 liveB stP lpP0 stQ lpQ0 safeP ownP nbP
 
 export
 oaBindDead :
@@ -598,23 +617,25 @@ oaBindDead {n} {v} {env} {h} {sc} oa = MkOA oa.wf track dead uniq
            (stP : Status) -> lookupPlace p (setPlace n (Pagurus.Status.singleton AEmpty) sc) = Just stP ->
            (stQ : Status) -> lookupPlace q (setPlace n (Pagurus.Status.singleton AEmpty) sc) = Just stQ ->
            unsafeUse stP = False ->
+           hasOwned stP = True ->
+           hasBorrowed stP = Nothing ->
            unsafeUse stQ = True
-    uniq p q a neq lp lq live stP lpP stQ lpQ safeP with (natEqDec p n)
-      uniq p q a neq lp lq live stP lpP stQ lpQ safeP | Left eqp =
+    uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP with (natEqDec p n)
+      uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP | Left eqp =
         let lpN = replace {p = \x => lookupPlace x (setPlace n (Pagurus.Status.singleton AEmpty) sc) = Just stP} eqp lpP
             stEq = justInj (trans (sym lpN) (lookupPlaceSetHit n (Pagurus.Status.singleton AEmpty) sc))
         in void (trueNotFalse (replace {p = \s => unsafeUse s = False} stEq safeP))
-      uniq p q a neq lp lq live stP lpP stQ lpQ safeP | Right nep with (natEqDec q n)
-        uniq p q a neq lp lq live stP lpP stQ lpQ safeP | Right nep | Left eqq =
+      uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP | Right nep with (natEqDec q n)
+        uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP | Right nep | Left eqq =
           let lqN = replace {p = \x => lookupPlace x (setPlace n (Pagurus.Status.singleton AEmpty) sc) = Just stQ} eqq lpQ
               stEq = justInj (trans (sym lqN) (lookupPlaceSetHit n (Pagurus.Status.singleton AEmpty) sc))
           in rewrite stEq in Refl
-        uniq p q a neq lp lq live stP lpP stQ lpQ safeP | Right nep | Right neqN =
+        uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP | Right nep | Right neqN =
           let lookP0 = trans (sym (lookupHSetMiss p n v env nep)) lp
               lookQ0 = trans (sym (lookupHSetMiss q n v env neqN)) lq
               lpP0 = trans (sym (lookupPlaceSetMiss p n (Pagurus.Status.singleton AEmpty) sc nep)) lpP
               lpQ0 = trans (sym (lookupPlaceSetMiss q n (Pagurus.Status.singleton AEmpty) sc neqN)) lpQ
-          in oa.uniqueLive p q a neq lookP0 lookQ0 live stP lpP0 stQ lpQ0 safeP
+          in oa.uniqueLive p q a neq lookP0 lookQ0 live stP lpP0 stQ lpQ0 safeP ownP nbP
 
 dropUniq :
   (n : Place) -> (addr : Addr) -> (st0, stN : Status) ->
@@ -633,27 +654,29 @@ dropUniq :
   (stP : Status) -> lookupPlace p (setPlace n stN sc) = Just stP ->
   (stQ : Status) -> lookupPlace q (setPlace n stN sc) = Just stQ ->
   unsafeUse stP = False ->
+  hasOwned stP = True ->
+  hasBorrowed stP = Nothing ->
   unsafeUse stQ = True
-dropUniq n addr st0 stN env h sc oa look live lp safe uns p q b neq lpP0 lqQ0 liveB stP lpP stQ lpQ safeP with (natEqDec b addr)
-  dropUniq n addr st0 stN env h sc oa look live lp safe uns p q b neq lpP0 lqQ0 liveB stP lpP stQ lpQ safeP | Left eqb =
+dropUniq n addr st0 stN env h sc oa look live lp safe uns p q b neq lpP0 lqQ0 liveB stP lpP stQ lpQ safeP ownP nbP with (natEqDec b addr)
+  dropUniq n addr st0 stN env h sc oa look live lp safe uns p q b neq lpP0 lqQ0 liveB stP lpP stQ lpQ safeP ownP nbP | Left eqb =
     let liveN = replace {p = \x => cell (markFreed addr h) x = Just Live} eqb liveB
     in void (liveNotFreed (justInjH (trans (sym liveN) (markFreedHit addr h))))
-  dropUniq n addr st0 stN env h sc oa look live lp safe uns p q b neq lpP0 lqQ0 liveB stP lpP stQ lpQ safeP | Right neb with (natEqDec p n)
-    dropUniq n addr st0 stN env h sc oa look live lp safe uns p q b neq lpP0 lqQ0 liveB stP lpP stQ lpQ safeP | Right neb | Left eqp =
+  dropUniq n addr st0 stN env h sc oa look live lp safe uns p q b neq lpP0 lqQ0 liveB stP lpP stQ lpQ safeP ownP nbP | Right neb with (natEqDec p n)
+    dropUniq n addr st0 stN env h sc oa look live lp safe uns p q b neq lpP0 lqQ0 liveB stP lpP stQ lpQ safeP ownP nbP | Right neb | Left eqp =
       let lpN = replace {p = \x => lookupPlace x (setPlace n stN sc) = Just stP} eqp lpP
           stEq = justInj (trans (sym lpN) (lookupPlaceSetHit n stN sc))
       in void (falseNotTrue (trans (sym (replace {p = \s => unsafeUse s = False} stEq safeP)) uns))
-    dropUniq n addr st0 stN env h sc oa look live lp safe uns p q b neq lpP0 lqQ0 liveB stP lpP stQ lpQ safeP | Right neb | Right nep with (natEqDec q n)
-      dropUniq n addr st0 stN env h sc oa look live lp safe uns p q b neq lpP0 lqQ0 liveB stP lpP stQ lpQ safeP | Right neb | Right nep | Left eqq =
+    dropUniq n addr st0 stN env h sc oa look live lp safe uns p q b neq lpP0 lqQ0 liveB stP lpP stQ lpQ safeP ownP nbP | Right neb | Right nep with (natEqDec q n)
+      dropUniq n addr st0 stN env h sc oa look live lp safe uns p q b neq lpP0 lqQ0 liveB stP lpP stQ lpQ safeP ownP nbP | Right neb | Right nep | Left eqq =
         let lqN = replace {p = \x => lookupPlace x (setPlace n stN sc) = Just stQ} eqq lpQ
             stEq = justInj (trans (sym lqN) (lookupPlaceSetHit n stN sc))
         in rewrite stEq in uns
-      dropUniq n addr st0 stN env h sc oa look live lp safe uns p q b neq lpP0 lqQ0 liveB stP lpP stQ lpQ safeP | Right neb | Right nep | Right neqN =
+      dropUniq n addr st0 stN env h sc oa look live lp safe uns p q b neq lpP0 lqQ0 liveB stP lpP stQ lpQ safeP ownP nbP | Right neb | Right nep | Right neqN =
         let lpP1 = trans (sym (lookupPlaceSetMiss p n stN sc nep)) lpP
             lpQ1 = trans (sym (lookupPlaceSetMiss q n stN sc neqN)) lpQ
         in oa.uniqueLive p q b neq lpP0 lqQ0
              (trans (sym (markFreedMiss b addr h neb)) liveB)
-             stP lpP1 stQ lpQ1 safeP
+             stP lpP1 stQ lpQ1 safeP ownP nbP
 
 export
 oaDropLive :
@@ -664,9 +687,10 @@ oaDropLive :
   cell h a = Just Live ->
   lookupPlace n sc = Just st ->
   unsafeUse st = False ->
+  hasBorrowed st = Nothing ->
   unsafeUse st' = True ->
   OverApprox env (markFreed a h) (setPlace n st' sc)
-oaDropLive {n} {a} {st} {st'} {env} {h} {sc} oa look live lp safe uns =
+oaDropLive {n} {a} {st} {st'} {env} {h} {sc} oa look live lp safe nb uns =
   MkOA (markFreedWF a h oa.wf live) track dead uniq
     (emptyMissSet (notNilUnsafe uns) oa.emptyMiss)
     (snmSetUnsafe uns oa.safeNonOwnerMiss)
@@ -703,7 +727,8 @@ oaDropLive {n} {a} {st} {st'} {env} {h} {sc} oa look live lp safe uns =
         dead p stX (HVPtr b) lpX lookP nl | Right ne | Left eqb =
           let lookA = replace {p = \x => lookupH p env = Just (HVPtr x)} eqb lookP
               lp0 = trans (sym (lookupPlaceSetMiss p n st' sc ne)) lpX
-          in oa.uniqueLive n p a (trans (sym (eqNatSym p n)) ne) look lookA live st lp stX lp0 safe
+          in oa.uniqueLive n p a (trans (sym (eqNatSym p n)) ne) look lookA live st lp stX lp0
+               safe (ownedIfSafeLive oa n a st look live lp safe nb) nb
         dead p stX (HVPtr b) lpX lookP nl | Right ne | Right neb =
           let lp0 = trans (sym (lookupPlaceSetMiss p n st' sc ne)) lpX
           in oa.deadUnsafe p stX (HVPtr b) lp0 lookP
@@ -717,10 +742,12 @@ oaDropLive {n} {a} {st} {st'} {env} {h} {sc} oa look live lp safe uns =
            (stP : Status) -> lookupPlace p (setPlace n st' sc) = Just stP ->
            (stQ : Status) -> lookupPlace q (setPlace n st' sc) = Just stQ ->
            unsafeUse stP = False ->
+           hasOwned stP = True ->
+           hasBorrowed stP = Nothing ->
            unsafeUse stQ = True
-    uniq p q b neq lpB lqB liveB stP lpP stQ lpQ safeP =
+    uniq p q b neq lpB lqB liveB stP lpP stQ lpQ safeP ownP nbP =
       dropUniq n a st st' env h sc oa look live lp safe uns
-        p q b neq lpB lqB liveB stP lpP stQ lpQ safeP
+        p q b neq lpB lqB liveB stP lpP stQ lpQ safeP ownP nbP
 
 export
 oaSetMiss :
@@ -763,19 +790,21 @@ oaSetMiss {n} {st'} {env} {h} {sc} miss oa = MkOA oa.wf track dead uniq em
            (stP : Status) -> lookupPlace p (setPlace n st' sc) = Just stP ->
            (stQ : Status) -> lookupPlace q (setPlace n st' sc) = Just stQ ->
            unsafeUse stP = False ->
+           hasOwned stP = True ->
+           hasBorrowed stP = Nothing ->
            unsafeUse stQ = True
-    uniq p q a neq lp lq live stP lpP stQ lpQ safeP with (natEqDec p n)
-      uniq p q a neq lp lq live stP lpP stQ lpQ safeP | Left eqp =
+    uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP with (natEqDec p n)
+      uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP | Left eqp =
         void (nothingNotJustH (trans (sym miss)
                (replace {p = \x => lookupH x env = Just (HVPtr a)} eqp lp)))
-      uniq p q a neq lp lq live stP lpP stQ lpQ safeP | Right nep with (natEqDec q n)
-        uniq p q a neq lp lq live stP lpP stQ lpQ safeP | Right nep | Left eqq =
+      uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP | Right nep with (natEqDec q n)
+        uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP | Right nep | Left eqq =
           void (nothingNotJustH (trans (sym miss)
                  (replace {p = \x => lookupH x env = Just (HVPtr a)} eqq lq)))
-        uniq p q a neq lp lq live stP lpP stQ lpQ safeP | Right nep | Right neqN =
+        uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP | Right nep | Right neqN =
           let lpP0 = trans (sym (lookupPlaceSetMiss p n st' sc nep)) lpP
               lpQ0 = trans (sym (lookupPlaceSetMiss q n st' sc neqN)) lpQ
-          in oa.uniqueLive p q a neq lp lq live stP lpP0 stQ lpQ0 safeP
+          in oa.uniqueLive p q a neq lp lq live stP lpP0 stQ lpQ0 safeP ownP nbP
 
     em : (p : Place) -> lookupPlace p (setPlace n st' sc) = Just [] ->
          lookupH p env = Nothing
@@ -847,24 +876,36 @@ oaResafe {n} {st} {st'} {env} {h} {sc} oa lp0 safe0 safeN notNil ownBack nbBack 
            (stP : Status) -> lookupPlace p (setPlace n st' sc) = Just stP ->
            (stQ : Status) -> lookupPlace q (setPlace n st' sc) = Just stQ ->
            unsafeUse stP = False ->
+           hasOwned stP = True ->
+           hasBorrowed stP = Nothing ->
            unsafeUse stQ = True
-    uniq p q a neq lp lq live stP lpP stQ lpQ safeP with (natEqDec p n)
-      uniq p q a neq lp lq live stP lpP stQ lpQ safeP | Left eqp with (natEqDec q n)
-        uniq p q a neq lp lq live stP lpP stQ lpQ safeP | Left eqp | Left eqq =
+    uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP with (natEqDec p n)
+      uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP | Left eqp with (natEqDec q n)
+        uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP | Left eqp | Left eqq =
           void (eqNatFalse p q neq (trans eqp (sym eqq)))
-        uniq p q a neq lp lq live stP lpP stQ lpQ safeP | Left eqp | Right neqN =
+        uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP | Left eqp | Right neqN =
           let lookP = replace {p = \x => lookupH x env = Just (HVPtr a)} eqp lp
               lpQ0 = trans (sym (lookupPlaceSetMiss q n st' sc neqN)) lpQ
-          in oa.uniqueLive n q a (trans (sym (eqNatSym q n)) neqN) lookP lq live st lp0 stQ lpQ0 safe0
-      uniq p q a neq lp lq live stP lpP stQ lpQ safeP | Right nep with (natEqDec q n)
-        uniq p q a neq lp lq live stP lpP stQ lpQ safeP | Right nep | Left eqq =
+          in oa.uniqueLive n q a (trans (sym (eqNatSym q n)) neqN) lookP lq live st lp0 stQ lpQ0
+               safe0 (ownedIfSafeLive oa n a st lookP live lp0 safe0 (nbBack
+                 (replace {p = \s => hasBorrowed s = Nothing}
+                    (justInj (trans (sym (replace {p = \x => lookupPlace x (setPlace n st' sc) = Just stP} eqp lpP))
+                                    (lookupPlaceSetHit n st' sc)))
+                    nbP)))
+                 (nbBack
+                   (replace {p = \s => hasBorrowed s = Nothing}
+                      (justInj (trans (sym (replace {p = \x => lookupPlace x (setPlace n st' sc) = Just stP} eqp lpP))
+                                      (lookupPlaceSetHit n st' sc)))
+                      nbP))
+      uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP | Right nep with (natEqDec q n)
+        uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP | Right nep | Left eqq =
           let lpP0 = trans (sym (lookupPlaceSetMiss p n st' sc nep)) lpP
               lookQ = replace {p = \x => lookupH x env = Just (HVPtr a)} eqq lq
-          in void (trueNotFalse (trans (sym (oa.uniqueLive p n a nep lp lookQ live stP lpP0 st lp0 safeP)) safe0))
-        uniq p q a neq lp lq live stP lpP stQ lpQ safeP | Right nep | Right neqN =
+          in void (trueNotFalse (trans (sym (oa.uniqueLive p n a nep lp lookQ live stP lpP0 st lp0 safeP ownP nbP)) safe0))
+        uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP | Right nep | Right neqN =
           let lpP0 = trans (sym (lookupPlaceSetMiss p n st' sc nep)) lpP
               lpQ0 = trans (sym (lookupPlaceSetMiss q n st' sc neqN)) lpQ
-          in oa.uniqueLive p q a neq lp lq live stP lpP0 stQ lpQ0 safeP
+          in oa.uniqueLive p q a neq lp lq live stP lpP0 stQ lpQ0 safeP ownP nbP
 
     snm : (p : Place) -> (stX : Status) ->
           lookupPlace p (setPlace n st' sc) = Just stX ->
@@ -940,21 +981,23 @@ oaBindOwnedNone {n} {env} {h} {sc} oa = MkOA oa.wf track dead uniq
            (stP : Status) -> lookupPlace p (setPlace n (Pagurus.Status.singleton AOwned) sc) = Just stP ->
            (stQ : Status) -> lookupPlace q (setPlace n (Pagurus.Status.singleton AOwned) sc) = Just stQ ->
            unsafeUse stP = False ->
+           hasOwned stP = True ->
+           hasBorrowed stP = Nothing ->
            unsafeUse stQ = True
-    uniq p q a neq lp lq live stP lpP stQ lpQ safeP with (natEqDec p n)
-      uniq p q a neq lp lq live stP lpP stQ lpQ safeP | Left eqp =
+    uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP with (natEqDec p n)
+      uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP | Left eqp =
         let lookN = replace {p = \x => lookupH x (setH n HVNone env) = Just (HVPtr a)} eqp lp
         in void (hvNoneNotPtr (sym (justInjH (trans (sym lookN) (lookupHSetHit n HVNone env)))))
-      uniq p q a neq lp lq live stP lpP stQ lpQ safeP | Right nep with (natEqDec q n)
-        uniq p q a neq lp lq live stP lpP stQ lpQ safeP | Right nep | Left eqq =
+      uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP | Right nep with (natEqDec q n)
+        uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP | Right nep | Left eqq =
           let lookN = replace {p = \x => lookupH x (setH n HVNone env) = Just (HVPtr a)} eqq lq
           in void (hvNoneNotPtr (sym (justInjH (trans (sym lookN) (lookupHSetHit n HVNone env)))))
-        uniq p q a neq lp lq live stP lpP stQ lpQ safeP | Right nep | Right neqN =
+        uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP | Right nep | Right neqN =
           let lookP0 = trans (sym (lookupHSetMiss p n HVNone env nep)) lp
               lookQ0 = trans (sym (lookupHSetMiss q n HVNone env neqN)) lq
               lpP0 = trans (sym (lookupPlaceSetMiss p n (Pagurus.Status.singleton AOwned) sc nep)) lpP
               lpQ0 = trans (sym (lookupPlaceSetMiss q n (Pagurus.Status.singleton AOwned) sc neqN)) lpQ
-          in oa.uniqueLive p q a neq lookP0 lookQ0 live stP lpP0 stQ lpQ0 safeP
+          in oa.uniqueLive p q a neq lookP0 lookQ0 live stP lpP0 stQ lpQ0 safeP ownP nbP
 
 export
 oaBindNull :
@@ -1003,20 +1046,22 @@ oaBindNull {n} {env} {h} {sc} oa = MkOA oa.wf track dead uniq
            (stP : Status) -> lookupPlace p (setPlace n (Pagurus.Status.singleton ANull) sc) = Just stP ->
            (stQ : Status) -> lookupPlace q (setPlace n (Pagurus.Status.singleton ANull) sc) = Just stQ ->
            unsafeUse stP = False ->
+           hasOwned stP = True ->
+           hasBorrowed stP = Nothing ->
            unsafeUse stQ = True
-    uniq p q a neq lp lq live stP lpP stQ lpQ safeP with (natEqDec p n)
-      uniq p q a neq lp lq live stP lpP stQ lpQ safeP | Left eqp =
+    uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP with (natEqDec p n)
+      uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP | Left eqp =
         let lookN = replace {p = \x => lookupH x (setH n HVNone env) = Just (HVPtr a)} eqp lp
         in void (hvNoneNotPtr (sym (justInjH (trans (sym lookN) (lookupHSetHit n HVNone env)))))
-      uniq p q a neq lp lq live stP lpP stQ lpQ safeP | Right nep with (natEqDec q n)
-        uniq p q a neq lp lq live stP lpP stQ lpQ safeP | Right nep | Left eqq =
+      uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP | Right nep with (natEqDec q n)
+        uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP | Right nep | Left eqq =
           let lookN = replace {p = \x => lookupH x (setH n HVNone env) = Just (HVPtr a)} eqq lq
           in void (hvNoneNotPtr (sym (justInjH (trans (sym lookN) (lookupHSetHit n HVNone env)))))
-        uniq p q a neq lp lq live stP lpP stQ lpQ safeP | Right nep | Right neqN =
+        uniq p q a neq lp lq live stP lpP stQ lpQ safeP ownP nbP | Right nep | Right neqN =
           let lookP0 = trans (sym (lookupHSetMiss p n HVNone env nep)) lp
               lookQ0 = trans (sym (lookupHSetMiss q n HVNone env neqN)) lq
               lpP0 = trans (sym (lookupPlaceSetMiss p n (Pagurus.Status.singleton ANull) sc nep)) lpP
               lpQ0 = trans (sym (lookupPlaceSetMiss q n (Pagurus.Status.singleton ANull) sc neqN)) lpQ
-          in oa.uniqueLive p q a neq lookP0 lookQ0 live stP lpP0 stQ lpQ0 safeP
+          in oa.uniqueLive p q a neq lookP0 lookQ0 live stP lpP0 stQ lpQ0 safeP ownP nbP
 
 

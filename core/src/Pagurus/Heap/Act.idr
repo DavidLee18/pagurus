@@ -893,3 +893,208 @@ oaMovePlace oa eq = moveGo (lookupPlace n sc) Refl
                     (moveOwnBack (x :: xs) nid st' pS safeN)
                     (moveBorrowBack (x :: xs) nid st' pS))
 
+--------------------------------------------------------------------------------
+-- Call-site consume transfer: May/Always of a named owner is not use-safe
+--------------------------------------------------------------------------------
+
+||| `takeOwner` of a unique-owner `EVar` moves it: the intern is unsafe afterwards.
+export
+takeVarOwnedUnsafe :
+  {ctx : Ctx} -> {sc, sc' : Scopes} ->
+  {nid : Nat} -> {n : Place} -> {nm : String} -> {fl : Flag} ->
+  {st : Status} ->
+  takeOwner ctx sc (EVar nid n nm) = Right (sc', fl) ->
+  lookupPlace n sc = Just st ->
+  hasOwned st = True ->
+  (st' : Status ** (lookupPlace n sc' = Just st', unsafeUse st' = True))
+takeVarOwnedUnsafe pT lp own = mvGo (movePlace sc n nid nm) Refl
+  where
+    mvGo :
+      (res : Either Diag Scopes) ->
+      movePlace sc n nid nm = res ->
+      (st' : Status ** (lookupPlace n sc' = Just st', unsafeUse st' = True))
+    mvGo (Left d) pM =
+      void (leftNotRight (trans (sym (takeVarJustL ctx lp pM)) pT))
+    mvGo (Right sc1) pM with (stepStatus st Move nid) proof pS
+      mvGo (Right sc1) pM | Left d =
+        void (leftNotRight (trans (sym (movePlaceJustL lp pS)) pM))
+      mvGo (Right sc1) pM | Right stN =
+        let sc1eq = rightInj (trans (sym (movePlaceJust lp pS)) pM)
+            sc'eq = cong fst (rightInj (trans (sym (takeVarJustR ctx lp pM)) pT))
+            look' = trans (cong (\s => lookupPlace n s) (trans sc'eq sc1eq))
+                          (lookupPlaceSetHit n stN sc)
+        in (stN ** (look', moveOwnedUnsafe st nid stN pS own))
+
+||| `usePlace` cannot make an already-unsafe intern use-safe.
+export
+useKeepUnsafe :
+  {sc, sc' : Scopes} -> {n, p : Place} -> {nid : Nat} -> {nm : String} ->
+  {st : Status} ->
+  lookupPlace p sc = Just st ->
+  unsafeUse st = True ->
+  usePlace sc n nid nm = Right sc' ->
+  (st' : Status ** (lookupPlace p sc' = Just st', unsafeUse st' = True))
+useKeepUnsafe {n} {p} lp uns eq with (natEqDec p n)
+  useKeepUnsafe {n} {p} lp uns eq | Left eqp =
+    useHit (lookupPlace n sc) Refl
+    where
+      useHit :
+        (look : Maybe Status) ->
+        lookupPlace n sc = look ->
+        (st' : Status ** (lookupPlace p sc' = Just st', unsafeUse st' = True))
+      useHit Nothing pL =
+        void (nothingNotJust (trans (sym pL)
+          (replace {p = \x => lookupPlace x sc = Just st} eqp lp)))
+      useHit (Just st0) pL with (stepStatus st0 Use nid) proof pS
+        useHit (Just st0) pL | Left d =
+          void (leftNotRight (trans (sym (usePlaceJustL pL pS)) eq))
+        useHit (Just st0) pL | Right stN =
+          let stEq = justInj (trans (sym (replace {p = \x => lookupPlace x sc = Just st} eqp lp)) pL)
+          in void (trueNotFalse (trans (sym uns)
+               (trans (cong unsafeUse stEq) (stepUseSafe st0 nid stN pS))))
+  useKeepUnsafe lp uns eq | Right ne =
+    useMiss (lookupPlace n sc) Refl
+    where
+      useMiss :
+        (look : Maybe Status) ->
+        lookupPlace n sc = look ->
+        (st' : Status ** (lookupPlace p sc' = Just st', unsafeUse st' = True))
+      useMiss Nothing pL =
+        let scEq = rightInj (trans (sym (usePlaceNothing pL)) eq)
+        in (st ** (trans (cong (\s => lookupPlace p s) scEq) lp, uns))
+      useMiss (Just stN) pL with (stepStatus stN Use nid) proof pS
+        useMiss (Just stN) pL | Left d =
+          void (leftNotRight (trans (sym (usePlaceJustL pL pS)) eq))
+        useMiss (Just stN) pL | Right st' =
+          let scEq = rightInj (trans (sym (usePlaceJust pL pS)) eq)
+          in (st ** (trans (cong (\s => lookupPlace p s) scEq)
+                           (trans (lookupPlaceSetMiss p n st' sc ne) lp), uns))
+
+||| `movePlace` of a different intern cannot make `p` use-safe.
+export
+moveKeepUnsafe :
+  {sc, sc' : Scopes} -> {n, p : Place} -> {nid : Nat} -> {nm : String} ->
+  {st : Status} ->
+  lookupPlace p sc = Just st ->
+  unsafeUse st = True ->
+  movePlace sc n nid nm = Right sc' ->
+  (st' : Status ** (lookupPlace p sc' = Just st', unsafeUse st' = True))
+moveKeepUnsafe {n} {p} lp uns eq with (natEqDec p n)
+  moveKeepUnsafe {n} {p} lp uns eq | Left eqp =
+    mvHit (lookupPlace n sc) Refl
+    where
+      mvHit :
+        (look : Maybe Status) ->
+        lookupPlace n sc = look ->
+        (st' : Status ** (lookupPlace p sc' = Just st', unsafeUse st' = True))
+      mvHit Nothing pL =
+        void (leftNotRight (trans (sym (movePlaceNothing pL)) eq))
+      mvHit (Just st0) pL with (stepStatus st0 Move nid) proof pS
+        mvHit (Just st0) pL | Left d =
+          void (leftNotRight (trans (sym (movePlaceJustL pL pS)) eq))
+        mvHit (Just st0) pL | Right stN =
+          let stEq = justInj (trans (sym (replace {p = \x => lookupPlace x sc = Just st} eqp lp)) pL)
+          in void (trueNotFalse (trans (sym uns)
+               (trans (cong unsafeUse stEq) (stepMoveSafe st0 nid stN pS))))
+  moveKeepUnsafe lp uns eq | Right ne =
+    mvMiss (lookupPlace n sc) Refl
+    where
+      mvMiss :
+        (look : Maybe Status) ->
+        lookupPlace n sc = look ->
+        (st' : Status ** (lookupPlace p sc' = Just st', unsafeUse st' = True))
+      mvMiss Nothing pL =
+        void (leftNotRight (trans (sym (movePlaceNothing pL)) eq))
+      mvMiss (Just stN) pL with (stepStatus stN Move nid) proof pS
+        mvMiss (Just stN) pL | Left d =
+          void (leftNotRight (trans (sym (movePlaceJustL pL pS)) eq))
+        mvMiss (Just stN) pL | Right st' =
+          let scEq = rightInj (trans (sym (movePlaceJust pL pS)) eq)
+          in (st ** (trans (cong (\s => lookupPlace p s) scEq)
+                           (trans (lookupPlaceSetMiss p n st' sc ne) lp), uns))
+
+||| `usePlace` of a different intern leaves `p` unchanged.
+export
+useKeepLookup :
+  {sc, sc' : Scopes} -> {n, p : Place} -> {nid : Nat} -> {nm : String} ->
+  {st : Status} ->
+  p == n = False ->
+  lookupPlace p sc = Just st ->
+  usePlace sc n nid nm = Right sc' ->
+  lookupPlace p sc' = Just st
+useKeepLookup ne lp eq = uGo (lookupPlace n sc) Refl
+  where
+    uGo : (look : Maybe Status) -> lookupPlace n sc = look ->
+          lookupPlace p sc' = Just st
+    uGo Nothing pL =
+      let scEq = rightInj (trans (sym (usePlaceNothing pL)) eq)
+      in trans (cong (\s => lookupPlace p s) scEq) lp
+    uGo (Just stN) pL with (stepStatus stN Use nid) proof pS
+      uGo (Just stN) pL | Left d =
+        void (leftNotRight (trans (sym (usePlaceJustL pL pS)) eq))
+      uGo (Just stN) pL | Right st' =
+        let scEq = rightInj (trans (sym (usePlaceJust pL pS)) eq)
+        in trans (cong (\s => lookupPlace p s) scEq)
+             (trans (lookupPlaceSetMiss p n st' sc ne) lp)
+
+||| `movePlace` of a different intern leaves `p` unchanged.
+export
+moveKeepLookup :
+  {sc, sc' : Scopes} -> {n, p : Place} -> {nid : Nat} -> {nm : String} ->
+  {st : Status} ->
+  p == n = False ->
+  lookupPlace p sc = Just st ->
+  movePlace sc n nid nm = Right sc' ->
+  lookupPlace p sc' = Just st
+moveKeepLookup ne lp eq = mGo (lookupPlace n sc) Refl
+  where
+    mGo : (look : Maybe Status) -> lookupPlace n sc = look ->
+          lookupPlace p sc' = Just st
+    mGo Nothing pL =
+      void (leftNotRight (trans (sym (movePlaceNothing pL)) eq))
+    mGo (Just stN) pL with (stepStatus stN Move nid) proof pS
+      mGo (Just stN) pL | Left d =
+        void (leftNotRight (trans (sym (movePlaceJustL pL pS)) eq))
+      mGo (Just stN) pL | Right st' =
+        let scEq = rightInj (trans (sym (movePlaceJust pL pS)) eq)
+        in trans (cong (\s => lookupPlace p s) scEq)
+             (trans (lookupPlaceSetMiss p n st' sc ne) lp)
+
+
+||| Inverse of `takeVarJustR`: a successful take of a tracked var is a move.
+export
+takeVarMove :
+  {ctx : Ctx} -> {sc, sc' : Scopes} ->
+  {nid : Nat} -> {n : Place} -> {nm : String} -> {fl : Flag} ->
+  {st : Status} ->
+  takeOwner ctx sc (EVar nid n nm) = Right (sc', fl) ->
+  lookupPlace n sc = Just st ->
+  movePlace sc n nid nm = Right sc'
+takeVarMove pT lp with (movePlace sc n nid nm) proof pM
+  takeVarMove pT lp | Left d =
+    void (leftNotRight (trans (sym (takeVarJustL ctx lp pM)) pT))
+  takeVarMove pT lp | Right sc1 =
+    rewrite sym (cong fst (rightInj (trans (sym (takeVarJustR ctx lp pM)) pT))) in pM
+
+||| Single consume-mode `EVar` argument: after `checkArgsModes` the intern
+||| is not use-safe. This is the checker-side transfer lemma for a named
+||| May/Always owner with no further arguments.
+export
+consumeVarHeadNotSafe :
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {callee : String} ->
+  {nid : Nat} -> {n : Place} -> {nm : String} ->
+  {m : Consume} -> {ms : List Consume} ->
+  {st, stF : Status} ->
+  doesConsume m = True ->
+  checkArgsModes ctx sc callee (EVar nid n nm :: []) (m :: ms) = Right sc' ->
+  lookupPlace n sc = Just st ->
+  hasOwned st = True ->
+  lookupPlace n sc' = Just stF ->
+  unsafeUse stF = False ->
+  Void
+consumeVarHeadNotSafe pc eq lp own lpF safeF =
+  let (sc1 ** (fl ** (pT, pEs))) = argsModesMoveSplit pc eq
+      (stN ** (lpN, unsN)) = takeVarOwnedUnsafe pT lp own
+      scEq = rightInj (trans (sym (checkArgsModesNil ctx sc1 callee ms)) pEs)
+      stEq = justInj (trans (sym (trans (cong (\s => lookupPlace n s) scEq) lpN)) lpF)
+  in trueNotFalse (trans (sym unsN) (trans (cong unsafeUse stEq) safeF))

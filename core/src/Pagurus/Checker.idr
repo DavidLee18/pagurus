@@ -2034,3 +2034,60 @@ loopFixBodyEnded :
   checkStmts k ctx sc bod = Right scB ->
   loopFix (S k) ctx sc lid bod = Right sc
 loopFixBodyEnded pEnd pB = rewrite pB in rewrite pEnd in Refl
+
+natEqReflChk : (n : Nat) -> n == n = True
+natEqReflChk Z = Refl
+natEqReflChk (S k) = natEqReflChk k
+
+justInjChk : Just x = Just y -> x = y
+justInjChk Refl = Refl
+
+nothingNotJustChk : {0 x : a} -> Not (Nothing = Just x)
+nothingNotJustChk Refl impossible
+
+export
+placeInSplit :
+  {p, q : Place} -> {qs : List Place} ->
+  placeIn p (q :: qs) = True ->
+  Either (p == q = True) (placeIn p qs = True)
+placeInSplit pin with (p == q) proof pq
+  placeInSplit pin | True = Left pq
+  placeInSplit pin | False = Right (rewrite pq in pin)
+
+||| The intern of a consume-mode `EVar` argument is in `consumePlaces`.
+export
+consumePlacesVar :
+  (e : Expr) -> (es : List Expr) -> (m : Consume) -> (ms : List Consume) ->
+  (p : Place) ->
+  doesConsume m = True ->
+  argVarPlace e = Just p ->
+  placeIn p (consumePlaces (e :: es) (m :: ms)) = True
+consumePlacesVar (EVar _ q _) es m ms p pc prf =
+  rewrite pc in
+  rewrite justInjChk prf in
+  rewrite natEqReflChk p in Refl
+consumePlacesVar (EAssign _ _ _ _ _) _ _ _ _ _ prf = void (nothingNotJustChk prf)
+consumePlacesVar (ELit _) _ _ _ _ _ prf = void (nothingNotJustChk prf)
+consumePlacesVar (ENull _) _ _ _ _ prf = void (nothingNotJustChk prf)
+consumePlacesVar (EMalloc _ _) _ _ _ _ _ prf = void (nothingNotJustChk prf)
+consumePlacesVar (ECall _ _ _) _ _ _ _ _ prf = void (nothingNotJustChk prf)
+consumePlacesVar (EUse _ _) _ _ _ _ _ prf = void (nothingNotJustChk prf)
+consumePlacesVar (EUnsupported _ _) _ _ _ _ _ prf = void (nothingNotJustChk prf)
+
+||| Extra arguments beyond `funModes` are treated as consumed.
+export
+consumePlacesExtraVar :
+  (e : Expr) -> (es : List Expr) ->
+  (p : Place) ->
+  argVarPlace e = Just p ->
+  placeIn p (consumePlaces (e :: es) []) = True
+consumePlacesExtraVar (EVar _ q _) es p prf =
+  rewrite justInjChk prf in
+  rewrite natEqReflChk p in Refl
+consumePlacesExtraVar (EAssign _ _ _ _ _) _ _ prf = void (nothingNotJustChk prf)
+consumePlacesExtraVar (ELit _) _ _ prf = void (nothingNotJustChk prf)
+consumePlacesExtraVar (ENull _) _ _ prf = void (nothingNotJustChk prf)
+consumePlacesExtraVar (EMalloc _ _) _ _ prf = void (nothingNotJustChk prf)
+consumePlacesExtraVar (ECall _ _ _) _ _ prf = void (nothingNotJustChk prf)
+consumePlacesExtraVar (EUse _ _) _ _ prf = void (nothingNotJustChk prf)
+consumePlacesExtraVar (EUnsupported _ _) _ _ prf = void (nothingNotJustChk prf)

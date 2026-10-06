@@ -33,6 +33,7 @@ import Pagurus.Heap.Assign
 import Pagurus.Heap.Call
 import Pagurus.Heap.Args
 import Pagurus.Heap.If
+import Pagurus.Heap.Return
 
 %default total
 
@@ -219,7 +220,8 @@ nuoMove nuo eq lookV =
             stEq = justInj (trans (sym lpN) (lookupPlaceSetHit n stN sc))
         in case stepMoveHasUnsafe st0 nid stN pSt of
              Left uns =>
-               void (trueNotFalse (trans (sym (replace {p = \s => unsafeUse s = False} stEq safe)) uns))
+               void (trueNotFalse (trans (sym uns)
+                 (replace {p = \s => unsafeUse s = False} stEq safe)))
              Right safeN =>
                nuo0 n st0 lookN lp0
                  (stepMoveSafe st0 nid stN pSt)
@@ -380,10 +382,12 @@ record TakeLN (fl : Flag) (v : HVal) (env' : HEnv) (h' : Heap) (sc' : Scopes) (a
 --------------------------------------------------------------------------------
 
 ||| Leftover use-safe unique owner of `a` after a uniquely-owning callee
-||| freed `a`. `ownerHereWitness` of the frame names the frame unique owner.
-||| uniqueTwoSafe is same-env; leftover vs frame is not. Intern-overlap of
-||| leftover `p` and frame `q` with leftover `q` still use-safe is
-||| `uniqueTwoSafe` of leftover. BindOk-to-leftover-place is not proved.
+||| freed `a`. A consume-mode `EVar` of that leftover intern is moved by
+||| `takeOwner` (`takeVarOwnedUnsafe`). Two leftover unique owners of `a`
+||| are `uniqueTwoSafe`. BindOk-to-leftover-place of a non-`EVar` consume
+||| is the remaining gap: the checker's transfer lemma applies to named
+||| owners (`argVarPlace`), then BindOk zips the frame unique owner to that
+||| caller intern.
 uniqueOwnFreed :
   {env1 : HEnv} -> {h1, hB : Heap} -> {sc' : Scopes} ->
   {fid : Nat} -> {ps : List Param} -> {ms : List Consume} -> {vs : List HVal} ->
@@ -1643,11 +1647,18 @@ mutual
              ln1.liveLN
       asgPtrGo (Right (scT, Null)) pT =
         let tln = takeLN {funs} {chk} ln pT ev
-            ln1 = tln.lnTLN
-            scEq = rightInj (trans (sym (stmtAsgPtrNull k id n nm pT)) eq)
-        in MkLN (oaRewrite scEq (oaBindNull ln1.oaLN))
-             (nuoRewrite scEq (nuoBindNull ln1.nuoLN))
-             ln1.liveLN
+        in asgNull tln
+        where
+          asgNull :
+            TakeLN Null v env1 h1 scT a ->
+            LiveNuo (setH n v env1) h1 sc1 a
+          asgNull tln with (tln.tkTLN)
+            asgNull tln | HNull =
+              let ln1 = tln.lnTLN
+                  scEq = rightInj (trans (sym (stmtAsgPtrNull k id n nm pT)) eq)
+              in MkLN (oaRewrite scEq (oaBindNull ln1.oaLN))
+                   (nuoRewrite scEq (nuoBindNull ln1.nuoLN))
+                   ln1.liveLN
       asgPtrGo (Right (scT, Owner)) pT =
         let tln = takeLN {funs} {chk} ln pT ev
             scEq = rightInj (trans (sym (stmtAsgPtrOwner k id n nm pT)) eq)
@@ -1701,11 +1712,18 @@ mutual
              ln1.liveLN
       asgPtrExprGo (Right (scT, Null)) pT =
         let tln = takeLN {funs} {chk} ln pT ev
-            ln1 = tln.lnTLN
-            scEq = rightInj (trans (sym (checkExprAsgPtrNull id n nm pT)) eq)
-        in MkLN (oaRewrite scEq ln1.oaLN)
-             (nuoRewrite scEq (nuoBindNull ln1.nuoLN))
-             ln1.liveLN
+        in asgExprNull tln
+        where
+          asgExprNull :
+            TakeLN Null v env1 h1 scT a ->
+            LiveNuo (setH n v env1) h1 sc' a
+          asgExprNull tln with (tln.tkTLN)
+            asgExprNull tln | HNull =
+              let ln1 = tln.lnTLN
+                  scEq = rightInj (trans (sym (checkExprAsgPtrNull id n nm pT)) eq)
+              in MkLN (oaRewrite scEq (oaBindNull ln1.oaLN))
+                   (nuoRewrite scEq (nuoBindNull ln1.nuoLN))
+                   ln1.liveLN
       asgPtrExprGo (Right (scT, Owner)) pT with
           (usePlace (setPlace n (Pagurus.Status.singleton AOwned) scT) n id nm) proof pU
         asgPtrExprGo (Right (scT, Owner)) pT | Left d =
@@ -1847,11 +1865,18 @@ mutual
              ln1.liveLN
       declGo (Right (scT, Null)) pT =
         let tln = takeLN {funs} {chk} ln pT ev
-            ln1 = tln.lnTLN
-            scEq = rightInj (trans (sym (declPtrNullEq k id n nm pT)) eq)
-        in MkLN (oaRewrite scEq ln1.oaLN)
-             (nuoRewrite scEq (nuoBindNull ln1.nuoLN))
-             ln1.liveLN
+        in declNull tln
+        where
+          declNull :
+            TakeLN Null v env1 h1 scT a ->
+            LiveNuo (setH n v env1) h1 sc1 a
+          declNull tln with (tln.tkTLN)
+            declNull tln | HNull =
+              let ln1 = tln.lnTLN
+                  scEq = rightInj (trans (sym (declPtrNullEq k id n nm pT)) eq)
+              in MkLN (oaRewrite scEq (oaBindNull ln1.oaLN))
+                   (nuoRewrite scEq (nuoBindNull ln1.nuoLN))
+                   ln1.liveLN
       declGo (Right (scT, Owner)) pT =
         let tln = takeLN {funs} {chk} ln pT ev
             ln1 = tln.lnTLN
@@ -2062,8 +2087,7 @@ mutual
                 lnJ = MkLN (oaEqScopes pEq (oaJoinRight lnB.oaLN))
                         (nuoEqScopes pEq (nuoJoinRight lnB.oaLN lnB.nuoLN))
                         lnB.liveLN
-            in stmtLN {funs} {chk} {fuel = S (S m)} lnJ
-                 (trans (checkStmtLoop (S m) ctx sc lid bod) eq) evR
+            in stmtLN {funs} {chk} {fuel = S (S m)} lnJ eq evR
           loopGo (Right scB) pB | False | False =
             let lnB = stmtsLN {funs} {chk} {fuel = m} ln pB evB
                 lnJ = MkLN (oaJoinRight lnB.oaLN)
@@ -2132,8 +2156,7 @@ mutual
                 lnJ = MkLN (oaEqScopes pEq (oaJoinRight lnB.oaLN))
                         (nuoEqScopes pEq (nuoJoinRight lnB.oaLN lnB.nuoLN))
                         lnB.liveLN
-            in stmtLNRet {funs} {chk} {fuel = S (S m)} lnJ
-                 (trans (checkStmtLoop (S m) ctx sc lid bod) eq) evR
+            in stmtLNRet {funs} {chk} {fuel = S (S m)} lnJ eq evR
           loopGo (Right scB) pB | False | False =
             let lnB = stmtsLN {funs} {chk} {fuel = m} ln pB evB
                 lnJ = MkLN (oaJoinRight lnB.oaLN)
@@ -2337,7 +2360,7 @@ mutual
     LiveNuo env' h' sc' a
   exprsModesRest ln eq HEArgsNil =
     let scEq = rightInj (trans (sym (checkArgsModesNil ctx sc callee modes)) eq)
-    in MkLN (oaRewrite (sym scEq) ln.oaLN) (nuoRewrite (sym scEq) ln.nuoLN) ln.liveLN
+    in MkLN (oaRewrite scEq ln.oaLN) (nuoRewrite scEq ln.nuoLN) ln.liveLN
   exprsModesRest ln eq (HEArgsCons w env1 h1 evE evEs) {es = e :: es} =
     exprsModesLN {funs} {chk} ln eq evE evEs
 

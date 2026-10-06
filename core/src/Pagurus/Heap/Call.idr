@@ -117,28 +117,16 @@ reallocHeadOkH es ihT ihEs eq (Right (sc1, fl1)) pT =
   ihEs sc1 (trans (sym (reallocTailRight es pT)) eq) (htFromOk (ihT sc1 fl1 pT))
 
 export
-callBorrowH :
+callDefinedH :
   {ctx : Ctx} -> {sc, sc' : Scopes} ->
   {nid : Nat} -> {callee : String} -> {args : List Expr} -> {o : HResult} ->
-  (ih : checkArgsBorrow ctx sc args = Right sc' -> HSafeRes o sc') ->
+  (ih : checkArgsModes ctx sc callee args (funModes ctx callee) = Right sc' ->
+        HSafeRes o sc') ->
   isBuiltin callee = False ->
   isDefined ctx callee = True ->
-  isConsuming ctx callee = False ->
   checkCall ctx sc nid callee args = Right sc' ->
   HSafeRes o sc'
-callBorrowH ih pb pd pc eq = ih (trans (sym (checkCallBorrow pb pd pc)) eq)
-
-export
-callConsumeH :
-  {ctx : Ctx} -> {sc, sc' : Scopes} ->
-  {nid : Nat} -> {callee : String} -> {args : List Expr} -> {o : HResult} ->
-  (ih : checkArgsMove ctx sc args = Right sc' -> HSafeRes o sc') ->
-  isBuiltin callee = False ->
-  isDefined ctx callee = True ->
-  isConsuming ctx callee = True ->
-  checkCall ctx sc nid callee args = Right sc' ->
-  HSafeRes o sc'
-callConsumeH ih pb pd pc eq = ih (trans (sym (checkCallConsume pb pd pc)) eq)
+callDefinedH ih pb pd eq = ih (trans (sym (checkCallDefined pb pd)) eq)
 
 export
 takeCallCrashH :

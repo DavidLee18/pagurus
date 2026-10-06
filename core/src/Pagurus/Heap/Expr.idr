@@ -157,6 +157,47 @@ mutual
       (\sc1, pEs, r1 => argsMoveH {es} evEs sc1 sc' pEs r1)
       eq (takeOwner ctx sc e) Refl
 
+  argsModesH :
+    {ctx : Ctx} -> {callee : String} -> {es : List Expr} ->
+    {modes : List Consume} -> {env : HEnv} -> {h : Heap} -> {o : HResult} ->
+    HEvalExprs env h es o ->
+    (sc, sc' : Scopes) ->
+    checkArgsModes ctx sc callee es modes = Right sc' ->
+    OverApprox env h sc ->
+    HSafeRes o sc'
+  argsModesH HEArgsNil sc sc' eq oa = argsModesNilH eq oa
+  argsModesH (HEArgsCrash {e} {es} ev) sc sc' eq oa with (modes)
+    argsModesH (HEArgsCrash {e} {es} ev) sc sc' eq oa | [] =
+      argsModesExtraCrashH es
+        (\sc1, fl1, pT => takeHSafe {e} ev sc sc1 fl1 pT oa)
+        eq (takeOwner ctx sc e) Refl
+    argsModesH (HEArgsCrash {e} {es} ev) sc sc' eq oa | m :: ms with (doesConsume m) proof pc
+      argsModesH (HEArgsCrash {e} {es} ev) sc sc' eq oa | m :: ms | False =
+        argsModesBorrowCrashH es ms pc
+          (\sc1, pE => exprHSafe {e} ev sc sc1 pE oa)
+          eq (checkExpr ctx sc e) Refl
+      argsModesH (HEArgsCrash {e} {es} ev) sc sc' eq oa | m :: ms | True =
+        argsModesMoveCrashH es ms pc
+          (\sc1, fl1, pT => takeHSafe {e} ev sc sc1 fl1 pT oa)
+          eq (takeOwner ctx sc e) Refl
+  argsModesH (HEArgsCons {e} {es} v env1 h1 evE evEs) sc sc' eq oa with (modes)
+    argsModesH (HEArgsCons {e} {es} v env1 h1 evE evEs) sc sc' eq oa | [] =
+      argsModesExtraConsH es
+        (\sc1, fl1, pT => takeHSafe {e} evE sc sc1 fl1 pT oa)
+        (\sc1, pEs, r1 => argsModesH {es} {modes = []} evEs sc1 sc' pEs r1)
+        eq (takeOwner ctx sc e) Refl
+    argsModesH (HEArgsCons {e} {es} v env1 h1 evE evEs) sc sc' eq oa | m :: ms with (doesConsume m) proof pc
+      argsModesH (HEArgsCons {e} {es} v env1 h1 evE evEs) sc sc' eq oa | m :: ms | False =
+        argsModesBorrowConsH es ms pc
+          (\sc1, pE => exprHSafe {e} evE sc sc1 pE oa)
+          (\sc1, pEs, r1 => argsModesH {es} {modes = ms} evEs sc1 sc' pEs r1)
+          eq (checkExpr ctx sc e) Refl
+      argsModesH (HEArgsCons {e} {es} v env1 h1 evE evEs) sc sc' eq oa | m :: ms | True =
+        argsModesMoveConsH es ms pc
+          (\sc1, fl1, pT => takeHSafe {e} evE sc sc1 fl1 pT oa)
+          (\sc1, pEs, r1 => argsModesH {es} {modes = ms} evEs sc1 sc' pEs r1)
+          eq (takeOwner ctx sc e) Refl
+
   export
   callHSafe :
     {ctx : Ctx} -> {id : Nat} -> {callee : String} -> {args : List Expr} ->
@@ -175,11 +216,8 @@ mutual
           void (callOpaqueContraH pb pr pd eq)
         callHSafe evs sc sc' eq oa | False | False | True =
           callReallocH (\p => reallocExprsH evs sc sc' p oa) pb pr pd eq
-      callHSafe evs sc sc' eq oa | False | True with (isConsuming ctx callee) proof pc
-        callHSafe evs sc sc' eq oa | False | True | True =
-          callConsumeH (\p => argsMoveH evs sc sc' p oa) pb pd pc eq
-        callHSafe evs sc sc' eq oa | False | True | False =
-          callBorrowH (\p => argsBorrowH evs sc sc' p oa) pb pd pc eq
+      callHSafe evs sc sc' eq oa | False | True =
+        callDefinedH (\p => argsModesH {modes = funModes ctx callee} evs sc sc' p oa) pb pd eq
 
   reallocExprsH :
     {ctx : Ctx} -> {es : List Expr} -> {env : HEnv} -> {h : Heap} -> {o : HResult} ->

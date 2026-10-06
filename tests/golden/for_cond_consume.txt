@@ -2,10 +2,10 @@ error[use_after_move]: use of moved value `p`
   --> for_cond_consume.c:10:10
    |
 10 |     free(p);
-   |          ^ used here after move
+   |          ^ freed here after move
 note: value moved here
   --> for_cond_consume.c:7:20
    |
  7 |     for (; consume(p); ) {
    |                    ^ value moved here
-help: this pointer was moved; free the unique owner instead, not the moved-from name
+help: this pointer was already moved or consumed; freeing it here may be a double free

@@ -1,0 +1,6 @@
+error[unproven_ownership]: free of a pointer that may not uniquely own a heap object `q`
+ --> id_alias_only_q.c:6:49
+  |
+6 | int main(void){int*p=malloc(4);int*q=id(p);free(q);return 0;}
+  |                                                 ^ freed here
+help: pagurus cannot track unique ownership through a call, cast, or integer conversion; this may be a double free

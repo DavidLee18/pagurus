@@ -389,7 +389,7 @@ dropPlace sc n nid nm =
         ("cannot prove `" ++ nm ++ "` is a unique owner")
         nid "freed here"
         []
-        "pagurus only frees pointers it can prove uniquely own a heap object")
+        "pagurus cannot track unique ownership through a call, cast, or integer conversion; this may be a double free")
     Just st =>
       case stepStatus st Drop nid of
         Left d => Left (withName nm d)

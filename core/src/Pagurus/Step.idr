@@ -51,7 +51,7 @@ emptyDrop n =
     "free of a pointer that may not uniquely own a heap object"
     n "freed here"
     []
-    "only free a pointer that this function can prove is a unique owner (e.g. from malloc)"
+    "pagurus cannot track unique ownership through a call, cast, or integer conversion; this may be a double free"
 
 movedUse : Nat -> Nat -> Diag
 movedUse at n =
@@ -99,9 +99,9 @@ stepAtom (AMoved at) Move n = Left (movedUse at n)
 stepAtom (AMoved at) Drop n =
   Left (MkDiag KUseAfterMove
     "use of moved value"
-    n "used here after move"
+    n "freed here after move"
     [(at, "value moved here")]
-    "this pointer was moved; free the unique owner instead, not the moved-from name")
+    "this pointer was already moved or consumed; freeing it here may be a double free")
 stepAtom (AFreed at) Drop n =
   Left (MkDiag KDoubleFree
     "double free"

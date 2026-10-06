@@ -1,0 +1,11 @@
+error[use_after_move]: use of moved value `p`
+ --> id_alias.c:6:49
+  |
+6 | int main(void){int*p=malloc(4);int*q=id(p);free(p);free(q);return 0;}
+  |                                                 ^ freed here after move
+note: value moved here
+ --> id_alias.c:6:41
+  |
+6 | int main(void){int*p=malloc(4);int*q=id(p);free(p);free(q);return 0;}
+  |                                         ^ value moved here
+help: this pointer was already moved or consumed; freeing it here may be a double free

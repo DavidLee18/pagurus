@@ -156,9 +156,10 @@ fn fail_use_after_move() {
     );
     let text = normalize(&hit.to_string(), &path);
     assert!(text.contains("use of moved value `p`"));
-    assert!(text.contains("used here after move"));
+    assert!(text.contains("freed here after move"));
     assert!(text.contains("value moved here"));
     assert!(text.contains("help:"));
+    assert!(text.contains("may be a double free"));
     assert_golden("use_after_move.txt", &text);
 }
 
@@ -323,6 +324,86 @@ fn fail_wrap_free_first_df_stays_rejected() {
             "{name} must be rejected, got a clean verdict"
         );
     }
+}
+
+fn unique_span_ids(d: &pagurus::Diagnostic) -> bool {
+    let mut keys = vec![(d.span.line, d.span.column, d.primary_label.as_str())];
+    for n in &d.notes {
+        keys.push((n.span.line, n.span.column, n.message.as_str()));
+    }
+    let mut sorted = keys.clone();
+    sorted.sort();
+    sorted.dedup();
+    sorted.len() == keys.len()
+}
+
+#[test]
+fn fail_id_alias_explains_possible_double_free() {
+    let path = fixture("fail", "id_alias.c");
+    let diags = check(&path);
+    let hit = diags.first().expect("id_alias must stay rejected");
+    let text = normalize(&hit.to_string(), &path);
+    assert!(
+        text.contains("double free") || text.contains("id"),
+        "should hint at a double free / identity alias, got:\n{text}"
+    );
+    assert!(unique_span_ids(hit), "duplicate node labels:\n{text}");
+    assert_golden("id_alias.txt", &text);
+}
+
+#[test]
+fn fail_id_alias_only_q_explains_untracked_call() {
+    let path = fixture("fail", "id_alias_only_q.c");
+    let diags = check(&path);
+    let hit = diags.first().expect("id_alias_only_q must stay rejected");
+    let text = normalize(&hit.to_string(), &path);
+    assert!(
+        text.contains("call") && text.contains("double free"),
+        "should say ownership is untracked through a call, got:\n{text}"
+    );
+    assert!(unique_span_ids(hit), "duplicate node labels:\n{text}");
+    assert_golden("id_alias_only_q.txt", &text);
+}
+
+#[test]
+fn fail_cast_launder_explains_possible_double_free() {
+    for name in ["cast_launder_int.c", "cast_uintptr_alias.c"] {
+        let path = fixture("fail", name);
+        let diags = check(&path);
+        let hit = diags
+            .first()
+            .unwrap_or_else(|| panic!("{name} must stay rejected"));
+        let text = normalize(&hit.to_string(), &path);
+        assert!(
+            !diags.is_empty(),
+            "{name} must stay rejected"
+        );
+        assert!(
+            text.contains("cast") || text.contains("integer") || text.contains("double free"),
+            "{name} should hint at laundering / double free, got:\n{text}"
+        );
+        assert!(unique_span_ids(hit), "{name} duplicate node labels:\n{text}");
+        if name == "cast_launder_int.c" {
+            assert_golden("cast_launder_int.txt", &text);
+        }
+    }
+}
+
+#[test]
+fn fail_realloc_df_explains_consumed_pointer() {
+    let path = fixture("fail", "realloc_df.c");
+    let diags = check(&path);
+    let hit = diags
+        .iter()
+        .find(|d| ownership_crash(d) || d.kind == DiagnosticKind::Unproven)
+        .expect("realloc_df must stay rejected");
+    let text = normalize(&hit.to_string(), &path);
+    assert!(
+        text.contains("double free") || text.contains("realloc") || text.contains("moved"),
+        "should explain realloc consumed p, got:\n{text}"
+    );
+    assert!(unique_span_ids(hit), "duplicate node labels:\n{text}");
+    assert_golden("realloc_df.txt", &text);
 }
 
 #[test]

@@ -95,8 +95,8 @@ These are real proofs (`Refl` or induction), compiled into `pagurus-core`:
 
 - Heap values are `HVNone` / `HVCopy` / `HVPtr addr`. `alloc` returns a fresh live address; `markFreed` marks it `Freed`; assignment of a pointer **copies** the address (`q = p` aliases).
 - Crashes are `UseFreed`, `FreeFreed`, and `FreeNonHeap` (copy or unallocated). `free` of declared-empty / unbound (`HVNone`) is a no-op.
-- **`OverApprox`**: every heap binding is tracked; a dead tracked value (non-live pointer or copy) cannot sit under a use-safe status; at most one use-safe name per live address; the empty atom-set is never stored against a heap binding.
-- **`CheckAcceptedNoHeapCrash`**: if `checkStmts fuel` accepts a statement list, no `HEvalStmts` from an over-approximating heap state is a heap crash. The inhabitant `checkAcceptedNoHeapCrash` in `Pagurus.Heap.Stmt` is total. Non-vacuity witnesses in `Pagurus.Heap.Witness` include aliasing (`q = p` shares an address), `malloc; free` accepted and crash-free, and `malloc; free; free` crashing under the heap model and rejected by the checker.
+- **`OverApprox`**: every heap binding is tracked; a dead tracked value (non-live pointer or copy) cannot sit under a use-safe status; at most one use-safe name per live address; the empty atom-set is never stored against a heap binding; a use-safe unowned unborrowed status cannot hold a live pointer (`safeNonOwnerMiss`), so `ANull` / leftover-empty `free` is a heap no-op.
+- **`CheckAcceptedNoHeapCrash`**: if `checkStmts fuel` accepts a statement list, no `HEvalStmts` from an over-approximating heap state is a heap crash (`HReturned` is not a crash; `return` skips the rest of the list). The inhabitant `checkAcceptedNoHeapCrash` in `Pagurus.Heap.Stmt` is total. Non-vacuity witnesses in `Pagurus.Heap.Witness` include aliasing (`q = p` shares an address), `malloc; free` accepted and crash-free, and `malloc; free; free` crashing under the heap model and rejected by the checker.
 
 ### Stated, not proved
 

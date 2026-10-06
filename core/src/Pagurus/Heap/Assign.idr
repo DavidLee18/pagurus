@@ -69,6 +69,11 @@ asgPtrOkH id n nm ih eq (Right (sc1, Ghost)) pT =
   let oa1 = htFromOk (ih sc1 Ghost pT)
   in HROutOk (oaRewrite (rightInj (trans (sym (checkExprAsgPtrGhost id n nm pT)) eq))
        (oaBindDead oa1))
+asgPtrOkH id n nm ih eq (Right (sc1, Null)) pT =
+  case htTaken (ih sc1 Null pT) of
+    HNull =>
+      HROutOk (oaRewrite (rightInj (trans (sym (checkExprAsgPtrNull id n nm pT)) eq))
+        (oaBindNull (htFromOk (ih sc1 Null pT))))
 asgPtrOkH id n nm ih eq (Right (sc1, Owner)) pT with
     (usePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n id nm) proof pU
   asgPtrOkH id n nm ih eq (Right (sc1, Owner)) pT | Left d =
@@ -121,6 +126,11 @@ stmtAsgPtrOkH fuel id n nm ih eq (Left _) pT =
 stmtAsgPtrOkH fuel id n nm ih eq (Right (sc1, Ghost)) pT =
   HOutOk (oaRewrite (rightInj (trans (sym (stmtAsgPtrGhost fuel id n nm pT)) eq))
     (oaBindDead (htFromOk (ih sc1 Ghost pT))))
+stmtAsgPtrOkH fuel id n nm ih eq (Right (sc1, Null)) pT =
+  case htTaken (ih sc1 Null pT) of
+    HNull =>
+      HOutOk (oaRewrite (rightInj (trans (sym (stmtAsgPtrNull fuel id n nm pT)) eq))
+        (oaBindNull (htFromOk (ih sc1 Null pT))))
 stmtAsgPtrOkH fuel id n nm ih eq (Right (sc1, Owner)) pT =
   HOutOk (oaRewrite (rightInj (trans (sym (stmtAsgPtrOwner fuel id n nm pT)) eq))
     (bindOwner (htFromOk (ih sc1 Owner pT)) (htTaken (ih sc1 Owner pT))))
@@ -174,7 +184,7 @@ inHandAfterBindMove {n} {id} {sc} live oaB pM with
   inHandAfterBindMove {n} {id} {sc} live oaB pM | Left d =
     void (leftNotRight (trans (sym (movePlaceJustL (lookupPlaceSetHit n (Pagurus.Status.singleton AOwned) sc) pS)) pM))
   inHandAfterBindMove {n} {id} {sc} live oaB pM | Right st' =
-    let uns = stepMoveResultUnsafe (Pagurus.Status.singleton AOwned) id st' statusConsNotNil pS
+    let uns = stepMoveOwnedSingleton id st' pS
         scEq = rightInj (trans (sym (movePlaceJust (lookupPlaceSetHit n (Pagurus.Status.singleton AOwned) sc) pS)) pM)
     in replace {p = \s => InHand (setH n (HVPtr a) env) h s a} scEq
          (inHandMoved oaB (lookupHSetHit n (HVPtr a) env) live
@@ -212,6 +222,14 @@ takeAsgPtrOkH id n nm ih eq (Right (sc1, Ghost)) pT =
   in htRewrite scEq (replace {p = \f => HTOut f (HROk v (setH n v env1) h1)
                                          (setPlace n (Pagurus.Status.singleton AEmpty) sc1)} flEq
        (HTOk (oaBindDead (htFromOk (ih sc1 Ghost pT))) HGh))
+takeAsgPtrOkH id n nm ih eq (Right (sc1, Null)) pT =
+  case htTaken (ih sc1 Null pT) of
+    HNull =>
+      let scEq = cong fst (rightInj (trans (sym (takeAsgPtrNull id n nm pT)) eq))
+          flEq = cong snd (rightInj (trans (sym (takeAsgPtrNull id n nm pT)) eq))
+      in htRewrite scEq (replace {p = \f => HTOut f (HROk HVNone (setH n HVNone env1) h1)
+                                             (setPlace n (Pagurus.Status.singleton ANull) sc1)} flEq
+           (HTOk (oaBindNull (htFromOk (ih sc1 Null pT))) HNull))
 takeAsgPtrOkH id n nm ih eq (Right (sc1, Owner)) pT with
     (movePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n id nm) proof pM
   takeAsgPtrOkH id n nm ih eq (Right (sc1, Owner)) pT | Left d =

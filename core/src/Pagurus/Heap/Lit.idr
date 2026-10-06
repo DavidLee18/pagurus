@@ -37,6 +37,29 @@ takeLitH id eq oa =
        (HTOk oa HGh))
 
 export
+nullH :
+  (id : Nat) ->
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {env : HEnv} -> {h : Heap} ->
+  checkExpr ctx sc (ENull id) = Right sc' ->
+  OverApprox env h sc ->
+  HSafeRes (HROk HVNone env h) sc'
+nullH id eq oa =
+  HROutOk (oaRewrite (rightInj (trans (sym (checkExprNull ctx sc id)) eq)) oa)
+
+export
+takeNullH :
+  (id : Nat) ->
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {env : HEnv} -> {h : Heap} -> {fl : Flag} ->
+  takeOwner ctx sc (ENull id) = Right (sc', fl) ->
+  OverApprox env h sc ->
+  HTOut fl (HROk HVNone env h) sc'
+takeNullH id eq oa =
+  let scEq = cong fst (rightInj (trans (sym (takeNull ctx sc id)) eq))
+      flEq = cong snd (rightInj (trans (sym (takeNull ctx sc id)) eq))
+  in htRewrite scEq (replace {p = \f => HTOut f (HROk HVNone env h) sc} flEq
+       (HTOk oa HNull))
+
+export
 unsupExprContraH :
   (id : Nat) -> (reason : String) ->
   {ctx : Ctx} -> {sc, sc' : Scopes} ->

@@ -133,7 +133,13 @@ dropNoneH fuel ctx nid n nm eq oa none =
         void (leftNotRight (trans (sym (dropPlaceJustL pL pS)) pDrop))
       dropNoneLookup pDrop (Just (x :: xs)) pL | Right stN =
         HOutOk (oaRewrite (rightInj (trans (sym (dropPlaceJust pL pS)) pDrop))
-          (oaSetUnsafe oa (stepDropResultUnsafe (x :: xs) nid stN statusConsNotNil pS)))
+          (case stepDropHasUnsafe (x :: xs) nid stN pS of
+             Left uns => oaSetUnsafe oa uns
+             Right safeN =>
+               oaResafe oa pL (stepDropSafe (x :: xs) nid stN pS) safeN
+                 (dropResultNotNil pS)
+                 (\_ => dropOwnBack (x :: xs) nid stN pS safeN)
+                 (\_ => dropBorrowBack (x :: xs) nid stN pS)))
 
 export
 dropCopyContra :

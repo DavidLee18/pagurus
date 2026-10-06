@@ -25,6 +25,7 @@ atomUnsafeUse (ABorrowed _) = False
 atomUnsafeUse AEmpty = True
 atomUnsafeUse (AMoved _) = True
 atomUnsafeUse (AFreed _) = True
+atomUnsafeUse ANull = False
 
 public export
 unsafeUse : Status -> Bool
@@ -94,6 +95,110 @@ export
 freedUnsafeUse : (n : Nat) -> unsafeUse (Pagurus.Status.singleton (AFreed n)) = True
 freedUnsafeUse _ = Refl
 
+export
+nullSafeUse : unsafeUse (Pagurus.Status.singleton ANull) = False
+nullSafeUse = Refl
+
+export
+nullNotOwned : hasOwned (Pagurus.Status.singleton ANull) = False
+nullNotOwned = Refl
+
+export
+nullNoBorrow : hasBorrowed (Pagurus.Status.singleton ANull) = Nothing
+nullNoBorrow = Refl
+
+export
+ownedSingletonOwned : hasOwned (Pagurus.Status.singleton AOwned) = True
+ownedSingletonOwned = Refl
+
+export
+hasOwnedHas : (st : Status) -> hasOwned st = True -> inSet AOwned st = True
+hasOwnedHas [] prf = void (falseNotTrue prf)
+hasOwnedHas (AOwned :: _) _ = rewrite eqAtomRefl AOwned in Refl
+hasOwnedHas (AEmpty :: xs) prf = rewrite hasOwnedHas xs prf in orTrueRight (AOwned == AEmpty)
+hasOwnedHas (ABorrowed n :: xs) prf = rewrite hasOwnedHas xs prf in orTrueRight (AOwned == ABorrowed n)
+hasOwnedHas (AMoved n :: xs) prf = rewrite hasOwnedHas xs prf in orTrueRight (AOwned == AMoved n)
+hasOwnedHas (AFreed n :: xs) prf = rewrite hasOwnedHas xs prf in orTrueRight (AOwned == AFreed n)
+hasOwnedHas (ANull :: xs) prf = rewrite hasOwnedHas xs prf in orTrueRight (AOwned == ANull)
+
+export
+hasOwnedFrom : (st : Status) -> inSet AOwned st = True -> hasOwned st = True
+hasOwnedFrom [] prf = void (falseNotTrue prf)
+hasOwnedFrom (AOwned :: _) _ = Refl
+hasOwnedFrom (AEmpty :: xs) prf =
+  case orTrue {a = AOwned == AEmpty} {b = inSet AOwned xs} prf of
+    Left eq => void (falseNotTrue eq)
+    Right inxs => hasOwnedFrom xs inxs
+hasOwnedFrom (ABorrowed n :: xs) prf =
+  case orTrue {a = AOwned == ABorrowed n} {b = inSet AOwned xs} prf of
+    Left eq => void (falseNotTrue eq)
+    Right inxs => hasOwnedFrom xs inxs
+hasOwnedFrom (AMoved n :: xs) prf =
+  case orTrue {a = AOwned == AMoved n} {b = inSet AOwned xs} prf of
+    Left eq => void (falseNotTrue eq)
+    Right inxs => hasOwnedFrom xs inxs
+hasOwnedFrom (AFreed n :: xs) prf =
+  case orTrue {a = AOwned == AFreed n} {b = inSet AOwned xs} prf of
+    Left eq => void (falseNotTrue eq)
+    Right inxs => hasOwnedFrom xs inxs
+hasOwnedFrom (ANull :: xs) prf =
+  case orTrue {a = AOwned == ANull} {b = inSet AOwned xs} prf of
+    Left eq => void (falseNotTrue eq)
+    Right inxs => hasOwnedFrom xs inxs
+
+export
+hasOwnedDown : {xs, ys : Status} ->
+               SubStatus xs ys -> hasOwned ys = False -> hasOwned xs = False
+hasOwnedDown {xs} {ys} sub ownF =
+  notTrueIsFalse (\p => falseNotTrue (trans (sym ownF)
+    (hasOwnedFrom ys (sub AOwned (hasOwnedHas xs p)))))
+
+export
+hasBorrowedHas : (n : Nat) -> (st : Status) ->
+                 hasBorrowed st = Just n -> inSet (ABorrowed n) st = True
+hasBorrowedHas n [] prf = void (nothingNotJustH prf)
+hasBorrowedHas n (ABorrowed m :: xs) prf =
+  rewrite justInj prf in rewrite eqNatRefl n in Refl
+hasBorrowedHas n (AEmpty :: xs) prf = rewrite hasBorrowedHas n xs prf in orTrueRight (ABorrowed n == AEmpty)
+hasBorrowedHas n (AOwned :: xs) prf = rewrite hasBorrowedHas n xs prf in orTrueRight (ABorrowed n == AOwned)
+hasBorrowedHas n (AMoved m :: xs) prf = rewrite hasBorrowedHas n xs prf in orTrueRight (ABorrowed n == AMoved m)
+hasBorrowedHas n (AFreed m :: xs) prf = rewrite hasBorrowedHas n xs prf in orTrueRight (ABorrowed n == AFreed m)
+hasBorrowedHas n (ANull :: xs) prf = rewrite hasBorrowedHas n xs prf in orTrueRight (ABorrowed n == ANull)
+
+export
+borrowedIfIn : (n : Nat) -> (st : Status) ->
+               inSet (ABorrowed n) st = True -> Not (hasBorrowed st = Nothing)
+borrowedIfIn n [] prf _ = falseNotTrue prf
+borrowedIfIn n (ABorrowed m :: _) _ eq = nothingNotJustH (sym eq)
+borrowedIfIn n (AEmpty :: xs) prf eq =
+  case orTrue {a = ABorrowed n == AEmpty} {b = inSet (ABorrowed n) xs} prf of
+    Left p => void (falseNotTrue p)
+    Right inxs => borrowedIfIn n xs inxs eq
+borrowedIfIn n (AOwned :: xs) prf eq =
+  case orTrue {a = ABorrowed n == AOwned} {b = inSet (ABorrowed n) xs} prf of
+    Left p => void (falseNotTrue p)
+    Right inxs => borrowedIfIn n xs inxs eq
+borrowedIfIn n (AMoved m :: xs) prf eq =
+  case orTrue {a = ABorrowed n == AMoved m} {b = inSet (ABorrowed n) xs} prf of
+    Left p => void (falseNotTrue p)
+    Right inxs => borrowedIfIn n xs inxs eq
+borrowedIfIn n (AFreed m :: xs) prf eq =
+  case orTrue {a = ABorrowed n == AFreed m} {b = inSet (ABorrowed n) xs} prf of
+    Left p => void (falseNotTrue p)
+    Right inxs => borrowedIfIn n xs inxs eq
+borrowedIfIn n (ANull :: xs) prf eq =
+  case orTrue {a = ABorrowed n == ANull} {b = inSet (ABorrowed n) xs} prf of
+    Left p => void (falseNotTrue p)
+    Right inxs => borrowedIfIn n xs inxs eq
+
+export
+hasBorrowedDown : {xs, ys : Status} ->
+                  SubStatus xs ys -> hasBorrowed ys = Nothing -> hasBorrowed xs = Nothing
+hasBorrowedDown {xs} {ys} sub nbY with (hasBorrowed xs) proof px
+  hasBorrowedDown sub nbY | Nothing = Refl
+  hasBorrowedDown {xs} {ys} sub nbY | Just n =
+    void (borrowedIfIn n ys (sub (ABorrowed n) (hasBorrowedHas n xs px)) nbY)
+
 --------------------------------------------------------------------------------
 -- Over-approximation
 --------------------------------------------------------------------------------
@@ -134,6 +239,16 @@ record OverApprox (env : HEnv) (h : Heap) (sc : Scopes) where
     (p : Place) ->
     lookupPlace p sc = Just [] ->
     lookupH p env = Nothing
+  ||| A use-safe status that is not a unique owner and not a borrow is
+  ||| known-null (`ANull`) or similar: it does not hold a live heap address.
+  ||| So `free` of `ANull` is a heap no-op, matching `stepAtom ANull Drop`.
+  safeNonOwnerMiss :
+    (p : Place) -> (st : Status) ->
+    lookupPlace p sc = Just st ->
+    unsafeUse st = False ->
+    hasOwned st = False ->
+    hasBorrowed st = Nothing ->
+    Either (lookupH p env = Nothing) (lookupH p env = Just HVNone)
 
 export
 oaEmpty : OverApprox [] InitHeap []
@@ -143,12 +258,21 @@ oaEmpty = MkOA wfEmpty
   (\p, q, a, ne, lp, lq, live, stP, lookP, stQ, lookQ, safeP =>
      void (nothingNotJustH lp))
   (\p, lp => void (nothingNotJust lp))
+  (\p, st, lp, _, _, _ => void (nothingNotJust lp))
 
 export
 subNil : {xs : Status} -> SubStatus xs [] -> xs = []
 subNil {xs = []} _ = Refl
 subNil {xs = x :: xs} sub =
   void (falseNotTrue (sub x (rewrite eqAtomRefl x in Refl)))
+
+export
+hvNoneNotPtrF : Not (HVNone = HVPtr a)
+hvNoneNotPtrF Refl impossible
+
+export
+hvCopyNotPtrF : Not (HVCopy = HVPtr a)
+hvCopyNotPtrF Refl impossible
 
 export
 oaRewrite :
@@ -196,6 +320,7 @@ oaJoinLeft {xs} {ys} {env} {h} oa = MkOA oa.wf
   dead
   uniq
   em
+  snm
   where
     track : (p : Place) -> (v : HVal) -> lookupH p env = Just v ->
             (st : Status ** lookupPlace p (joinScopes xs ys) = Just st)
@@ -248,6 +373,33 @@ oaJoinLeft {xs} {ys} {env} {h} oa = MkOA oa.wf
         in void (nothingNotJustH (trans (sym (oa.emptyMiss p
                   (replace {p = \s => lookupPlace p xs = Just s} stNil lp))) pe))
 
+    snm : (p : Place) -> (stj : Status) ->
+          lookupPlace p (joinScopes xs ys) = Just stj ->
+          unsafeUse stj = False ->
+          hasOwned stj = False ->
+          hasBorrowed stj = Nothing ->
+          Either (lookupH p env = Nothing) (lookupH p env = Just HVNone)
+    snm p stj lpj safe ownF nb with (lookupH p env) proof pe
+      snm p stj lpj safe ownF nb | Nothing = Left Refl
+      snm p stj lpj safe ownF nb | Just HVNone = Right Refl
+      snm p stj lpj safe ownF nb | Just HVCopy =
+        let (st ** lp) = oa.tracked p HVCopy pe
+            (st2 ** (lpj2, sub)) = joinScopesLookupLeft xs ys p st lp
+            same = justInj (trans (sym lpj2) lpj)
+        in void (trueNotFalse (trans (sym (unsafeUseSub sub
+                  (oa.deadUnsafe p st HVCopy lp pe Refl)))
+                  (replace {p = \s => unsafeUse s = False} (sym same) safe)))
+      snm p stj lpj safe ownF nb | Just (HVPtr a) =
+        let (st ** lp) = oa.tracked p (HVPtr a) pe
+            (st2 ** (lpj2, sub)) = joinScopesLookupLeft xs ys p st lp
+            same = justInj (trans (sym lpj2) lpj)
+            safe0 = unsafeSafeDown sub (replace {p = \s => unsafeUse s = False} (sym same) safe)
+            own0 = hasOwnedDown sub (replace {p = \s => hasOwned s = False} (sym same) ownF)
+            nb0 = hasBorrowedDown sub (replace {p = \s => hasBorrowed s = Nothing} (sym same) nb)
+        in case oa.safeNonOwnerMiss p st lp safe0 own0 nb0 of
+             Left miss => void (nothingNotJustH (trans (sym miss) pe))
+             Right none => void (hvNoneNotPtrF (justInjH (trans (sym none) pe)))
+
 export
 oaJoinRight :
   {xs, ys : Scopes} -> {env : HEnv} -> {h : Heap} ->
@@ -257,6 +409,7 @@ oaJoinRight {xs} {ys} {env} {h} oa = MkOA oa.wf
   dead
   uniq
   em
+  snm
   where
     track : (p : Place) -> (v : HVal) -> lookupH p env = Just v ->
             (st : Status ** lookupPlace p (joinScopes xs ys) = Just st)
@@ -308,3 +461,30 @@ oaJoinRight {xs} {ys} {env} {h} oa = MkOA oa.wf
             stNil = subNil (replace {p = SubStatus st} same sub)
         in void (nothingNotJustH (trans (sym (oa.emptyMiss p
                   (replace {p = \s => lookupPlace p ys = Just s} stNil lp))) pe))
+
+    snm : (p : Place) -> (stj : Status) ->
+          lookupPlace p (joinScopes xs ys) = Just stj ->
+          unsafeUse stj = False ->
+          hasOwned stj = False ->
+          hasBorrowed stj = Nothing ->
+          Either (lookupH p env = Nothing) (lookupH p env = Just HVNone)
+    snm p stj lpj safe ownF nb with (lookupH p env) proof pe
+      snm p stj lpj safe ownF nb | Nothing = Left Refl
+      snm p stj lpj safe ownF nb | Just HVNone = Right Refl
+      snm p stj lpj safe ownF nb | Just HVCopy =
+        let (st ** lp) = oa.tracked p HVCopy pe
+            (st2 ** (lpj2, sub)) = joinScopesLookupRight xs ys p st lp
+            same = justInj (trans (sym lpj2) lpj)
+        in void (trueNotFalse (trans (sym (unsafeUseSub sub
+                  (oa.deadUnsafe p st HVCopy lp pe Refl)))
+                  (replace {p = \s => unsafeUse s = False} (sym same) safe)))
+      snm p stj lpj safe ownF nb | Just (HVPtr a) =
+        let (st ** lp) = oa.tracked p (HVPtr a) pe
+            (st2 ** (lpj2, sub)) = joinScopesLookupRight xs ys p st lp
+            same = justInj (trans (sym lpj2) lpj)
+            safe0 = unsafeSafeDown sub (replace {p = \s => unsafeUse s = False} (sym same) safe)
+            own0 = hasOwnedDown sub (replace {p = \s => hasOwned s = False} (sym same) ownF)
+            nb0 = hasBorrowedDown sub (replace {p = \s => hasBorrowed s = Nothing} (sym same) nb)
+        in case oa.safeNonOwnerMiss p st lp safe0 own0 nb0 of
+             Left miss => void (nothingNotJustH (trans (sym miss) pe))
+             Right none => void (hvNoneNotPtrF (justInjH (trans (sym none) pe)))

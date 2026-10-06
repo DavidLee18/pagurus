@@ -21,6 +21,7 @@ import Pagurus.Heap.If
 import Pagurus.Heap.Seq
 import Pagurus.Heap.Call
 import Pagurus.Heap.Expr
+import Pagurus.Heap.Ended
 
 %default total
 
@@ -77,27 +78,31 @@ mutual
   stmtHSafe {s = SReturn rid (Just (EVar nid n nm))} (HSRetCrash ev) (S k) sc sc' eq oa =
     hrToCrashOut (retVarH k ctx rid nid n nm eq oa ev (takeOwner ctx sc (EVar nid n nm)) Refl)
   stmtHSafe {s = SReturn rid (Just (EVar nid n nm))} (HSRet v env1 h1 ev) (S k) sc sc' eq oa =
-    hResToOut (retVarH k ctx rid nid n nm eq oa ev (takeOwner ctx sc (EVar nid n nm)) Refl)
+    hResToRet (retVarH k ctx rid nid n nm eq oa ev (takeOwner ctx sc (EVar nid n nm)) Refl)
   stmtHSafe {s = SReturn rid (Just (ELit id))} (HSRetCrash ev) (S k) sc sc' eq oa =
     hrToCrashOut (exprHSafe ev sc sc' (trans (sym (checkStmtRetLit k ctx sc rid id)) eq) oa)
   stmtHSafe {s = SReturn rid (Just (ELit id))} (HSRet v env1 h1 ev) (S k) sc sc' eq oa =
-    hResToOut (exprHSafe ev sc sc' (trans (sym (checkStmtRetLit k ctx sc rid id)) eq) oa)
+    hResToRet (exprHSafe ev sc sc' (trans (sym (checkStmtRetLit k ctx sc rid id)) eq) oa)
+  stmtHSafe {s = SReturn rid (Just (ENull id))} (HSRetCrash ev) (S k) sc sc' eq oa =
+    hrToCrashOut (exprHSafe ev sc sc' (trans (sym (checkStmtRetNull k ctx sc rid id)) eq) oa)
+  stmtHSafe {s = SReturn rid (Just (ENull id))} (HSRet v env1 h1 ev) (S k) sc sc' eq oa =
+    hResToRet (exprHSafe ev sc sc' (trans (sym (checkStmtRetNull k ctx sc rid id)) eq) oa)
   stmtHSafe {s = SReturn rid (Just (EMalloc mid args))} (HSRetCrash ev) (S k) sc sc' eq oa =
     hrToCrashOut (exprHSafe ev sc sc' (trans (sym (checkStmtRetMalloc k ctx sc rid mid args)) eq) oa)
   stmtHSafe {s = SReturn rid (Just (EMalloc mid args))} (HSRet v env1 h1 ev) (S k) sc sc' eq oa =
-    hResToOut (exprHSafe ev sc sc' (trans (sym (checkStmtRetMalloc k ctx sc rid mid args)) eq) oa)
+    hResToRet (exprHSafe ev sc sc' (trans (sym (checkStmtRetMalloc k ctx sc rid mid args)) eq) oa)
   stmtHSafe {s = SReturn rid (Just (ECall id callee args))} (HSRetCrash ev) (S k) sc sc' eq oa =
     hrToCrashOut (exprHSafe ev sc sc' (trans (sym (checkStmtRetCall k ctx sc rid id callee args)) eq) oa)
   stmtHSafe {s = SReturn rid (Just (ECall id callee args))} (HSRet v env1 h1 ev) (S k) sc sc' eq oa =
-    hResToOut (exprHSafe ev sc sc' (trans (sym (checkStmtRetCall k ctx sc rid id callee args)) eq) oa)
+    hResToRet (exprHSafe ev sc sc' (trans (sym (checkStmtRetCall k ctx sc rid id callee args)) eq) oa)
   stmtHSafe {s = SReturn rid (Just (EUse uid args))} (HSRetCrash ev) (S k) sc sc' eq oa =
     hrToCrashOut (exprHSafe ev sc sc' (trans (sym (checkStmtRetUse k ctx sc rid uid args)) eq) oa)
   stmtHSafe {s = SReturn rid (Just (EUse uid args))} (HSRet v env1 h1 ev) (S k) sc sc' eq oa =
-    hResToOut (exprHSafe ev sc sc' (trans (sym (checkStmtRetUse k ctx sc rid uid args)) eq) oa)
+    hResToRet (exprHSafe ev sc sc' (trans (sym (checkStmtRetUse k ctx sc rid uid args)) eq) oa)
   stmtHSafe {s = SReturn rid (Just (EAssign id n nm ty rhs))} (HSRetCrash ev) (S k) sc sc' eq oa =
     hrToCrashOut (exprHSafe ev sc sc' (trans (sym (checkStmtRetAsg k ctx sc rid id n nm ty rhs)) eq) oa)
   stmtHSafe {s = SReturn rid (Just (EAssign id n nm ty rhs))} (HSRet v env1 h1 ev) (S k) sc sc' eq oa =
-    hResToOut (exprHSafe ev sc sc' (trans (sym (checkStmtRetAsg k ctx sc rid id n nm ty rhs)) eq) oa)
+    hResToRet (exprHSafe ev sc sc' (trans (sym (checkStmtRetAsg k ctx sc rid id n nm ty rhs)) eq) oa)
   stmtHSafe {s = SReturn rid (Just (EUnsupported id reason))} (HSRetCrash _) (S k) sc sc' eq oa =
     void (retUnsupContraH k ctx sc rid id reason eq)
   stmtHSafe {s = SReturn rid (Just (EUnsupported id reason))} (HSRet _ _ _ _) (S k) sc sc' eq oa =
@@ -116,11 +121,13 @@ mutual
     ifThenH k iid
       (\sc1, pC => exprHSafe evC sc sc1 pC oa)
       (\sc0, scT, pT, r0 => stmtsHSafe evT k sc0 scT pT r0)
+      evT
       eq (checkExpr ctx sc cond) Refl
   stmtHSafe {s = SIf iid cond thn els} (HSIfElse v env0 h0 evC evE) (S k) sc sc' eq oa =
     ifElseH k iid
       (\sc1, pC => exprHSafe evC sc sc1 pC oa)
       (\sc0, scE, pE, r0 => stmtsHSafe evE k sc0 scE pE r0)
+      evE
       eq (checkExpr ctx sc cond) Refl
   stmtHSafe {s = SLoop lid bod} ev (S k) sc sc' eq oa =
     loopGoH k ev sc sc' (trans (sym (checkStmtLoop k ctx sc lid bod)) eq) oa
@@ -143,19 +150,27 @@ mutual
       void (leftNotRight (trans (sym (loopFixLeft lid pB)) eq))
     loopGoH (S m) (HSLoopCrash evB) sc sc' eq oa | Right scB =
       hCrashScope (stmtsHSafe evB m sc scB pB oa)
+  loopGoH (S m) (HSLoopRet env1 h1 evB) sc sc' eq oa with (checkStmts m ctx sc bod) proof pB
+    loopGoH (S m) (HSLoopRet env1 h1 evB) sc sc' eq oa | Left _ =
+      void (leftNotRight (trans (sym (loopFixLeft lid pB)) eq))
+    loopGoH (S m) (HSLoopRet env1 h1 evB) sc sc' eq oa | Right scB =
+      HOutRet
   loopGoH (S m) (HSLoopS env1 h1 evB evR) sc sc' eq oa with (checkStmts m ctx sc bod) proof pB
     loopGoH (S m) (HSLoopS env1 h1 evB evR) sc sc' eq oa | Left _ =
       void (leftNotRight (trans (sym (loopFixLeft lid pB)) eq))
-    loopGoH (S m) (HSLoopS env1 h1 evB evR) sc sc' eq oa | Right scB with (eqScopes (joinScopes sc scB) sc) proof pEq
+    loopGoH (S m) (HSLoopS env1 h1 evB evR) sc sc' eq oa | Right scB with (stmtsEnded bod) proof pEnd
       loopGoH (S m) (HSLoopS env1 h1 evB evR) sc sc' eq oa | Right scB | True =
-        stmtHSafe evR (S (S m)) sc sc'
-          (trans (checkStmtLoop (S m) ctx sc lid bod) eq)
-          (oaEqScopes pEq (oaJoinRight (hFromOk (stmtsHSafe evB m sc scB pB oa))))
-      loopGoH (S m) (HSLoopS env1 h1 evB evR) sc sc' eq oa | Right scB | False =
-        stmtHSafe evR (S m) (joinScopes sc scB) sc'
-          (trans (checkStmtLoop m ctx (joinScopes sc scB) lid bod)
-                 (trans (sym (loopFixFalse lid pB pEq)) eq))
-          (oaJoinRight (hFromOk (stmtsHSafe evB m sc scB pB oa)))
+        void (stmtsEndedNotHOk pEnd evB)
+      loopGoH (S m) (HSLoopS env1 h1 evB evR) sc sc' eq oa | Right scB | False with (eqScopes (joinScopes sc scB) sc) proof pEq
+        loopGoH (S m) (HSLoopS env1 h1 evB evR) sc sc' eq oa | Right scB | False | True =
+          stmtHSafe evR (S (S m)) sc sc'
+            (trans (checkStmtLoop (S m) ctx sc lid bod) eq)
+            (oaEqScopes pEq (oaJoinRight (hFromOk (stmtsHSafe evB m sc scB pB oa))))
+        loopGoH (S m) (HSLoopS env1 h1 evB evR) sc sc' eq oa | Right scB | False | False =
+          stmtHSafe evR (S m) (joinScopes sc scB) sc'
+            (trans (checkStmtLoop m ctx (joinScopes sc scB) lid bod)
+                   (trans (sym (loopFixFalse lid pEnd pB pEq)) eq))
+            (oaJoinRight (hFromOk (stmtsHSafe evB m sc scB pB oa)))
 
   export
   stmtsHSafe :
@@ -171,14 +186,19 @@ mutual
     void (stmtsZeroContraH ctx sc s rest eq)
   stmtsHSafe (HSConsOk {s} {ss = rest} env1 h1 evS evSS) Z sc sc' eq oa =
     void (stmtsZeroContraH ctx sc s rest eq)
+  stmtsHSafe (HSConsRet {s} {ss = rest} env1 h1 ev) Z sc sc' eq oa =
+    void (stmtsZeroContraH ctx sc s rest eq)
   stmtsHSafe (HSConsCrash {s} {ss = rest} ev) (S k) sc sc' eq oa =
     seqCrashH rest (\sc1, pS => stmtHSafe ev k sc sc1 pS oa)
+      eq (checkStmt k ctx sc s) Refl
+  stmtsHSafe (HSConsRet {s} {ss = rest} env1 h1 ev) (S k) sc sc' eq oa =
+    seqRetH rest (\sc1, pS => stmtHSafe ev k sc sc1 pS oa)
       eq (checkStmt k ctx sc s) Refl
   stmtsHSafe (HSConsOk {s} {ss = rest} env1 h1 evS evSS) (S k) sc sc' eq oa =
     seqOkH rest
       (\sc1, pS => stmtHSafe evS k sc sc1 pS oa)
       (\sc1, pSS, r1 => stmtsHSafe evSS k sc1 sc' pSS r1)
-      eq (checkStmt k ctx sc s) Refl
+      eq (checkStmt k ctx sc s) Refl evS
 
 export
 checkAcceptedNoHeapCrash : CheckAcceptedNoHeapCrash

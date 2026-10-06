@@ -37,6 +37,7 @@ modules = Pagurus.IR
         , Pagurus.Heap.Lit
         , Pagurus.Heap.Var
         , Pagurus.Heap.Seq
+        , Pagurus.Heap.Ended
         , Pagurus.Heap.Args
         , Pagurus.Heap.Call
         , Pagurus.Heap.Malloc

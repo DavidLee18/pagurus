@@ -149,8 +149,8 @@ export
 mallocFreeAccepted :
   checkStmts 8 EmptyCtx [] SsOk = Right ScFreed
 mallocFreeAccepted =
-  trans (stmtsConsRight [FreeP] (mallocDeclAccepted 6))
-        (trans (stmtsConsRight {fuel = 6} [] (FreePAccepted 5))
+  trans (stmtsConsRight [FreeP] Refl (mallocDeclAccepted 6))
+        (trans (stmtsConsRight {fuel = 6} [] Refl (FreePAccepted 5))
                (checkStmtsNil 6 EmptyCtx ScFreed))
 
 --------------------------------------------------------------------------------
@@ -182,8 +182,8 @@ doubleFreeRejected :
   {sc' : Scopes} ->
   Not (checkStmts 8 EmptyCtx [] SsBad = Right sc')
 doubleFreeRejected eq =
-  let step1 = stmtsConsRight [FreeP, FreeP2] (mallocDeclAccepted 6)
-      step2 = stmtsConsRight [FreeP2] (FreePAccepted 5)
+  let step1 = stmtsConsRight [FreeP, FreeP2] Refl (mallocDeclAccepted 6)
+      step2 = stmtsConsRight [FreeP2] Refl (FreePAccepted 5)
       red = trans step1 step2
       pDrop = checkStmtDrop 4 EmptyCtx ScFreed 4 0 "p"
       leftStmt = trans pDrop DropFreedEq

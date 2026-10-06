@@ -4,6 +4,7 @@ module Pagurus.Heap.Var
 import Pagurus.IR
 import Pagurus.Status
 import Pagurus.Step
+import Pagurus.Lattice
 import Pagurus.Checker
 import Pagurus.Store
 import Pagurus.Soundness
@@ -141,7 +142,15 @@ takeVarLiveH ctx nid n nm eq oa look live = go (lookupPlace n sc) Refl
           let scEq = cong fst (rightInj (trans (sym (takeVarJustR ctx pL pM)) eq))
               flEq = cong snd (rightInj (trans (sym (takeVarJustR ctx pL pM)) eq))
               safe = stepMoveSafe (x :: xs) nid st' pS
-              uns = stepMoveResultUnsafe (x :: xs) nid st' statusConsNotNil pS
+              uns = case stepMoveHasUnsafe (x :: xs) nid st' pS of
+                      Left u => u
+                      Right safeN =>
+                        void (case oa.safeNonOwnerMiss n (x :: xs) pL safe
+                                    (notTrueIsFalse (\p => falseNotTrue (trans (sym safeN)
+                                       (moveOwnedUnsafe (x :: xs) nid st' pS p))))
+                                    (moveNoBorrow (x :: xs) nid st' pS) of
+                                Left miss => nothingNotJustH (trans (sym miss) look)
+                                Right none => hvNoneNotPtr (justInjH (trans (sym none) look)))
               scEq1 = rightInj (trans (sym (movePlaceJust pL pS)) pM)
               oa1 = oaMovePlace oa pM
               ih = replace {p = \s => InHand env h s a} scEq1

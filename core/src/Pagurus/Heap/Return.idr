@@ -20,9 +20,9 @@ retNoneH :
   {sc, sc' : Scopes} -> {env : HEnv} -> {h : Heap} ->
   checkStmt (S fuel) ctx sc (SReturn id Nothing) = Right sc' ->
   OverApprox env h sc ->
-  HSafeOut (HOk env h) sc'
+  HSafeOut (HReturned env h) sc'
 retNoneH fuel ctx id eq oa =
-  HOutOk (oaRewrite (rightInj (trans (sym (checkStmtRetNone fuel ctx sc id)) eq)) oa)
+  HOutRet
 
 export
 retVarH :

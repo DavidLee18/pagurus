@@ -20,6 +20,7 @@ stepAtomUseSafe : (a : Atom) -> (nid : Nat) -> (a' : Atom) ->
                   atomUnsafeUse a = False
 stepAtomUseSafe AOwned _ _ Refl = Refl
 stepAtomUseSafe (ABorrowed _) _ _ Refl = Refl
+stepAtomUseSafe ANull _ _ Refl = Refl
 stepAtomUseSafe AEmpty _ _ Refl impossible
 stepAtomUseSafe (AMoved _) _ _ Refl impossible
 stepAtomUseSafe (AFreed _) _ _ Refl impossible
@@ -39,14 +40,25 @@ stepUseSafe (x :: xs) nid st' eq with (stepAtom x Use nid) proof px
       in rewrite ax in ih
 
 export
+stepAtomDropOk :
+  (a : Atom) -> (nid : Nat) -> (a' : Atom) ->
+  stepAtom a Drop nid = Right a' ->
+  Either (a = AOwned, a' = AFreed nid) (a = ANull, a' = ANull)
+stepAtomDropOk AOwned nid _ Refl = Left (Refl, Refl)
+stepAtomDropOk ANull _ _ Refl = Right (Refl, Refl)
+stepAtomDropOk (ABorrowed _) _ _ Refl impossible
+stepAtomDropOk AEmpty _ _ Refl impossible
+stepAtomDropOk (AMoved _) _ _ Refl impossible
+stepAtomDropOk (AFreed _) _ _ Refl impossible
+
+export
 stepAtomDropOwned : (a : Atom) -> (nid : Nat) -> (a' : Atom) ->
                     stepAtom a Drop nid = Right a' ->
-                    a = AOwned
-stepAtomDropOwned AOwned _ _ Refl = Refl
-stepAtomDropOwned (ABorrowed _) _ _ Refl impossible
-stepAtomDropOwned AEmpty _ _ Refl impossible
-stepAtomDropOwned (AMoved _) _ _ Refl impossible
-stepAtomDropOwned (AFreed _) _ _ Refl impossible
+                    Either (a = AOwned) (a = ANull)
+stepAtomDropOwned a nid a' eq =
+  case stepAtomDropOk a nid a' eq of
+    Left (p, _) => Left p
+    Right (p, _) => Right p
 
 export
 stepDropSafe : (st : Status) -> (nid : Nat) -> (st' : Status) ->
@@ -60,7 +72,9 @@ stepDropSafe (x :: xs) nid st' eq with (stepAtom x Drop nid) proof px
     stepDropSafe (x :: xs) nid st' eq | Right x' | Right rest =
       let ox = stepAtomDropOwned x nid x' px
           ih = stepDropSafe xs nid rest pxs
-      in rewrite ox in ih
+      in case ox of
+           Left p => rewrite p in ih
+           Right p => rewrite p in ih
 
 ||| A use-safe abstract status is unbound, declared-empty, or a live pointer.
 export
@@ -187,6 +201,7 @@ stepAtomUsePres :
   atomUnsafeUse a' = False
 stepAtomUsePres AOwned _ _ _ Refl = Refl
 stepAtomUsePres (ABorrowed _) _ _ _ Refl = Refl
+stepAtomUsePres ANull _ _ _ Refl = Refl
 stepAtomUsePres AEmpty _ _ prf _ = void (falseNotTrue (sym prf))
 stepAtomUsePres (AMoved _) _ _ prf _ = void (falseNotTrue (sym prf))
 stepAtomUsePres (AFreed _) _ _ prf _ = void (falseNotTrue (sym prf))
@@ -237,14 +252,34 @@ useResultNotNil {x} {xs} {nid} {st'} eq with (stepAtom x Use nid) proof px
       in replace {p = \s => Not (s = [])} stEq (insertSortedNotNil x' rest)
 
 export
+dropResultNotNil : {x : Atom} -> {xs : Status} -> {nid : Nat} -> {st' : Status} ->
+                   stepStatus (x :: xs) Drop nid = Right st' ->
+                   Not (st' = [])
+dropResultNotNil {x} {xs} {nid} {st'} eq with (stepAtom x Drop nid) proof px
+  dropResultNotNil eq | Left d = void (leftNotRight eq)
+  dropResultNotNil eq | Right x' with (stepStatus xs Drop nid) proof pxs
+    dropResultNotNil eq | Right x' | Left d = void (leftNotRight eq)
+    dropResultNotNil eq | Right x' | Right rest =
+      let stEq = rightInj eq
+      in replace {p = \s => Not (s = [])} stEq (insertSortedNotNil x' rest)
+
+export
+stepAtomMoveOk :
+  (a : Atom) -> (nid : Nat) -> (a' : Atom) ->
+  stepAtom a Move nid = Right a' ->
+  Either (a = AOwned, a' = AMoved nid) (a = ANull, a' = ANull)
+stepAtomMoveOk AOwned nid _ Refl = Left (Refl, Refl)
+stepAtomMoveOk ANull _ _ Refl = Right (Refl, Refl)
+stepAtomMoveOk (ABorrowed _) _ _ Refl impossible
+stepAtomMoveOk AEmpty _ _ Refl impossible
+stepAtomMoveOk (AMoved _) _ _ Refl impossible
+stepAtomMoveOk (AFreed _) _ _ Refl impossible
+
+export
 stepAtomMoveOwned : (a : Atom) -> (nid : Nat) -> (a' : Atom) ->
                     stepAtom a Move nid = Right a' ->
-                    (a = AOwned, a' = AMoved nid)
-stepAtomMoveOwned AOwned nid _ Refl = (Refl, Refl)
-stepAtomMoveOwned (ABorrowed _) _ _ Refl impossible
-stepAtomMoveOwned AEmpty _ _ Refl impossible
-stepAtomMoveOwned (AMoved _) _ _ Refl impossible
-stepAtomMoveOwned (AFreed _) _ _ Refl impossible
+                    Either (a = AOwned, a' = AMoved nid) (a = ANull, a' = ANull)
+stepAtomMoveOwned = stepAtomMoveOk
 
 export
 stepMoveSafe : (st : Status) -> (nid : Nat) -> (st' : Status) ->
@@ -256,9 +291,11 @@ stepMoveSafe (x :: xs) nid st' eq with (stepAtom x Move nid) proof px
   stepMoveSafe (x :: xs) nid st' eq | Right x' with (stepStatus xs Move nid) proof pxs
     stepMoveSafe (x :: xs) nid st' eq | Right x' | Left d = void (leftNotRight eq)
     stepMoveSafe (x :: xs) nid st' eq | Right x' | Right rest =
-      let (ox, _) = stepAtomMoveOwned x nid x' px
+      let ox = stepAtomMoveOwned x nid x' px
           ih = stepMoveSafe xs nid rest pxs
-      in rewrite ox in ih
+      in case ox of
+           Left (p, _) => rewrite p in ih
+           Right (p, _) => rewrite p in ih
 
 export
 dropOwnedResult : {x, x' : Atom} -> {nid : Nat} ->
@@ -266,43 +303,320 @@ dropOwnedResult : {x, x' : Atom} -> {nid : Nat} ->
 dropOwnedResult Refl Refl = Refl
 
 export
-stepDropResultUnsafe : (st : Status) -> (nid : Nat) -> (st' : Status) ->
-                       Not (st = []) ->
-                       stepStatus st Drop nid = Right st' ->
-                       unsafeUse st' = True
-stepDropResultUnsafe [] _ _ ne _ = void (ne Refl)
-stepDropResultUnsafe (x :: xs) nid st' _ eq with (stepAtom x Drop nid) proof px
-  stepDropResultUnsafe (x :: xs) nid st' _ eq | Left d = void (leftNotRight eq)
-  stepDropResultUnsafe (x :: xs) nid st' _ eq | Right x' with (stepStatus xs Drop nid) proof pxs
-    stepDropResultUnsafe (x :: xs) nid st' _ eq | Right x' | Left d = void (leftNotRight eq)
-    stepDropResultUnsafe (x :: xs) nid st' _ eq | Right x' | Right rest =
-      let ox = stepAtomDropOwned x nid x' px
-          xF = dropOwnedResult ox px
-          stEq = rightInj eq
-      in replace {p = \s => unsafeUse s = True} stEq
-           (replace {p = \t => unsafeUse (insertSorted t rest) = True} (sym xF)
-              (unsafeUseInsert (AFreed nid) rest Refl))
+boolEither : (b : Bool) -> Either (b = True) (b = False)
+boolEither True = Left Refl
+boolEither False = Right Refl
 
 export
-stepMoveResultUnsafe : (st : Status) -> (nid : Nat) -> (st' : Status) ->
-                       Not (st = []) ->
-                       stepStatus st Move nid = Right st' ->
-                       unsafeUse st' = True
-stepMoveResultUnsafe [] _ _ ne _ = void (ne Refl)
-stepMoveResultUnsafe (x :: xs) nid st' _ eq with (stepAtom x Move nid) proof px
-  stepMoveResultUnsafe (x :: xs) nid st' _ eq | Left d = void (leftNotRight eq)
-  stepMoveResultUnsafe (x :: xs) nid st' _ eq | Right x' with (stepStatus xs Move nid) proof pxs
-    stepMoveResultUnsafe (x :: xs) nid st' _ eq | Right x' | Left d = void (leftNotRight eq)
-    stepMoveResultUnsafe (x :: xs) nid st' _ eq | Right x' | Right rest =
-      let (ox, ox') = stepAtomMoveOwned x nid x' px
-          stEq = rightInj eq
-      in replace {p = \s => unsafeUse s = True} stEq
-           (replace {p = \t => unsafeUse (insertSorted t rest) = True} (sym ox')
-              (unsafeUseInsert (AMoved nid) rest Refl))
+stepDropHasUnsafe :
+  (st : Status) -> (nid : Nat) -> (st' : Status) ->
+  stepStatus st Drop nid = Right st' ->
+  Either (unsafeUse st' = True) (unsafeUse st' = False)
+stepDropHasUnsafe st nid st' eq = boolEither (unsafeUse st')
+
+export
+stepMoveHasUnsafe :
+  (st : Status) -> (nid : Nat) -> (st' : Status) ->
+  stepStatus st Move nid = Right st' ->
+  Either (unsafeUse st' = True) (unsafeUse st' = False)
+stepMoveHasUnsafe st nid st' eq = boolEither (unsafeUse st')
 
 export
 statusConsNotNil : {x : Atom} -> {xs : Status} -> Not (x :: xs = [])
 statusConsNotNil Refl impossible
+
+export
+insertOwnedHasCons : (x : Atom) -> (ys : Status) ->
+                     hasOwned ys = True -> hasOwned (x :: ys) = True
+insertOwnedHasCons AOwned _ _ = Refl
+insertOwnedHasCons AEmpty ys ih = ih
+insertOwnedHasCons (ABorrowed _) ys ih = ih
+insertOwnedHasCons (AMoved _) ys ih = ih
+insertOwnedHasCons (AFreed _) ys ih = ih
+insertOwnedHasCons ANull ys ih = ih
+
+||| `AOwned` sorts before every atom except `AEmpty`; equality keeps `AOwned`.
+export
+insertOwnedHas : (rest : Status) -> hasOwned (insertSorted AOwned rest) = True
+insertOwnedHas [] = Refl
+insertOwnedHas (AEmpty :: xs) =
+  insertOwnedHasCons AEmpty (insertSorted AOwned xs) (insertOwnedHas xs)
+insertOwnedHas (AOwned :: xs) = Refl
+insertOwnedHas (ABorrowed n :: xs) = Refl
+insertOwnedHas (AMoved n :: xs) = Refl
+insertOwnedHas (AFreed n :: xs) = Refl
+insertOwnedHas (ANull :: xs) = Refl
+
+export
+insertBorrowedOwned : (n : Nat) -> (rest : Status) ->
+                      hasOwned rest = True ->
+                      hasOwned (insertSorted (ABorrowed n) rest) = True
+insertBorrowedOwned n [] prf = void (falseNotTrue prf)
+insertBorrowedOwned n (AEmpty :: xs) prf = insertBorrowedOwned n xs prf
+insertBorrowedOwned n (AOwned :: xs) prf = Refl
+insertBorrowedOwned n (ABorrowed m :: xs) prf with (compare n m)
+  insertBorrowedOwned n (ABorrowed m :: xs) prf | LT =
+    insertOwnedHasCons (ABorrowed n) (ABorrowed m :: xs) prf
+  insertBorrowedOwned n (ABorrowed m :: xs) prf | EQ = prf
+  insertBorrowedOwned n (ABorrowed m :: xs) prf | GT = insertBorrowedOwned n xs prf
+insertBorrowedOwned n (AMoved m :: xs) prf =
+  insertOwnedHasCons (ABorrowed n) (AMoved m :: xs) prf
+insertBorrowedOwned n (AFreed m :: xs) prf =
+  insertOwnedHasCons (ABorrowed n) (AFreed m :: xs) prf
+insertBorrowedOwned n (ANull :: xs) prf =
+  insertOwnedHasCons (ABorrowed n) (ANull :: xs) prf
+
+export
+insertNullOwned : (rest : Status) ->
+                  hasOwned rest = True ->
+                  hasOwned (insertSorted ANull rest) = True
+insertNullOwned [] prf = void (falseNotTrue prf)
+insertNullOwned (AEmpty :: xs) prf = insertNullOwned xs prf
+insertNullOwned (AOwned :: xs) prf = Refl
+insertNullOwned (ABorrowed n :: xs) prf = insertNullOwned xs prf
+insertNullOwned (AMoved n :: xs) prf = insertNullOwned xs prf
+insertNullOwned (AFreed n :: xs) prf = insertNullOwned xs prf
+insertNullOwned (ANull :: xs) prf = prf
+
+export
+stepUseOwnedFwd : (st : Status) -> (nid : Nat) -> (st' : Status) ->
+                  stepStatus st Use nid = Right st' ->
+                  hasOwned st = True -> hasOwned st' = True
+stepUseOwnedFwd [] _ _ Refl prf = void (falseNotTrue prf)
+stepUseOwnedFwd (x :: xs) nid st' eq ownX with (stepAtom x Use nid) proof px
+  stepUseOwnedFwd (x :: xs) nid st' eq ownX | Left d = void (leftNotRight eq)
+  stepUseOwnedFwd (x :: xs) nid st' eq ownX | Right x' with (stepStatus xs Use nid) proof pxs
+    stepUseOwnedFwd (x :: xs) nid st' eq ownX | Right x' | Left d = void (leftNotRight eq)
+    stepUseOwnedFwd (x :: xs) nid st' eq ownX | Right x' | Right rest =
+      let stEq = rightInj eq
+      in replace {p = \s => hasOwned s = True} stEq
+           (ownedGo x x' px ownX (stepUseOwnedFwd xs nid rest pxs))
+      where
+        ownedGo : (x, x' : Atom) ->
+                  stepAtom x Use nid = Right x' ->
+                  hasOwned (x :: xs) = True ->
+                  (hasOwned xs = True -> hasOwned rest = True) ->
+                  hasOwned (insertSorted x' rest) = True
+        ownedGo AOwned AOwned Refl _ _ = insertOwnedHas rest
+        ownedGo (ABorrowed n) (ABorrowed n) Refl ownH ih = insertBorrowedOwned n rest (ih ownH)
+        ownedGo ANull ANull Refl ownH ih = insertNullOwned rest (ih ownH)
+        ownedGo AEmpty _ Refl _ _ impossible
+        ownedGo (AMoved _) _ Refl _ _ impossible
+        ownedGo (AFreed _) _ Refl _ _ impossible
+
+export
+stepUseOwnedBack : (st : Status) -> (nid : Nat) -> (st' : Status) ->
+                   stepStatus st Use nid = Right st' ->
+                   hasOwned st' = False -> hasOwned st = False
+stepUseOwnedBack st nid st' eq nf =
+  notTrueIsFalse (\p => falseNotTrue (trans (sym nf) (stepUseOwnedFwd st nid st' eq p)))
+
+export
+hasBorrowedConsEq : (x : Atom) -> (ys, zs : Status) ->
+                    hasBorrowed ys = hasBorrowed zs ->
+                    hasBorrowed (x :: ys) = hasBorrowed (x :: zs)
+hasBorrowedConsEq AEmpty ys zs ih = ih
+hasBorrowedConsEq AOwned ys zs ih = ih
+hasBorrowedConsEq (ABorrowed n) _ _ _ = Refl
+hasBorrowedConsEq (AMoved _) ys zs ih = ih
+hasBorrowedConsEq (AFreed _) ys zs ih = ih
+hasBorrowedConsEq ANull ys zs ih = ih
+
+export
+insertOwnedBorrow : (rest : Status) ->
+                    hasBorrowed (insertSorted AOwned rest) = hasBorrowed rest
+insertOwnedBorrow [] = Refl
+insertOwnedBorrow (AEmpty :: xs) =
+  hasBorrowedConsEq AEmpty (insertSorted AOwned xs) xs (insertOwnedBorrow xs)
+insertOwnedBorrow (AOwned :: xs) = Refl
+insertOwnedBorrow (ABorrowed n :: xs) = Refl
+insertOwnedBorrow (AMoved n :: xs) = Refl
+insertOwnedBorrow (AFreed n :: xs) = Refl
+insertOwnedBorrow (ANull :: xs) = Refl
+
+export
+insertNullBorrow : (rest : Status) ->
+                   hasBorrowed (insertSorted ANull rest) = hasBorrowed rest
+insertNullBorrow [] = Refl
+insertNullBorrow (AEmpty :: xs) = insertNullBorrow xs
+insertNullBorrow (AOwned :: xs) = insertNullBorrow xs
+insertNullBorrow (ABorrowed n :: xs) = Refl
+insertNullBorrow (AMoved n :: xs) = insertNullBorrow xs
+insertNullBorrow (AFreed n :: xs) = insertNullBorrow xs
+insertNullBorrow (ANull :: xs) = Refl
+
+export
+insertBorrowedContra : (n : Nat) -> (rest : Status) ->
+                       Not (hasBorrowed (insertSorted (ABorrowed n) rest) = Nothing)
+insertBorrowedContra n [] prf = nothingNotJustH (sym prf)
+insertBorrowedContra n (AEmpty :: xs) prf = insertBorrowedContra n xs prf
+insertBorrowedContra n (AOwned :: xs) prf = insertBorrowedContra n xs prf
+insertBorrowedContra n (ABorrowed m :: xs) prf with (compare n m)
+  insertBorrowedContra n (ABorrowed m :: xs) prf | LT = nothingNotJustH (sym prf)
+  insertBorrowedContra n (ABorrowed m :: xs) prf | EQ = nothingNotJustH (sym prf)
+  insertBorrowedContra n (ABorrowed m :: xs) prf | GT = nothingNotJustH (sym prf)
+insertBorrowedContra n (AMoved m :: xs) prf = nothingNotJustH (sym prf)
+insertBorrowedContra n (AFreed m :: xs) prf = nothingNotJustH (sym prf)
+insertBorrowedContra n (ANull :: xs) prf = nothingNotJustH (sym prf)
+
+export
+stepUseBorrowBack : (st : Status) -> (nid : Nat) -> (st' : Status) ->
+                    stepStatus st Use nid = Right st' ->
+                    hasBorrowed st' = Nothing -> hasBorrowed st = Nothing
+stepUseBorrowBack [] _ _ Refl nf = nf
+stepUseBorrowBack (x :: xs) nid st' eq nf with (stepAtom x Use nid) proof px
+  stepUseBorrowBack (x :: xs) nid st' eq nf | Left d = void (leftNotRight eq)
+  stepUseBorrowBack (x :: xs) nid st' eq nf | Right x' with (stepStatus xs Use nid) proof pxs
+    stepUseBorrowBack (x :: xs) nid st' eq nf | Right x' | Left d = void (leftNotRight eq)
+    stepUseBorrowBack (x :: xs) nid st' eq nf | Right x' | Right rest =
+      let stEq = rightInj eq
+          nfR = replace {p = \s => hasBorrowed s = Nothing} (sym stEq) nf
+      in borrowGo x x' px nfR (stepUseBorrowBack xs nid rest pxs)
+      where
+        borrowGo : (x, x' : Atom) ->
+                   stepAtom x Use nid = Right x' ->
+                   hasBorrowed (insertSorted x' rest) = Nothing ->
+                   (hasBorrowed rest = Nothing -> hasBorrowed xs = Nothing) ->
+                   hasBorrowed (x :: xs) = Nothing
+        borrowGo AOwned AOwned Refl nfI ih = ih (trans (sym (insertOwnedBorrow rest)) nfI)
+        borrowGo (ABorrowed n) (ABorrowed n) Refl nfI _ = void (insertBorrowedContra n rest nfI)
+        borrowGo ANull ANull Refl nfI ih = ih (trans (sym (insertNullBorrow rest)) nfI)
+        borrowGo AEmpty _ Refl _ _ impossible
+        borrowGo (AMoved _) _ Refl _ _ impossible
+        borrowGo (AFreed _) _ Refl _ _ impossible
+
+export
+unsafeUseInsertRest : (a : Atom) -> (xs : Status) ->
+                      unsafeUse xs = True -> unsafeUse (insertSorted a xs) = True
+unsafeUseInsertRest a [] prf = void (falseNotTrue prf)
+unsafeUseInsertRest a (x :: xs) prf with (compareAtom a x)
+  unsafeUseInsertRest a (x :: xs) prf | LT =
+    rewrite prf in orTrueRight (atomUnsafeUse a)
+  unsafeUseInsertRest a (x :: xs) prf | EQ = prf
+  unsafeUseInsertRest a (x :: xs) prf | GT =
+    case orTrue {a = atomUnsafeUse x} {b = unsafeUse xs} prf of
+      Left ux => rewrite ux in Refl
+      Right uxs => rewrite unsafeUseInsertRest a xs uxs in orTrueRight (atomUnsafeUse x)
+
+export
+unsafeRewriteTrue : {xs, ys : Status} -> xs = ys -> unsafeUse xs = True -> unsafeUse ys = True
+unsafeRewriteTrue Refl p = p
+
+export
+dropOwnedUnsafe : (st : Status) -> (nid : Nat) -> (stN : Status) ->
+                  stepStatus st Drop nid = Right stN ->
+                  hasOwned st = True -> unsafeUse stN = True
+dropOwnedUnsafe [] _ _ Refl prf = void (falseNotTrue prf)
+dropOwnedUnsafe (AOwned :: xs) nid stN eq _ with (stepStatus xs Drop nid) proof pxs
+  dropOwnedUnsafe (AOwned :: xs) nid stN eq _ | Left d = void (leftNotRight eq)
+  dropOwnedUnsafe (AOwned :: xs) nid stN eq _ | Right rest =
+    unsafeRewriteTrue (rightInj eq) (unsafeUseInsert (AFreed nid) rest Refl)
+dropOwnedUnsafe (ANull :: xs) nid stN eq ownX with (stepStatus xs Drop nid) proof pxs
+  dropOwnedUnsafe (ANull :: xs) nid stN eq ownX | Left d = void (leftNotRight eq)
+  dropOwnedUnsafe (ANull :: xs) nid stN eq ownX | Right rest =
+    unsafeRewriteTrue (rightInj eq)
+      (unsafeUseInsertRest ANull rest
+        (dropOwnedUnsafe xs nid rest pxs ownX))
+dropOwnedUnsafe (AEmpty :: xs) _ _ eq _ = void (leftNotRight eq)
+dropOwnedUnsafe (ABorrowed n :: xs) _ _ eq _ = void (leftNotRight eq)
+dropOwnedUnsafe (AMoved n :: xs) _ _ eq _ = void (leftNotRight eq)
+dropOwnedUnsafe (AFreed n :: xs) _ _ eq _ = void (leftNotRight eq)
+
+export
+dropOwnBack : (st : Status) -> (nid : Nat) -> (st' : Status) ->
+              stepStatus st Drop nid = Right st' ->
+              unsafeUse st' = False -> hasOwned st = False
+dropOwnBack st nid st' eq safeN =
+  notTrueIsFalse (\p => falseNotTrue (trans (sym safeN) (dropOwnedUnsafe st nid st' eq p)))
+
+export
+dropBorrowBack : (st : Status) -> (nid : Nat) -> (st' : Status) ->
+                 stepStatus st Drop nid = Right st' ->
+                 hasBorrowed st = Nothing
+dropBorrowBack [] _ _ Refl = Refl
+dropBorrowBack (AOwned :: xs) nid st' eq with (stepStatus xs Drop nid) proof pxs
+  dropBorrowBack (AOwned :: xs) nid st' eq | Left d = void (leftNotRight eq)
+  dropBorrowBack (AOwned :: xs) nid st' eq | Right rest =
+    dropBorrowBack xs nid rest pxs
+dropBorrowBack (ANull :: xs) nid st' eq with (stepStatus xs Drop nid) proof pxs
+  dropBorrowBack (ANull :: xs) nid st' eq | Left d = void (leftNotRight eq)
+  dropBorrowBack (ANull :: xs) nid st' eq | Right rest =
+    dropBorrowBack xs nid rest pxs
+dropBorrowBack (AEmpty :: xs) _ _ eq = void (leftNotRight eq)
+dropBorrowBack (ABorrowed n :: xs) _ _ eq = void (leftNotRight eq)
+dropBorrowBack (AMoved n :: xs) _ _ eq = void (leftNotRight eq)
+dropBorrowBack (AFreed n :: xs) _ _ eq = void (leftNotRight eq)
+
+export
+moveOwnedUnsafe : (st : Status) -> (nid : Nat) -> (stN : Status) ->
+                  stepStatus st Move nid = Right stN ->
+                  hasOwned st = True -> unsafeUse stN = True
+moveOwnedUnsafe [] _ _ Refl prf = void (falseNotTrue prf)
+moveOwnedUnsafe (AOwned :: xs) nid stN eq _ with (stepStatus xs Move nid) proof pxs
+  moveOwnedUnsafe (AOwned :: xs) nid stN eq _ | Left d = void (leftNotRight eq)
+  moveOwnedUnsafe (AOwned :: xs) nid stN eq _ | Right rest =
+    unsafeRewriteTrue (rightInj eq) (unsafeUseInsert (AMoved nid) rest Refl)
+moveOwnedUnsafe (ANull :: xs) nid stN eq ownX with (stepStatus xs Move nid) proof pxs
+  moveOwnedUnsafe (ANull :: xs) nid stN eq ownX | Left d = void (leftNotRight eq)
+  moveOwnedUnsafe (ANull :: xs) nid stN eq ownX | Right rest =
+    unsafeRewriteTrue (rightInj eq)
+      (unsafeUseInsertRest ANull rest
+        (moveOwnedUnsafe xs nid rest pxs ownX))
+moveOwnedUnsafe (AEmpty :: xs) _ _ eq _ = void (leftNotRight eq)
+moveOwnedUnsafe (ABorrowed n :: xs) _ _ eq _ = void (leftNotRight eq)
+moveOwnedUnsafe (AMoved n :: xs) _ _ eq _ = void (leftNotRight eq)
+moveOwnedUnsafe (AFreed n :: xs) _ _ eq _ = void (leftNotRight eq)
+
+export
+moveOwnBack : (st : Status) -> (nid : Nat) -> (st' : Status) ->
+              stepStatus st Move nid = Right st' ->
+              unsafeUse st' = False -> hasOwned st' = False -> hasOwned st = False
+moveOwnBack st nid st' eq safeN _ =
+  notTrueIsFalse (\p => falseNotTrue (trans (sym safeN) (moveOwnedUnsafe st nid st' eq p)))
+
+export
+moveNoBorrow : (st : Status) -> (nid : Nat) -> (stN : Status) ->
+               stepStatus st Move nid = Right stN ->
+               hasBorrowed st = Nothing
+moveNoBorrow [] _ _ Refl = Refl
+moveNoBorrow (AOwned :: xs) nid stN eq with (stepStatus xs Move nid) proof pxs
+  moveNoBorrow (AOwned :: xs) nid stN eq | Left d = void (leftNotRight eq)
+  moveNoBorrow (AOwned :: xs) nid stN eq | Right rest =
+    moveNoBorrow xs nid rest pxs
+moveNoBorrow (ANull :: xs) nid stN eq with (stepStatus xs Move nid) proof pxs
+  moveNoBorrow (ANull :: xs) nid stN eq | Left d = void (leftNotRight eq)
+  moveNoBorrow (ANull :: xs) nid stN eq | Right rest =
+    moveNoBorrow xs nid rest pxs
+moveNoBorrow (AEmpty :: xs) _ _ eq = void (leftNotRight eq)
+moveNoBorrow (ABorrowed n :: xs) _ _ eq = void (leftNotRight eq)
+moveNoBorrow (AMoved n :: xs) _ _ eq = void (leftNotRight eq)
+moveNoBorrow (AFreed n :: xs) _ _ eq = void (leftNotRight eq)
+
+export
+moveBorrowBack : (st : Status) -> (nid : Nat) -> (st' : Status) ->
+                 stepStatus st Move nid = Right st' ->
+                 hasBorrowed st' = Nothing -> hasBorrowed st = Nothing
+moveBorrowBack st nid st' eq _ = moveNoBorrow st nid st' eq
+
+export
+moveResultNotNil : {x : Atom} -> {xs : Status} -> {nid : Nat} -> {st' : Status} ->
+                   stepStatus (x :: xs) Move nid = Right st' ->
+                   Not (st' = [])
+moveResultNotNil {x} {xs} {nid} {st'} eq with (stepAtom x Move nid) proof px
+  moveResultNotNil eq | Left d = void (leftNotRight eq)
+  moveResultNotNil eq | Right x' with (stepStatus xs Move nid) proof pxs
+    moveResultNotNil eq | Right x' | Left d = void (leftNotRight eq)
+    moveResultNotNil eq | Right x' | Right rest =
+      let stEq = rightInj eq
+      in replace {p = \s => Not (s = [])} stEq (insertSortedNotNil x' rest)
+
+export
+stepMoveOwnedSingleton :
+  (nid : Nat) -> (st' : Status) ->
+  stepStatus (Pagurus.Status.singleton AOwned) Move nid = Right st' ->
+  unsafeUse st' = True
+stepMoveOwnedSingleton nid st' eq =
+  unsafeRewriteTrue (rightInj eq) Refl
 
 export
 dropPlaceJust :
@@ -396,14 +710,21 @@ dropHeapStep oa eq pLook (Left d) pStep =
   void (leftNotRight (trans (sym (dropPlaceJustL pLook pStep)) eq))
 dropHeapStep oa eq pLook (Right st') pStep =
   let safe = stepDropSafe (x :: xs) nid st' pStep
-      uns = stepDropResultUnsafe (x :: xs) nid st' statusConsNotNil pStep
   in case safeLiveOrMiss oa pLook safe of
        Left (Left miss) => Left (Left miss)
        Left (Right none) => Left (Right none)
        Right (a ** (look, live)) =>
-         Right (a ** (look, live,
-           (x :: xs ** (pLook, safe,
-              (st' ** (sym (rightInj (trans (sym (dropPlaceJust pLook pStep)) eq)), uns))))))
+         case stepDropHasUnsafe (x :: xs) nid st' pStep of
+           Left uns =>
+             Right (a ** (look, live,
+               (x :: xs ** (pLook, safe,
+                  (st' ** (sym (rightInj (trans (sym (dropPlaceJust pLook pStep)) eq)), uns))))))
+           Right safeN =>
+             void (case oa.safeNonOwnerMiss n (x :: xs) pLook safe
+                         (dropOwnBack (x :: xs) nid st' pStep safeN)
+                         (dropBorrowBack (x :: xs) nid st' pStep) of
+                     Left miss => nothingNotJustH (trans (sym miss) look)
+                     Right none => hvNoneNotPtr (justInjH (trans (sym none) look)))
 
 dropHeapGo :
   {env : HEnv} -> {h : Heap} -> {sc, sc' : Scopes} ->
@@ -470,7 +791,9 @@ oaUsePlace oa eq = useGo (lookupPlace n sc) Refl
         in oaRewrite scEq
              (oaResafe oa pL safe
                 (stepUseResultSafe (x :: xs) nid st' pS safe)
-                (useResultNotNil pS))
+                (useResultNotNil pS)
+                (stepUseOwnedBack (x :: xs) nid st' pS)
+                (stepUseBorrowBack (x :: xs) nid st' pS))
 
 export
 movePlaceNothing :
@@ -506,7 +829,14 @@ oaMovePlace oa eq = moveGo (lookupPlace n sc) Refl
       moveGo (Just (x :: xs)) pL | Left d =
         void (leftNotRight (trans (sym (movePlaceJustL pL pS)) eq))
       moveGo (Just (x :: xs)) pL | Right st' =
-        let uns = stepMoveResultUnsafe (x :: xs) nid st' statusConsNotNil pS
-            scEq = rightInj (trans (sym (movePlaceJust pL pS)) eq)
-        in oaRewrite scEq (oaSetUnsafe oa uns)
+        let scEq = rightInj (trans (sym (movePlaceJust pL pS)) eq)
+            safe0 = stepMoveSafe (x :: xs) nid st' pS
+        in case stepMoveHasUnsafe (x :: xs) nid st' pS of
+             Left uns => oaRewrite scEq (oaSetUnsafe oa uns)
+             Right safeN =>
+               oaRewrite scEq
+                 (oaResafe oa pL safe0 safeN
+                    (moveResultNotNil pS)
+                    (moveOwnBack (x :: xs) nid st' pS safeN)
+                    (moveBorrowBack (x :: xs) nid st' pS))
 

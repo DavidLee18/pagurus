@@ -2,10 +2,11 @@
 |||
 ||| Control flow matches the IR (`if` may take either branch; `SLoop` may
 ||| unroll any finite number of times, including zero). Assignment **copies**
-||| addresses: `q = p` makes both variables hold the same address. Calls
-||| evaluate arguments as uses and do not run callee bodies (see issue #5).
-||| This module does not import `Pagurus.Checker`, `Pagurus.Step`, or
-||| `Pagurus.Conc`.
+||| addresses: `q = p` makes both variables hold the same address. `SReturn`
+||| yields `HReturned` and does not run the remaining statements. Calls
+||| evaluate arguments and do not run callee bodies (see issue #5), except
+||| prototype `realloc` which then `alloc`s. This module does not import
+||| `Pagurus.Checker`, `Pagurus.Step`, or `Pagurus.Conc`.
 module Pagurus.Heap.Eval
 
 import Pagurus.IR
@@ -18,6 +19,7 @@ mutual
   public export
   data HEvalExpr : HEnv -> Heap -> Expr -> HResult -> Type where
     HELit : HEvalExpr env h (ELit _) (HROk HVCopy env h)
+    HENull : HEvalExpr env h (ENull _) (HROk HVNone env h)
     HEVarLive :
       (a : Addr) ->
       lookupH n env = Just (HVPtr a) ->
@@ -71,6 +73,17 @@ mutual
       (env1 : HEnv) -> (h1 : Heap) ->
       HEvalExprs env h args (HROk HVNone env1 h1) ->
       HEvalExpr env h (ECall nid callee args) (HROk HVNone env1 h1)
+    ||| Prototype `realloc`: consume (evaluate) the args, then a fresh cell.
+    HEReallocCrash :
+      isReallocName callee = True ->
+      HEvalReallocArgs env h args (HRCrash c) ->
+      HEvalExpr env h (ECall nid callee args) (HRCrash c)
+    HERealloc :
+      isReallocName callee = True ->
+      (env1 : HEnv) -> (h1 : Heap) ->
+      HEvalReallocArgs env h args (HROk HVNone env1 h1) ->
+      HEvalExpr env h (ECall nid callee args)
+        (HROk (HVPtr (fst (alloc h1))) env1 (snd (alloc h1)))
     HEUseCrash :
       HEvalExprs env h args (HRCrash c) ->
       HEvalExpr env h (EUse uid args) (HRCrash c)
@@ -92,6 +105,19 @@ mutual
       HEvalExpr env h e (HROk v env1 h1) ->
       HEvalExprs env1 h1 es o ->
       HEvalExprs env h (e :: es) o
+
+  ||| `realloc` consumes the first argument and borrows the rest.
+  public export
+  data HEvalReallocArgs : HEnv -> Heap -> List Expr -> HResult -> Type where
+    HRNil : HEvalReallocArgs env h [] (HROk HVNone env h)
+    HRHeadCrash :
+      HEvalExpr env h e (HRCrash c) ->
+      HEvalReallocArgs env h (e :: es) (HRCrash c)
+    HRHeadOk :
+      (v : HVal) -> (env1 : HEnv) -> (h1 : Heap) ->
+      HEvalExpr env h e (HROk v env1 h1) ->
+      HEvalExprs env1 h1 es o ->
+      HEvalReallocArgs env h (e :: es) o
 
 mutual
   public export
@@ -159,14 +185,14 @@ mutual
       HEvalExprs env h args (HROk HVNone env1 h1) ->
       HEvalStmt env h (SCall nid callee args) (HOk env1 h1)
     HSRetNone :
-      HEvalStmt env h (SReturn nid Nothing) (HOk env h)
+      HEvalStmt env h (SReturn nid Nothing) (HReturned env h)
     HSRetCrash :
       HEvalExpr env h e (HRCrash c) ->
       HEvalStmt env h (SReturn nid (Just e)) (HCrashOut c)
     HSRet :
       (v : HVal) -> (env1 : HEnv) -> (h1 : Heap) ->
       HEvalExpr env h e (HROk v env1 h1) ->
-      HEvalStmt env h (SReturn nid (Just e)) (HOk env1 h1)
+      HEvalStmt env h (SReturn nid (Just e)) (HReturned env1 h1)
     HSExprCrash :
       HEvalExpr env h e (HRCrash c) ->
       HEvalStmt env h (SExpr nid e) (HCrashOut c)
@@ -197,6 +223,10 @@ mutual
     HSLoopCrash :
       HEvalStmts env h bod (HCrashOut c) ->
       HEvalStmt env h (SLoop nid bod) (HCrashOut c)
+    HSLoopRet :
+      (env1 : HEnv) -> (h1 : Heap) ->
+      HEvalStmts env h bod (HReturned env1 h1) ->
+      HEvalStmt env h (SLoop nid bod) (HReturned env1 h1)
     HSLoopS :
       (env1 : HEnv) -> (h1 : Heap) ->
       HEvalStmts env h bod (HOk env1 h1) ->
@@ -209,6 +239,10 @@ mutual
     HSConsCrash :
       HEvalStmt env h s (HCrashOut c) ->
       HEvalStmts env h (s :: ss) (HCrashOut c)
+    HSConsRet :
+      (env1 : HEnv) -> (h1 : Heap) ->
+      HEvalStmt env h s (HReturned env1 h1) ->
+      HEvalStmts env h (s :: ss) (HReturned env1 h1)
     HSConsOk :
       (env1 : HEnv) -> (h1 : Heap) ->
       HEvalStmt env h s (HOk env1 h1) ->

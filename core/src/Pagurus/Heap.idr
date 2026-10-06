@@ -54,6 +54,13 @@ public export
 InitHeap : Heap
 InitHeap = MkHeap [] 1
 
+||| Same decision as the checker (`isRealloc`), defined here so the heap
+||| model does not import `Pagurus.Checker`. Prototype `realloc` is the
+||| callee name `"realloc"`.
+public export
+isReallocName : String -> Bool
+isReallocName n = n == "realloc"
+
 --------------------------------------------------------------------------------
 -- Crashes (the spec a reviewer audits)
 --------------------------------------------------------------------------------
@@ -69,6 +76,8 @@ data HCrash : Type where
 public export
 data HOutcome : Type where
   HOk : HEnv -> Heap -> HOutcome
+  ||| `return` ends the path; remaining statements are not executed.
+  HReturned : HEnv -> Heap -> HOutcome
   HCrashOut : HCrash -> HOutcome
 
 public export
@@ -458,6 +467,10 @@ isDeadTrackedWild h a prf with (cell h a)
 export
 okNotHit : Not (IsHCrash (HOk e h))
 okNotHit HitHeap impossible
+
+export
+retNotHit : Not (IsHCrash (HReturned e h))
+retNotHit HitHeap impossible
 
 export
 hrOkNotHit : Not (IsHRCrash (HROk v e h))

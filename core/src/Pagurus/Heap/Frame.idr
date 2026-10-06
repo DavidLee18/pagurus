@@ -966,17 +966,24 @@ oaTailUK {k} {x} {xs} {h} {sc} miss oa = MkOA oa.wf track dead uniq
 
     track : (p : Place) -> (v : HVal) -> lookupH p xs = Just v ->
             (st : Status ** lookupPlace p sc = Just st)
-    track p v look =
-      oa.tracked p v (trans (sym (lookupHConsMiss p k x xs (neFromMiss look))) look)
+    track p v look with (p == k) proof pq
+      track p v look | True =
+        void (nothingNotJustH (trans (sym (replace {p = \q => lookupH q xs = Nothing}
+          (sym (eqNatTrue p k pq)) miss)) look))
+      track p v look | False =
+        oa.tracked p v (rewrite pq in look)
 
     dead : (p : Place) -> (st : Status) -> (v : HVal) ->
            lookupPlace p sc = Just st ->
            lookupH p xs = Just v ->
            isDeadTracked h v = True ->
            unsafeUse st = True
-    dead p st v lp look nl =
-      oa.deadUnsafe p st v lp
-        (trans (sym (lookupHConsMiss p k x xs (neFromMiss look))) look) nl
+    dead p st v lp look nl with (p == k) proof pq
+      dead p st v lp look nl | True =
+        void (nothingNotJustH (trans (sym (replace {p = \q => lookupH q xs = Nothing}
+          (sym (eqNatTrue p k pq)) miss)) look))
+      dead p st v lp look nl | False =
+        oa.deadUnsafe p st v lp (rewrite pq in look) nl
 
     uniq : (p, q : Place) -> (a : Addr) ->
            p == q = False ->
@@ -989,11 +996,17 @@ oaTailUK {k} {x} {xs} {h} {sc} miss oa = MkOA oa.wf track dead uniq
            hasOwned stP = True ->
            hasBorrowed stP = Nothing ->
            unsafeUse stQ = True
-    uniq p q a ne lp lq live stP lookP stQ lookQ safeP ownP nbP =
-      oa.uniqueLive p q a ne
-        (trans (sym (lookupHConsMiss p k x xs (neFromMiss lp))) lp)
-        (trans (sym (lookupHConsMiss q k x xs (neFromMiss lq))) lq)
-        live stP lookP stQ lookQ safeP ownP nbP
+    uniq p q a ne lp lq live stP lookP stQ lookQ safeP ownP nbP with (p == k) proof ppk
+      uniq p q a ne lp lq live stP lookP stQ lookQ safeP ownP nbP | True =
+        void (nothingNotJustH (trans (sym (replace {p = \r => lookupH r xs = Nothing}
+          (sym (eqNatTrue p k ppk)) miss)) lp))
+      uniq p q a ne lp lq live stP lookP stQ lookQ safeP ownP nbP | False with (q == k) proof pqk
+        uniq p q a ne lp lq live stP lookP stQ lookQ safeP ownP nbP | False | True =
+          void (nothingNotJustH (trans (sym (replace {p = \r => lookupH r xs = Nothing}
+            (sym (eqNatTrue q k pqk)) miss)) lq))
+        uniq p q a ne lp lq live stP lookP stQ lookQ safeP ownP nbP | False | False =
+          oa.uniqueLive p q a ne (rewrite ppk in lp) (rewrite pqk in lq)
+            live stP lookP stQ lookQ safeP ownP nbP
 
     em : (p : Place) -> lookupPlace p sc = Just [] -> lookupH p xs = Nothing
     em p lp with (p == k) proof pq
@@ -1074,6 +1087,16 @@ ownerHereWitness {a} (UKCons {k} {x = HVPtr b} {xs} miss uk) oa prf =
       replace {p = \x => lookupH k ((k, HVPtr b) :: xs) = Just (HVPtr x)}
         (sym (eqNatTrue a b pab)) (lookupHConsHit k (HVPtr b) xs)
 
+    ifFalse : a == b = False ->
+              noOwnerHere ((k, HVPtr b) :: xs) sc a = noOwnerHere xs sc a
+    ifFalse pab = rewrite pab in Refl
+
+    ifTrueCase : a == b = True ->
+                 lookupPlace k sc = Just st ->
+                 noOwnerHere ((k, HVPtr b) :: xs) sc a =
+                   notUniqueSt st && Delay (noOwnerHere xs sc a)
+    ifTrueCase pab lk = rewrite pab in rewrite lk in Refl
+
     ptrGo :
       (eqb : Bool) ->
       a == b = eqb ->
@@ -1102,16 +1125,6 @@ ownerHereWitness {a} (UKCons {k} {x = HVPtr b} {xs} miss uk) oa prf =
                              (trans (cong (\u => u && Delay (noOwnerHere xs sc a)) pnu)
                                     (trueAnd (noOwnerHere xs sc a)))))
                      prfF))
-
-    ifFalse : a == b = False ->
-              noOwnerHere ((k, HVPtr b) :: xs) sc a = noOwnerHere xs sc a
-    ifFalse pab = rewrite pab in Refl
-
-    ifTrueCase : a == b = True ->
-                 lookupPlace k sc = Just st ->
-                 noOwnerHere ((k, HVPtr b) :: xs) sc a =
-                   notUniqueSt st && Delay (noOwnerHere xs sc a)
-    ifTrueCase pab lk = rewrite pab in rewrite lk in Refl
 
 --------------------------------------------------------------------------------
 -- Construct `BindOk` (Nothing = mixed/dead; discharged at the call site)
@@ -1442,11 +1455,16 @@ nuoBind :
   (a : Addr) ->
   Either (NoUniqueOwner (bindFrame ps vs) (bindParams fid ps ms) a)
          (noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = False)
-nuoBind {fid} {ps} {ms} {vs} _ a with
-    (noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a) proof pno
-  nuoBind {fid} {ps} {ms} {vs} _ a | True =
-    Left (noOwnerSound (bindFrame ps vs) (bindParams fid ps ms) a pno)
-  nuoBind _ a | False = Right pno
+nuoBind {fid} {ps} {ms} {vs} _ a =
+  nuoGo (noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a) Refl
+  where
+    nuoGo :
+      (b : Bool) ->
+      noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = b ->
+      Either (NoUniqueOwner (bindFrame ps vs) (bindParams fid ps ms) a)
+             (noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = False)
+    nuoGo True pno = Left (noOwnerSound (bindFrame ps vs) (bindParams fid ps ms) a pno)
+    nuoGo False pno = Right pno
 
 ||| Rebind `n` to `v` at `st'`: if the new binding is a use-safe unique owner
 ||| of `a`, `contra` must void that (e.g. `NoUniqueOwner` of the old env).

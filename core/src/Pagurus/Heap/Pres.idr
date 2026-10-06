@@ -498,24 +498,24 @@ emptyFramePresRet {funs} wf ev p st a lp look safe live =
 ||| the unheld side, and for the held-borrow side when `heldPtr` is false.
 export
 framePres :
-  {funs : List Fun} -> {envB : HEnv} -> {h1, hB : Heap} ->
-  {ps : List Param} -> {vs : List HVal} -> {ss : List Stmt} ->
+  {funs : List Fun} -> {env, envB : HEnv} -> {h1, hB : Heap} ->
+  {ss : List Stmt} ->
   HeapWF h1 ->
-  HEvalStmts {funs} (bindFrame ps vs) h1 ss (HOk envB hB) ->
+  HEvalStmts {funs} env h1 ss (HOk envB hB) ->
   (a : Addr) ->
-  heldPtr (bindFrame ps vs) a = False ->
+  heldPtr env a = False ->
   cell h1 a = Just Live ->
   cell hB a = Just Live
 framePres {funs} wf ev a nh live = evalUnheldLive {funs} wf ev live nh
 
 export
 framePresRet :
-  {funs : List Fun} -> {envB : HEnv} -> {h1, hB : Heap} ->
-  {ps : List Param} -> {vs : List HVal} -> {ss : List Stmt} ->
+  {funs : List Fun} -> {env, envB : HEnv} -> {h1, hB : Heap} ->
+  {ss : List Stmt} ->
   HeapWF h1 ->
-  HEvalStmts {funs} (bindFrame ps vs) h1 ss (HReturned envB hB) ->
+  HEvalStmts {funs} env h1 ss (HReturned envB hB) ->
   (a : Addr) ->
-  heldPtr (bindFrame ps vs) a = False ->
+  heldPtr env a = False ->
   cell h1 a = Just Live ->
   cell hB a = Just Live
 framePresRet {funs} wf ev a nh live = evalUnheldLiveRet {funs} wf ev live nh
@@ -550,17 +550,29 @@ mutual
   exprStay wf (HEVarNone _) prf eq = nothingNotJustH (trans (sym eq) prf)
   exprStay wf (HEVarCopy _) prf eq = nothingNotJustH (trans (sym eq) prf)
   exprStay wf (HEVarMiss _) prf eq = nothingNotJustH (trans (sym eq) prf)
-  exprStay wf (HEMalloc env1 h1 evs) prf eq =
-    allocNotGone h1 (exprsWf wf evs) a prf eq
+  exprStay wf (HEMalloc env1 h1 evs) prf eq with (cell h1 a) proof ph1
+    exprStay wf (HEMalloc env1 h1 evs) prf eq | Nothing =
+      exprsStay wf evs prf ph1
+    exprStay wf (HEMalloc env1 h1 evs) prf eq | Just cl1 =
+      allocNotGone h1 (exprsWf wf evs) a ph1 eq
   exprStay wf (HEAsgCopy _ _ _ ev) prf eq = exprStay wf ev prf eq
   exprStay wf (HEAsgPtr _ _ _ ev) prf eq = exprStay wf ev prf eq
   exprStay wf (HECall _ _ _ evs) prf eq = exprsStay wf evs prf eq
-  exprStay wf (HECallUser _ _ _ _ _ _ evs _ _ evBody) prf eq =
-    stmtsStay (exprsWf wf evs) evBody prf eq
-  exprStay wf (HECallUserRet _ _ _ _ _ _ evs _ _ evBody) prf eq =
-    stmtsStayRet (exprsWf wf evs) evBody prf eq
-  exprStay wf (HERealloc _ _ _ h1 evs) prf eq =
-    allocNotGone h1 (reallocWf wf evs) a prf eq
+  exprStay wf (HECallUser _ _ _ _ env1 h1 evs _ _ evBody) prf eq with (cell h1 a) proof ph1
+    exprStay wf (HECallUser _ _ _ _ env1 h1 evs _ _ evBody) prf eq | Nothing =
+      exprsStay wf evs prf ph1
+    exprStay wf (HECallUser _ _ _ _ env1 h1 evs _ _ evBody) prf eq | Just cl1 =
+      stmtsStay (exprsWf wf evs) evBody ph1 eq
+  exprStay wf (HECallUserRet _ _ _ _ env1 h1 evs _ _ evBody) prf eq with (cell h1 a) proof ph1
+    exprStay wf (HECallUserRet _ _ _ _ env1 h1 evs _ _ evBody) prf eq | Nothing =
+      exprsStay wf evs prf ph1
+    exprStay wf (HECallUserRet _ _ _ _ env1 h1 evs _ _ evBody) prf eq | Just cl1 =
+      stmtsStayRet (exprsWf wf evs) evBody ph1 eq
+  exprStay wf (HERealloc _ _ env1 h1 evs) prf eq with (cell h1 a) proof ph1
+    exprStay wf (HERealloc _ _ env1 h1 evs) prf eq | Nothing =
+      reallocStay wf evs prf ph1
+    exprStay wf (HERealloc _ _ env1 h1 evs) prf eq | Just cl1 =
+      allocNotGone h1 (reallocWf wf evs) a ph1 eq
   exprStay wf (HEUse _ _ evs) prf eq = exprsStay wf evs prf eq
   exprStay wf HEUnsup prf eq = nothingNotJustH (trans (sym eq) prf)
 
@@ -609,10 +621,16 @@ mutual
   stmtStay wf (HSDeclJustCopy _ _ _ ev) prf eq = exprStay wf ev prf eq
   stmtStay wf (HSDeclJustPtr _ _ _ ev) prf eq = exprStay wf ev prf eq
   stmtStay wf (HSCall _ _ _ evs) prf eq = exprsStay wf evs prf eq
-  stmtStay wf (HSCallUser _ _ _ _ _ _ evs _ _ evBody) prf eq =
-    stmtsStay (exprsWf wf evs) evBody prf eq
-  stmtStay wf (HSCallUserRet _ _ _ _ _ _ evs _ _ evBody) prf eq =
-    stmtsStayRet (exprsWf wf evs) evBody prf eq
+  stmtStay wf (HSCallUser _ _ _ _ env1 h1 evs _ _ evBody) prf eq with (cell h1 a) proof ph1
+    stmtStay wf (HSCallUser _ _ _ _ env1 h1 evs _ _ evBody) prf eq | Nothing =
+      exprsStay wf evs prf ph1
+    stmtStay wf (HSCallUser _ _ _ _ env1 h1 evs _ _ evBody) prf eq | Just cl1 =
+      stmtsStay (exprsWf wf evs) evBody ph1 eq
+  stmtStay wf (HSCallUserRet _ _ _ _ env1 h1 evs _ _ evBody) prf eq with (cell h1 a) proof ph1
+    stmtStay wf (HSCallUserRet _ _ _ _ env1 h1 evs _ _ evBody) prf eq | Nothing =
+      exprsStay wf evs prf ph1
+    stmtStay wf (HSCallUserRet _ _ _ _ env1 h1 evs _ _ evBody) prf eq | Just cl1 =
+      stmtsStayRet (exprsWf wf evs) evBody ph1 eq
   stmtStay wf (HSExpr _ _ _ ev) prf eq = exprStay wf ev prf eq
   stmtStay wf HSUnsup prf eq = nothingNotJustH (trans (sym eq) prf)
   stmtStay wf (HSBlock ev) prf eq = stmtsStay wf ev prf eq

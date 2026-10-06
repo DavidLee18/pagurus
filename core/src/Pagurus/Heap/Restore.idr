@@ -387,12 +387,14 @@ record TakeLN (fl : Flag) (v : HVal) (env' : HEnv) (h' : Heap) (sc' : Scopes) (a
 uniqueOwnFreed :
   {env1 : HEnv} -> {h1, hB : Heap} -> {sc' : Scopes} ->
   {fid : Nat} -> {ps : List Param} -> {ms : List Consume} -> {vs : List HVal} ->
-  {p : Place} -> {st : Status} -> {a : Addr} -> {noL : Bool} ->
+  {noL : Bool} ->
   OverApprox env1 h1 sc' ->
   OverApprox (bindFrame ps vs) h1 (bindParams fid ps ms) ->
   UniqueKeys (bindFrame ps vs) ->
+  (a : Addr) ->
   noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = False ->
   noOwnerHere env1 sc' a = noL ->
+  (p : Place) -> (st : Status) ->
   lookupH p env1 = Just (HVPtr a) ->
   lookupPlace p sc' = Just st ->
   unsafeUse st = False ->
@@ -401,7 +403,7 @@ uniqueOwnFreed :
   hasBorrowed st = Nothing ->
   cell hB a = Just Freed ->
   Void
-uniqueOwnFreed oa1 oaF uk pnoF pnoL p st a lp look safe live own nb ph =
+uniqueOwnFreed oa1 oaF uk a pnoF pnoL p st lp look safe live own nb ph =
   let (q ** stQ ** (lookQ, lpQ, suQ, ownQ, nbQ)) = ownerHereWitness uk oaF pnoF
   in leftoverAlias (lookupH q env1) Refl q stQ lookQ lpQ suQ ownQ nbQ
   where
@@ -451,19 +453,21 @@ uniqueOwnFreed oa1 oaF uk pnoF pnoL p st a lp look safe live own nb ph =
 leftoverHeldFreed :
   {env1 : HEnv} -> {h1, hB : Heap} -> {sc' : Scopes} ->
   {fid : Nat} -> {ps : List Param} -> {ms : List Consume} -> {vs : List HVal} ->
-  {p : Place} -> {st : Status} -> {a : Addr} -> {noL : Bool} ->
+  {noL : Bool} ->
   OverApprox env1 h1 sc' ->
   OverApprox (bindFrame ps vs) h1 (bindParams fid ps ms) ->
   UniqueKeys (bindFrame ps vs) ->
+  (a : Addr) ->
   noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = False ->
   noOwnerHere env1 sc' a = noL ->
+  (p : Place) -> (st : Status) ->
   lookupH p env1 = Just (HVPtr a) ->
   lookupPlace p sc' = Just st ->
   unsafeUse st = False ->
   cell h1 a = Just Live ->
   cell hB a = Just Freed ->
   Void
-leftoverHeldFreed oa1 oaF uk pnoF pnoL p st a lp look safe live ph =
+leftoverHeldFreed oa1 oaF uk a pnoF pnoL p st lp look safe live ph =
   void (trueNotFalse (trans (sym pnoL) pnoL))
 
 ||| Address `a` stayed Live after a unique-own callee. Other leftover cells
@@ -478,16 +482,16 @@ ownCellLive :
   cell h1 c = Just Live ->
   cell hB c = Just Live
 ownCellLive {a} {c} {frame} wf ev ph live0 with (c == a) proof pca
-  ownCellLive {a} {c} wf ev ph live0 | True =
+  ownCellLive {a} {c} {frame} wf ev ph live0 | True =
     rewrite eqNatTrue c a pca in ph
   ownCellLive {a} {c} {frame} wf ev ph live0 | False with (heldPtr frame c) proof phc
-    ownCellLive wf ev ph live0 | False | False =
+    ownCellLive {a} {c} {frame} wf ev ph live0 | False | False =
       framePres {funs} wf ev c phc live0
-    ownCellLive wf ev ph live0 | False | True with (cell hB c) proof ph2
-      ownCellLive wf ev ph live0 | False | True | Just Live = ph2
-      ownCellLive wf ev ph live0 | False | True | Just Freed =
+    ownCellLive {a} {c} {frame} wf ev ph live0 | False | True with (cell hB c) proof ph2
+      ownCellLive {a} {c} {frame} wf ev ph live0 | False | True | Just Live = ph2
+      ownCellLive {a} {c} {frame} wf ev ph live0 | False | True | Just Freed =
         void (trueNotFalse (trans (sym (eqNatRefl c)) pca))
-      ownCellLive wf ev ph live0 | False | True | Nothing =
+      ownCellLive {a} {c} {frame} wf ev ph live0 | False | True | Nothing =
         void (stmtsStay {funs} wf ev live0 ph2)
 
 ownCellLiveRet :
@@ -499,16 +503,16 @@ ownCellLiveRet :
   cell h1 c = Just Live ->
   cell hB c = Just Live
 ownCellLiveRet {a} {c} {frame} wf ev ph live0 with (c == a) proof pca
-  ownCellLiveRet {a} {c} wf ev ph live0 | True =
+  ownCellLiveRet {a} {c} {frame} wf ev ph live0 | True =
     rewrite eqNatTrue c a pca in ph
   ownCellLiveRet {a} {c} {frame} wf ev ph live0 | False with (heldPtr frame c) proof phc
-    ownCellLiveRet wf ev ph live0 | False | False =
+    ownCellLiveRet {a} {c} {frame} wf ev ph live0 | False | False =
       framePresRet {funs} wf ev c phc live0
-    ownCellLiveRet wf ev ph live0 | False | True with (cell hB c) proof ph2
-      ownCellLiveRet wf ev ph live0 | False | True | Just Live = ph2
-      ownCellLiveRet wf ev ph live0 | False | True | Just Freed =
+    ownCellLiveRet {a} {c} {frame} wf ev ph live0 | False | True with (cell hB c) proof ph2
+      ownCellLiveRet {a} {c} {frame} wf ev ph live0 | False | True | Just Live = ph2
+      ownCellLiveRet {a} {c} {frame} wf ev ph live0 | False | True | Just Freed =
         void (trueNotFalse (trans (sym (eqNatRefl c)) pca))
-      ownCellLiveRet wf ev ph live0 | False | True | Nothing =
+      ownCellLiveRet {a} {c} {frame} wf ev ph live0 | False | True | Nothing =
         void (stmtsStayRet {funs} wf ev live0 ph2)
 
 ||| Leftover `NoUniqueOwner` of `a` does not prevent a uniquely-owning
@@ -830,25 +834,37 @@ mutual
   restoreFromBind {funs} {chk} {fuel} {ps} {vs} oa1 oaF bok pBdy evBody p st a lp look safe live =
     restoreHeld (heldPtr (bindFrame ps vs) a) Refl
     where
-      restoreHeld :
-        (hd : Bool) ->
-        heldPtr (bindFrame ps vs) a = hd ->
+      uniqueGo :
+        noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = False ->
+        (no : Bool) -> noOwnerHere env1 sc' a = no ->
+        hasOwned st = True ->
+        hasBorrowed st = Nothing ->
         cell hB a = Just Live
-      restoreHeld False phd =
-        framePres {funs} oa1.wf evBody a phd live
-      restoreHeld True phd =
-        restoreNuo (nuoBind bok a)
+      uniqueGo _ True pno po pb =
+        void (noOwnerSound env1 sc' a pno p st look lp safe po pb)
+      uniqueGo pnoF False pno po pb with (cell hB a) proof ph
+        uniqueGo pnoF False pno po pb | Just Live = ph
+        uniqueGo pnoF False pno po pb | Just Freed =
+          uniqueOwnFreed oa1 oaF (bindFrameUK ps vs) a pnoF pno p st lp look safe live po pb ph
+        uniqueGo pnoF False pno po pb | Nothing =
+          void (stmtsStay {funs} oa1.wf evBody live ph)
 
-      restoreNuo :
-        Either (NoUniqueOwner (bindFrame ps vs) (bindParams fid ps ms) a)
-               (noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = False) ->
+      borrowGo :
+        noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = False ->
+        (no : Bool) -> noOwnerHere env1 sc' a = no ->
         cell hB a = Just Live
-      restoreNuo (Left nuoF) =
-        let lnF = MkLN oaF nuoF live
-            lnB = stmtsLN {funs} {chk} {fuel} lnF pBdy evBody
-        in lnB.liveLN
-      restoreNuo (Right pnoF) =
-        ownGo pnoF (hasOwned st) Refl (hasBorrowed st) Refl
+      borrowGo pnoF False pno with (cell hB a) proof ph
+        borrowGo pnoF False pno | Just Live = ph
+        borrowGo pnoF False pno | Just Freed =
+          leftoverHeldFreed oa1 oaF (bindFrameUK ps vs) a pnoF pno p st lp look safe live ph
+        borrowGo pnoF False pno | Nothing =
+          void (stmtsStay {funs} oa1.wf evBody live ph)
+      borrowGo pnoF True pno with (cell hB a) proof ph
+        borrowGo pnoF True pno | Just Live = ph
+        borrowGo pnoF True pno | Just Freed =
+          leftoverHeldFreed oa1 oaF (bindFrameUK ps vs) a pnoF pno p st lp look safe live ph
+        borrowGo pnoF True pno | Nothing =
+          void (stmtsStay {funs} oa1.wf evBody live ph)
 
       ownGo :
         noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = False ->
@@ -862,43 +878,25 @@ mutual
       ownGo pnoF _ _ (Just _) _ =
         borrowGo pnoF (noOwnerHere env1 sc' a) Refl
 
-      uniqueGo :
-        noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = False ->
-        (no : Bool) -> noOwnerHere env1 sc' a = no ->
-        hasOwned st = True ->
-        hasBorrowed st = Nothing ->
+      restoreNuo :
+        Either (NoUniqueOwner (bindFrame ps vs) (bindParams fid ps ms) a)
+               (noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = False) ->
         cell hB a = Just Live
-      uniqueGo _ True pno po pb =
-        void (noOwnerSound env1 sc' a pno p st look lp safe po pb)
-      uniqueGo pnoF False pno po pb with (cell hB a) proof ph
-        uniqueGo pnoF False pno po pb | Just Live = ph
-        uniqueGo pnoF False pno po pb | Just Freed =
-          -- Leftover use-safe unique owner `p` of `a`, and the frame also
-          -- uniquely owns `a` (`ownerHereWitness` of `bindFrameUK`). Connecting
-          -- BindOk unique consume of leftover `a` to leftover uniqueLive is not
-          -- proved. Do not inhabit with HSDropLive or uniqueTwoSafe p p.
-          uniqueOwnFreed oa1 oaF (bindFrameUK ps vs) pnoF pno p st a lp look safe live po pb ph
-        uniqueGo pnoF False pno po pb | Nothing =
-          void (stmtsStay {funs} oa1.wf evBody live ph)
+      restoreNuo (Left nuoF) =
+        let lnF = MkLN oaF nuoF live
+            lnB = stmtsLN {funs} {chk} {fuel} lnF pBdy evBody
+        in lnB.liveLN
+      restoreNuo (Right pnoF) =
+        ownGo pnoF (hasOwned st) Refl (hasBorrowed st) Refl
 
-      borrowGo :
-        noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = False ->
-        (no : Bool) -> noOwnerHere env1 sc' a = no ->
+      restoreHeld :
+        (hd : Bool) ->
+        heldPtr (bindFrame ps vs) a = hd ->
         cell hB a = Just Live
-      borrowGo pnoF False pno with (cell hB a) proof ph
-        borrowGo pnoF False pno | Just Live = ph
-        borrowGo pnoF False pno | Just Freed =
-          -- Leftover unique owner of `a` plus leftover use-safe borrow of `a`.
-          -- uniqueLive of leftover would void this given UniqueKeys leftover.
-          leftoverHeldFreed oa1 oaF (bindFrameUK ps vs) pnoF pno p st a lp look safe live ph
-        borrowGo pnoF False pno | Nothing =
-          void (stmtsStay {funs} oa1.wf evBody live ph)
-      borrowGo pnoF True pno with (cell hB a) proof ph
-        borrowGo pnoF True pno | Just Live = ph
-        borrowGo pnoF True pno | Just Freed =
-          leftoverHeldFreed oa1 oaF (bindFrameUK ps vs) pnoF pno p st a lp look safe live ph
-        borrowGo pnoF True pno | Nothing =
-          void (stmtsStay {funs} oa1.wf evBody live ph)
+      restoreHeld False phd =
+        framePres {funs} oa1.wf evBody a phd live
+      restoreHeld True phd =
+        restoreNuo (nuoBind bok a)
 
   export
   restoreFromBindRet :
@@ -917,24 +915,38 @@ mutual
   restoreFromBindRet {funs} {chk} {fuel} {ps} {vs} oa1 oaF bok pBdy evBody p st a lp look safe live =
     restoreHeldR (heldPtr (bindFrame ps vs) a) Refl
     where
-      restoreHeldR :
-        (hd : Bool) ->
-        heldPtr (bindFrame ps vs) a = hd ->
+      uniqueGoR :
+        noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = False ->
+        (no : Bool) -> noOwnerHere env1 sc' a = no ->
+        hasOwned st = True ->
+        hasBorrowed st = Nothing ->
         cell hB a = Just Live
-      restoreHeldR False phd =
-        framePresRet {funs} oa1.wf evBody a phd live
-      restoreHeldR True phd =
-        restoreNuoR (nuoBind bok a)
+      uniqueGoR _ True pno po pb =
+        void (noOwnerSound env1 sc' a pno p st look lp safe po pb)
+      uniqueGoR pnoF False pno po pb with (cell hB a) proof ph
+        uniqueGoR pnoF False pno po pb | Just Live = ph
+        uniqueGoR pnoF False pno po pb | Just Freed =
+          uniqueOwnFreed oa1 oaF (bindFrameUK ps vs) a pnoF pno p st lp look safe live po pb ph
+        uniqueGoR pnoF False pno po pb | Nothing =
+          void (stmtsStayRet {funs} oa1.wf evBody live ph)
 
-      restoreNuoR :
-        Either (NoUniqueOwner (bindFrame ps vs) (bindParams fid ps ms) a)
-               (noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = False) ->
+      borrowGoR :
+        noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = False ->
+        (no : Bool) -> noOwnerHere env1 sc' a = no ->
+        hasBorrowed st = Just fidB ->
         cell hB a = Just Live
-      restoreNuoR (Left nuoF) =
-        let lnF = MkLN oaF nuoF live
-        in stmtsLNRet {funs} {chk} {fuel} lnF pBdy evBody
-      restoreNuoR (Right pnoF) =
-        ownGoR pnoF (hasOwned st) Refl (hasBorrowed st) Refl
+      borrowGoR pnoF False pno pb with (cell hB a) proof ph
+        borrowGoR pnoF False pno pb | Just Live = ph
+        borrowGoR pnoF False pno pb | Just Freed =
+          leftoverHeldFreed oa1 oaF (bindFrameUK ps vs) a pnoF pno p st lp look safe live ph
+        borrowGoR pnoF False pno pb | Nothing =
+          void (stmtsStayRet {funs} oa1.wf evBody live ph)
+      borrowGoR pnoF True pno pb with (cell hB a) proof ph
+        borrowGoR pnoF True pno pb | Just Live = ph
+        borrowGoR pnoF True pno pb | Just Freed =
+          leftoverHeldFreed oa1 oaF (bindFrameUK ps vs) a pnoF pno p st lp look safe live ph
+        borrowGoR pnoF True pno pb | Nothing =
+          void (stmtsStayRet {funs} oa1.wf evBody live ph)
 
       ownGoR :
         noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = False ->
@@ -948,38 +960,24 @@ mutual
       ownGoR pnoF _ _ (Just _) pb =
         borrowGoR pnoF (noOwnerHere env1 sc' a) Refl pb
 
-      uniqueGoR :
-        noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = False ->
-        (no : Bool) -> noOwnerHere env1 sc' a = no ->
-        hasOwned st = True ->
-        hasBorrowed st = Nothing ->
+      restoreNuoR :
+        Either (NoUniqueOwner (bindFrame ps vs) (bindParams fid ps ms) a)
+               (noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = False) ->
         cell hB a = Just Live
-      uniqueGoR _ True pno po pb =
-        void (noOwnerSound env1 sc' a pno p st look lp safe po pb)
-      uniqueGoR pnoF False pno po pb with (cell hB a) proof ph
-        uniqueGoR pnoF False pno po pb | Just Live = ph
-        uniqueGoR pnoF False pno po pb | Just Freed =
-          uniqueOwnFreed oa1 oaF (bindFrameUK ps vs) pnoF pno p st a lp look safe live po pb ph
-        uniqueGoR pnoF False pno po pb | Nothing =
-          void (stmtsStayRet {funs} oa1.wf evBody live ph)
+      restoreNuoR (Left nuoF) =
+        let lnF = MkLN oaF nuoF live
+        in stmtsLNRet {funs} {chk} {fuel} lnF pBdy evBody
+      restoreNuoR (Right pnoF) =
+        ownGoR pnoF (hasOwned st) Refl (hasBorrowed st) Refl
 
-      borrowGoR :
-        noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = False ->
-        (no : Bool) -> noOwnerHere env1 sc' a = no ->
-        hasBorrowed st = Just fidB ->
+      restoreHeldR :
+        (hd : Bool) ->
+        heldPtr (bindFrame ps vs) a = hd ->
         cell hB a = Just Live
-      borrowGoR pnoF False pno pb with (cell hB a) proof ph
-        borrowGoR pnoF False pno pb | Just Live = ph
-        borrowGoR pnoF False pno pb | Just Freed =
-          leftoverHeldFreed oa1 oaF (bindFrameUK ps vs) pnoF pno p st a lp look safe live ph
-        borrowGoR pnoF False pno pb | Nothing =
-          void (stmtsStayRet {funs} oa1.wf evBody live ph)
-      borrowGoR pnoF True pno pb with (cell hB a) proof ph
-        borrowGoR pnoF True pno pb | Just Live = ph
-        borrowGoR pnoF True pno pb | Just Freed =
-          leftoverHeldFreed oa1 oaF (bindFrameUK ps vs) pnoF pno p st a lp look safe live ph
-        borrowGoR pnoF True pno pb | Nothing =
-          void (stmtsStayRet {funs} oa1.wf evBody live ph)
+      restoreHeldR False phd =
+        framePresRet {funs} oa1.wf evBody a phd live
+      restoreHeldR True phd =
+        restoreNuoR (nuoBind bok a)
 
   nestedCallLN :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
@@ -1050,9 +1048,9 @@ mutual
         void (leftNotRight (trans (sym (checkCallMixedAlias
           (replace {p = \b => b = False} (builtinEq callee) pB) pd pbad)) eq))
       nestedBoundLN ln1 eq pB f look pDef evs evBody Nothing | True | Right _ =
-        noneFrameLN {funs} ln1 evs evBody
+        noneFrameLN {funs} ln1 evBody
     nestedBoundLN ln1 eq pB f look pDef evs evBody Nothing | False =
-      noneFrameLN {funs} ln1 evs evBody
+      noneFrameLN {funs} ln1 evBody
 
   nestedBoundRetLN :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
@@ -1081,9 +1079,9 @@ mutual
         void (leftNotRight (trans (sym (checkCallMixedAlias
           (replace {p = \b => b = False} (builtinEq callee) pB) pd pbad)) eq))
       nestedBoundRetLN ln1 eq pB f look pDef evs evBody Nothing | True | Right _ =
-        noneFrameLNRet {funs} ln1 evs evBody
+        noneFrameLNRet {funs} ln1 evBody
     nestedBoundRetLN ln1 eq pB f look pDef evs evBody Nothing | False =
-      noneFrameLNRet {funs} ln1 evs evBody
+      noneFrameLNRet {funs} ln1 evBody
 
   nestedJustLN :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
@@ -1220,7 +1218,8 @@ mutual
     noneFrameLN {funs} {f} {evs} ln1 evBody | False =
       MkLN (oaKeepEnv ln1.oaLN (stmtsWf {funs} ln1.oaLN.wf evBody)
               (\p, st, c, lp, look, safe, live0 =>
-                 noneUnheldPres {funs} {c} ln1.oaLN.wf evBody phd live0))
+                 ownCellLive {funs} {c} ln1.oaLN.wf evBody
+                   (framePres {funs} ln1.oaLN.wf evBody a phd ln1.liveLN) live0))
         ln1.nuoLN
         (framePres {funs} ln1.oaLN.wf evBody a phd ln1.liveLN)
     noneFrameLN ln1 evBody | True =
@@ -1240,7 +1239,8 @@ mutual
     noneFrameLNRet {funs} {f} {evs} ln1 evBody | False =
       MkLN (oaKeepEnv ln1.oaLN (stmtsWfRet {funs} ln1.oaLN.wf evBody)
               (\p, st, c, lp, look, safe, live0 =>
-                 noneUnheldPresRet {funs} {c} ln1.oaLN.wf evBody phd live0))
+                 ownCellLiveRet {funs} {c} ln1.oaLN.wf evBody
+                   (framePresRet {funs} ln1.oaLN.wf evBody a phd ln1.liveLN) live0))
         ln1.nuoLN
         (framePresRet {funs} ln1.oaLN.wf evBody a phd ln1.liveLN)
     noneFrameLNRet ln1 evBody | True =
@@ -1508,7 +1508,7 @@ mutual
     HEvalExpr {funs} env h (ECall id callee args) (HROk v env' h') ->
     TakeLN fl v env' h' sc' a
   nestedTakeCallLN ln eq (HERealloc pName pMiss env1 h1 evs) =
-    reallocTakeLN ln eq pName evs
+    reallocTakeLN {funs} {chk} ln eq pName evs
   nestedTakeCallLN ln eq ev = tGo (checkExpr ctx sc (ECall id callee args)) Refl
     where
       tGo : (res : Either Diag Scopes) ->
@@ -2194,7 +2194,7 @@ mutual
     HEvalReallocArgs {funs} env h args (HROk HVNone env1 h1) ->
     LiveNuo env1 (snd (alloc h1)) sc' a
   reallocLN ln eq pName evs =
-    let ln1 = reallocArgsLN ln eq evs
+    let ln1 = reallocArgsLN {funs} {chk} ln eq evs
         nf = liveNotFresh h1 ln1.oaLN.wf a ln1.liveLN
     in MkLN (oaAlloc ln1.oaLN) ln1.nuoLN
          (trans (allocPresCell h1 a nf) ln1.liveLN)
@@ -2213,7 +2213,7 @@ mutual
     let scEq = callNilScope eq
     in MkLN (oaRewrite (sym scEq) ln.oaLN) (nuoRewrite (sym scEq) ln.nuoLN) ln.liveLN
   reallocArgsLN ln eq (HRHeadOk w env0 h0 evE evEs) {args = e :: es} =
-    reallocHeadLN ln eq evE evEs
+    reallocHeadLN {funs} {chk} ln eq evE evEs
 
   reallocHeadLN :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->

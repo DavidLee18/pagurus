@@ -32,6 +32,26 @@ takeLitSafe id eq r =
   outRewrite (cong fst (rightInj (trans (sym (takeLit ctx sc id)) eq))) (OutOk r)
 
 export
+nullSafe :
+  (id : Nat) ->
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {c : CScopes} ->
+  checkExpr ctx sc (ENull id) = Right sc' ->
+  Represents c sc ->
+  SafeOut (Ok c) sc'
+nullSafe id eq r =
+  outRewrite (rightInj (trans (sym (checkExprNull ctx sc id)) eq)) (OutOk r)
+
+export
+takeNullSafe :
+  (id : Nat) ->
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {c : CScopes} -> {fl : Flag} ->
+  takeOwner ctx sc (ENull id) = Right (sc', fl) ->
+  Represents c sc ->
+  SafeOut (Ok c) sc'
+takeNullSafe id eq r =
+  outRewrite (cong fst (rightInj (trans (sym (takeNull ctx sc id)) eq))) (OutOk r)
+
+export
 unsupExprContra :
   (id : Nat) -> (reason : String) ->
   {ctx : Ctx} -> {sc, sc' : Scopes} ->

@@ -28,11 +28,13 @@ mutual
     Represents c sc ->
     SafeOut oE sc'
   exprSafe {e = ELit id} EvLit sc sc' eq r = litSafe id eq r
+  exprSafe {e = ENull id} EvNull sc sc' eq r = nullSafe id eq r
   exprSafe {e = EMalloc mid args} (EvMalloc evs) sc sc' eq r =
     argsBorrowSafe evs sc sc' (trans (sym (checkExprMalloc ctx sc mid args)) eq) r
   exprSafe {e = EVar nid n nm} (EvVarUse act) sc sc' eq r =
     varUseSafe nid n nm eq r act
   exprSafe {e = EUnsupported nid reason} {oE = Ok _} ev sc sc' eq r impossible
+  exprSafe {e = EUnsupported nid reason} {oE = Returned _} ev sc sc' eq r impossible
   exprSafe {e = EUnsupported nid reason} {oE = Crash _} (EvUnsupE _) sc sc' eq r =
     void (unsupExprContra nid reason eq)
   exprSafe {e = EUse uid args} (EvUseAll evs) sc sc' eq r =
@@ -53,6 +55,10 @@ mutual
     asgPtrEmpty id n nm
       (\sc1, fl1, pT => takeSafe {e = rhs} take sc sc1 fl1 pT r)
       eq r (takeOwner ctx sc rhs) Refl
+  exprSafe {e = EAssign id n nm Ptr rhs} (EvAsgPtrNull c1 take) sc sc' eq r =
+    asgPtrNull id n nm
+      (\sc1, fl1, pT => takeSafe {e = rhs} take sc sc1 fl1 pT r)
+      eq r (takeOwner ctx sc rhs) Refl
 
   export
   takeSafe :
@@ -63,6 +69,7 @@ mutual
     Represents c sc ->
     SafeOut oT sc'
   takeSafe {e = ELit id} TakeLit sc sc' flChk eq r = takeLitSafe id eq r
+  takeSafe {e = ENull id} TakeNull sc sc' flChk eq r = takeNullSafe id eq r
   takeSafe {e = EMalloc mid args} (TakeMalloc evs) sc sc' flChk eq r with (checkArgsBorrow ctx sc args) proof pA
     takeSafe {e = EMalloc mid args} (TakeMalloc evs) sc sc' flChk eq r | Left _ =
       void (leftNotRight (trans (sym (takeMallocLeft mid pA)) eq))
@@ -90,12 +97,22 @@ mutual
     takeAsgPtrEmpty id n nm
       (\sc1, fl1, pT => takeSafe {e = rhs} take sc sc1 fl1 pT r)
       eq r (takeOwner ctx sc rhs) Refl
-  takeSafe {e = ECall id callee args} (TakeCall evc) sc sc' flChk eq r with (checkExpr ctx sc (ECall id callee args)) proof pE
-    takeSafe {e = ECall id callee args} (TakeCall evc) sc sc' flChk eq r | Left _ =
+  takeSafe {e = EAssign id n nm Ptr rhs} (TakeAsgPtrNull c1 take) sc sc' flChk eq r =
+    takeAsgPtrNull id n nm
+      (\sc1, fl1, pT => takeSafe {e = rhs} take sc sc1 fl1 pT r)
+      eq r (takeOwner ctx sc rhs) Refl
+  takeSafe {e = ECall id callee args} (TakeCall pFresh evc) sc sc' flChk eq r with (checkExpr ctx sc (ECall id callee args)) proof pE
+    takeSafe {e = ECall id callee args} (TakeCall pFresh evc) sc sc' flChk eq r | Left _ =
       void (leftNotRight (trans (sym (takeCallLeft pE)) eq))
-    takeSafe {e = ECall id callee args} (TakeCall evc) sc sc' flChk eq r | Right sc1 =
-      outRewrite (cong fst (rightInj (trans (sym (takeCallRight pE)) eq)))
+    takeSafe {e = ECall id callee args} (TakeCall pFresh evc) sc sc' flChk eq r | Right sc1 =
+      outRewrite (cong fst (rightInj (trans (sym (takeCallRight pFresh pE)) eq)))
         (callSafe evc sc sc1 (trans (sym (checkExprCall ctx sc id callee args)) pE) r)
+  takeSafe {e = ECall id callee args} (TakeRealloc pr pd evc) sc sc' flChk eq r with (checkCall ctx sc id callee args) proof pC
+    takeSafe {e = ECall id callee args} (TakeRealloc pr pd evc) sc sc' flChk eq r | Left _ =
+      void (leftNotRight (trans (sym (takeReallocLeft (reallocFresh pr pd) pC)) eq))
+    takeSafe {e = ECall id callee args} (TakeRealloc pr pd evc) sc sc' flChk eq r | Right sc1 =
+      outRewrite (cong fst (rightInj (trans (sym (takeReallocRight (reallocFresh pr pd) pC)) eq)))
+        (callSafe evc sc sc1 pC r)
   takeSafe {e = EUse uid args} (TakeUse evs) sc sc' flChk eq r with (checkArgsBorrow ctx sc args) proof pA
     takeSafe {e = EUse uid args} (TakeUse evs) sc sc' flChk eq r | Left _ =
       void (leftNotRight (trans (sym (takeUseLeft uid pA)) eq))
@@ -103,6 +120,7 @@ mutual
       outRewrite (cong fst (rightInj (trans (sym (takeUseRight uid pA)) eq)))
         (argsBorrowSafe evs sc sc1 pA r)
   takeSafe {e = EUnsupported nid reason} {oT = Ok _} take sc sc' flChk eq r impossible
+  takeSafe {e = EUnsupported nid reason} {oT = Returned _} take sc sc' flChk eq r impossible
   takeSafe {e = EUnsupported nid reason} {oT = Crash _} (TakeUnsup _) sc sc' flChk eq r =
     void (takeUnsupContra nid reason eq)
 
@@ -155,10 +173,33 @@ mutual
     SafeOut oC sc'
   callSafe (CallBuiltin pb evs) sc sc' eq r =
     callBuiltinSafe (\prf, rep, more => argsBorrowSafe more sc sc' prf rep) pb eq r evs
-  callSafe {oC = Ok _} (CallOpaque _ _ _) sc sc' eq r impossible
-  callSafe {oC = Crash _} (CallOpaque pb pd _) sc sc' eq r =
-    void (callOpaqueContra pb pd eq)
+  callSafe (CallRealloc pb pr pd evs) sc sc' eq r =
+    callReallocSafe (\prf, rep, more => reallocArgsSafe more sc sc' prf rep) pb pr pd eq r evs
+  callSafe {oC = Ok _} (CallOpaque _ _ _ _) sc sc' eq r impossible
+  callSafe {oC = Returned _} (CallOpaque _ _ _ _) sc sc' eq r impossible
+  callSafe {oC = Crash _} (CallOpaque pb pr pd _) sc sc' eq r =
+    void (callOpaqueContra pb pr pd eq)
   callSafe (CallBorrow pb pd pc evs) sc sc' eq r =
     callBorrowSafe (\prf, rep, more => argsBorrowSafe more sc sc' prf rep) pb pd pc eq r evs
   callSafe (CallConsume pb pd pc evs) sc sc' eq r =
     callConsumeSafe (\prf, rep, more => argsMoveSafe more sc sc' prf rep) pb pd pc eq r evs
+
+  export
+  reallocArgsSafe :
+    {ctx : Ctx} -> {es : List Expr} -> {c : CScopes} -> {oA : Outcome} ->
+    ReallocArgs ctx c es oA ->
+    (sc, sc' : Scopes) ->
+    checkRealloc ctx sc es = Right sc' ->
+    Represents c sc ->
+    SafeOut oA sc'
+  reallocArgsSafe ReNil sc sc' eq r =
+    outRewrite (rightInj (trans (sym (checkReallocNil ctx sc)) eq)) (OutOk r)
+  reallocArgsSafe (ReHeadCrash {e} {es} take) sc sc' eq r =
+    reallocHeadCrash es
+      (\sc1, fl1, pT => takeSafe {e} take sc sc1 fl1 pT r)
+      eq r (takeOwner ctx sc e) Refl
+  reallocArgsSafe (ReHeadOk {e} {es} c1 take evs) sc sc' eq r =
+    reallocHeadOk es
+      (\sc1, fl1, pT => takeSafe {e} take sc sc1 fl1 pT r)
+      (\sc1, pEs, r1 => argsBorrowSafe {es} evs sc1 sc' pEs r1)
+      eq r (takeOwner ctx sc e) Refl

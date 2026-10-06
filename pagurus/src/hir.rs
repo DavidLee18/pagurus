@@ -115,6 +115,10 @@ pub enum Expr {
     Lit {
         id: u32,
     },
+    /// Null pointer constant (`0`, `(void*)0`, `NULL`).
+    Null {
+        id: u32,
+    },
     Malloc {
         id: u32,
         args: Vec<Expr>,
@@ -146,6 +150,7 @@ impl Expr {
         match self {
             Expr::Var { id, .. }
             | Expr::Lit { id }
+            | Expr::Null { id }
             | Expr::Malloc { id, .. }
             | Expr::Call { id, .. }
             | Expr::Assign { id, .. }

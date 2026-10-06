@@ -111,6 +111,12 @@ stepAtom (AFreed at) Drop n =
 stepAtom (AFreed at) Use n = Left (freedUse at n)
 stepAtom (AFreed at) Borrow n = Left (freedUse at n)
 stepAtom (AFreed at) Move n = Left (freedUse at n)
+-- Known null: every action is a no-op. `free(NULL)` is defined in C;
+-- moving or using a null pointer is not UAM/UAF/DF (null deref is out of scope).
+stepAtom ANull Use _ = Right ANull
+stepAtom ANull Borrow _ = Right ANull
+stepAtom ANull Move _ = Right ANull
+stepAtom ANull Drop _ = Right ANull
 
 ||| Lift the concrete step to a set of atoms. Fail if *any* possible atom
 ||| is unsafe — that is the soundness-first policy.

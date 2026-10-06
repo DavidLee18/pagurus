@@ -45,9 +45,10 @@ To believe a `pagurus` “safe” verdict you have to trust:
 - the **s-expression parser** (`Pagurus.ParseIR` / `Pagurus.Sexp`) and **JSON output** (`Pagurus.Output`) — covering, not total
 - `checkProgram` / `checkFun`, which iterate `checkStmts` over function bodies but are not themselves the theorem
 - `malloc`/`calloc` as modelled (fresh unique owner; no heap object identity)
-- `free` as `SDrop` on a variable; **`free(0)` / `free((void*)0)` lowering** to a no-op `Lit` (ISO C `free(NULL)`); `free(NULL)` as an identifier is rejected
+- `free` as `SDrop` on a variable; **`free(0)` / `free((void*)0)` / `free(NULL)`** lowering to a no-op `Null` IR node (ISO C `free(NULL)`). A pointer known to be null (`p = 0` / `p = NULL`) is atom `ANull`; `free` of that atom is a no-op. Non-null literals (`1`, `"hi"`, `(int*)1`) are `Lit` / Ghost / `AEmpty`, not `ANull`. Uninitialised pointers stay `AEmpty` and `free` of them is still rejected.
+- `realloc` (prototype, not defined in this unit) as consume-first-argument plus a fresh owner. Failure is not modelled: the checker assumes success (a later `free` of the original pointer is rejected). A definition of `realloc` in the unit is summarised like any other function.
 - syntactic consuming summaries (`isConsuming`) as a fixpoint over callee syntax, not a proved interprocedural semantics — **callee bodies are not run**
-- that `SReturn` does **not** end execution: statements after `return` are still checked and still appear in `EvalStmts`
+- that `SReturn` **ends the path**: remaining statements on that path are not checked and do not appear in `EvalStmts`. An `if` branch that always returns is dropped from the join so it does not poison the continuation. A loop body that always returns keeps the entry environment (zero-iteration exit).
 
 If the core rejects, Rust reports that rejection; if the core is missing or crashes, the result is a failure, not safety. A “safe” verdict still depends on the trusted base above.
 
@@ -63,6 +64,7 @@ These are real proofs (`Refl` or induction), compiled into `pagurus-core`:
 - `stepAtom` on `Moved`: use is a use-after-move
 - `stepAtom` on `Freed`: drop is a double-free; use is a use-after-free
 - `stepAtom` on `AEmpty`: use and drop are rejected (`emptyUseRejected`, `emptyDropRejected`)
+- `stepAtom` on `ANull`: use, move, and drop are no-ops (`nullUseOk`, `nullMoveOk`, `nullDropOk`)
 - **`stepEmptySetOk`**: the empty *set* of atoms (no represented concrete state, e.g. unreachable code) takes any action successfully and stays empty. This is **not** a lemma about the `AEmpty` atom.
 - **`stepStatusSound`**: by induction on the atom-set, a successful `stepStatus` means every atom in the set steps successfully, and the resulting atom is in the resulting set.
 
@@ -88,9 +90,10 @@ These are real proofs (`Refl` or induction), compiled into `pagurus-core`:
 
 - **Rust C→IR lowering is faithful** for the modelled fragment (including interned places) and emits `Unsupported` for everything else. This is not a theorem about C11. The lowering **is** trusted for a “safe” verdict.
 - **`malloc`/`calloc` return a fresh unique owner.** Allocation failure, custom allocators, and aliasing through integer casts are not modelled. There is no heap: two `malloc`s are two `AOwned` atoms on (possibly different) places, not addresses.
+- **`realloc` consumes its first argument and yields a fresh owner**, assuming the call succeeds. The ISO C failure case (NULL return, original pointer still owned) is not modelled; code that frees the original after a failed realloc is a false reject, not a false accept.
 - **Function summaries** (which callees consume their pointer arguments) are a syntactic fixpoint, not a proved interprocedural semantics. Callee bodies are not interpreted.
 - **`stepAtom` is the crash classifier.** A wrong `Drop`/`Use` case there can make the theorem true of a bogus model. The fixtures and the small lemmas in `Pagurus.Soundness` are what pin those cases down.
-- **`return` does not end the statement list** in either the checker or `Eval`.
+- **`return` ends the statement list** on that path in both the checker and `Eval`. A returning `if` branch is not joined into the continuation.
 - **Opaque calls** (no body in the unit; including a hand-written IR `(call free …)` when `free` is not a defined user function) are unsupported, not treated as a plain use.
 - **`goto`, `switch`, `break`, and `continue` are rejected** as unsupported.
 
@@ -152,8 +155,8 @@ Modelled:
 - Function definitions (and prototypes, which cannot be called unless a definition is in the same unit)
 - Local variables; nested blocks
 - Pointer types (`T *`) vs copy types (`int`, …)
-- `malloc` / `calloc` (fresh unique owner) and `free` (drop), only when they are **not** defined in this file
-- `free(0)` and `free((void *)0)` are accepted as a defined no-op (ISO C `free(NULL)`). **`free(NULL)` is rejected conservatively** because the identifier `NULL` is not expanded without a preprocessor / `<stddef.h>`; it is treated as `free` of a variable named `NULL`.
+- `malloc`/`calloc` (fresh unique owner), `realloc` (consume first argument, fresh owner; assumes success), and `free` (drop), only when they are **not** defined in this file
+- `free(0)`, `free((void *)0)`, and `free(NULL)` are accepted as a defined no-op (ISO C `free(NULL)`). A pointer assigned `0` or `NULL` is tracked as known-null; `free` of it is a no-op. Uninitialised pointers are not null. Non-null literals (including `(int*)1` and string literals) are not modelled as null; `free` of a pointer holding one is rejected.
 - Assignment, including chained assignment as a move of the unique owner
 - Calls: borrowing vs consuming, summarised from callee bodies
 - `return`, `if`/`else`
@@ -187,9 +190,9 @@ Join is **union of possible atoms**. `Owned ⊔ Empty` is `{Owned, Empty}`: a la
 ## Ownership rules (v1)
 
 1. A `T *` local is a **unique owner**, not a C-style copyable address.
-2. `malloc`/`calloc` produce a fresh owner.
-3. Assigning one owning pointer to another **moves**; the source may not be used afterwards.
-4. `free(p)` **consumes** `p`. A later `free(p)` is a **double free**; any other use is **use after free**.
+2. `malloc`/`calloc` produce a fresh owner. `realloc` consumes its first argument and produces a fresh owner (success is assumed).
+3. Assigning one owning pointer to another **moves**; the source may not be used afterwards. Assigning `0`/`NULL` makes the destination known-null; `free` of a known-null pointer is a no-op. Assigning a non-null literal does not make the destination null.
+4. `free(p)` **consumes** `p` unless `p` is known-null. A later `free(p)` of a non-null consumed pointer is a **double free**; any other use is **use after free**.
 5. Integers (and other non-pointer types) are **copied**, not moved, and are not tracked as owners.
 6. Passing a pointer to a non-consuming function is a **borrow** (a use). Passing it to a consuming function is a **move**.
 

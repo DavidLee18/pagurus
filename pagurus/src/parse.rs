@@ -135,8 +135,12 @@ impl<'a> Lowering<'a> {
         name == "free" && !self.defined_funs.contains(name)
     }
 
+    fn synth_realloc(&self, name: &str) -> bool {
+        name == "realloc" && !self.defined_funs.contains(name)
+    }
+
     fn synth_builtin_proto(&self, name: &str) -> bool {
-        self.synth_alloc(name) || self.synth_free(name)
+        self.synth_alloc(name) || self.synth_free(name) || self.synth_realloc(name)
     }
 
     fn wrap_expr(&mut self, origin: &Node<Expression>, expr: Expr) -> Stmt {
@@ -460,7 +464,7 @@ impl<'a> Lowering<'a> {
                             let id = self.alloc_node(expr);
                             vec![Stmt::Expr {
                                 id,
-                                expr: Expr::Lit { id },
+                                expr: Expr::Null { id },
                             }]
                         }
                         [arg] => {
@@ -627,6 +631,16 @@ impl<'a> Lowering<'a> {
     /// explores both `if` branches).
     fn lower_seq(&mut self, expr: &Node<Expression>) -> (Vec<Stmt>, Expr) {
         match &expr.node {
+            Expression::Identifier(_) | Expression::Constant(_) | Expression::StringLiteral(_)
+                if is_null_constant(expr) =>
+            {
+                (
+                    Vec::new(),
+                    Expr::Null {
+                        id: self.alloc_node(expr),
+                    },
+                )
+            }
             Expression::Identifier(id) => {
                 let name = id.node.name.clone();
                 (
@@ -937,9 +951,10 @@ fn collect_defined_names(tu: &lang_c::ast::TranslationUnit) -> HashSet<String> {
     names
 }
 
-/// True for integer constant 0, including `(void *)0` after peeling casts.
-/// The identifier `NULL` is *not* recognised (it is just a name without
-/// `<stddef.h>`); `free(NULL)` is therefore rejected conservatively.
+/// True for integer constant 0, `(void *)0` after peeling casts, and the
+/// identifier `NULL` (modelled as the ISO C null pointer constant even
+/// without `<stddef.h>`). This is the only gate from C literals onto
+/// `Expr::Null` / `ANull`; a non-null integer or string literal is `Lit`.
 fn is_null_constant(expr: &Node<Expression>) -> bool {
     match &expr.node {
         Expression::Constant(c) => match &c.node {
@@ -949,6 +964,7 @@ fn is_null_constant(expr: &Node<Expression>) -> bool {
             _ => false,
         },
         Expression::Cast(cast) => is_null_constant(&cast.node.expression),
+        Expression::Identifier(id) => id.node.name == "NULL",
         _ => false,
     }
 }

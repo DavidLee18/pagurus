@@ -18,9 +18,9 @@ retNoneSafe :
   {sc, sc' : Scopes} -> {c : CScopes} ->
   checkStmt (S fuel) ctx sc (SReturn id Nothing) = Right sc' ->
   Represents c sc ->
-  SafeOut (Ok c) sc'
+  SafeOut (Returned c) sc'
 retNoneSafe fuel ctx id eq r =
-  outRewrite (rightInj (trans (sym (checkStmtRetNone fuel ctx sc id)) eq)) (OutOk r)
+  outRewrite (rightInj (trans (sym (checkStmtRetNone fuel ctx sc id)) eq)) OutRet
 
 export
 retVarSafe :
@@ -32,12 +32,12 @@ retVarSafe :
   ActOn Move c n nid o ->
   (res : Either Diag (Scopes, Flag)) ->
   takeOwner ctx sc (EVar nid n nm) = res ->
-  SafeOut o sc'
+  SafeOut (asReturned o) sc'
 retVarSafe fuel ctx rid nid n nm eq r act (Left _) pT =
   void (leftNotRight (trans (sym (retVarLeft fuel ctx rid pT)) eq))
 retVarSafe fuel ctx rid nid n nm eq r act (Right (sc1, fl)) pT =
   outRewrite (rightInj (trans (sym (retVarRight fuel ctx rid pT)) eq))
-    (takeVarActSafe ctx nid n nm pT r act)
+    (outAsRet (takeVarActSafe ctx nid n nm pT r act))
 
 export
 retLitSafe :
@@ -48,9 +48,24 @@ retLitSafe :
         SafeOut (Ok c) sc') ->
   checkStmt (S fuel) ctx sc (SReturn rid (Just (ELit id))) = Right sc' ->
   Represents c sc ->
-  SafeOut (Ok c) sc'
+  SafeOut (Returned c) sc'
 retLitSafe fuel ctx rid id ih eq r =
-  ih (trans (sym (checkStmtRetLit fuel ctx sc rid id)) eq) r
+  let so = ih (trans (sym (checkStmtRetLit fuel ctx sc rid id)) eq) r
+  in outAsRet so
+
+export
+retNullSafe :
+  (fuel : Nat) -> (ctx : Ctx) -> (rid : Nat) -> (id : Nat) ->
+  {sc, sc' : Scopes} -> {c : CScopes} ->
+  (ih : checkExpr ctx sc (ENull id) = Right sc' ->
+        Represents c sc ->
+        SafeOut (Ok c) sc') ->
+  checkStmt (S fuel) ctx sc (SReturn rid (Just (ENull id))) = Right sc' ->
+  Represents c sc ->
+  SafeOut (Returned c) sc'
+retNullSafe fuel ctx rid id ih eq r =
+  let so = ih (trans (sym (checkStmtRetNull fuel ctx sc rid id)) eq) r
+  in outAsRet so
 
 export
 retMallocSafe :
@@ -64,9 +79,9 @@ retMallocSafe :
   checkStmt (S fuel) ctx sc (SReturn rid (Just (EMalloc mid args))) = Right sc' ->
   Represents c sc ->
   EvalExprs ctx c args o ->
-  SafeOut o sc'
+  SafeOut (asReturned o) sc'
 retMallocSafe fuel ctx rid mid args ih eq r evs =
-  ih (trans (sym (checkStmtRetMalloc fuel ctx sc rid mid args)) eq) r (EvMalloc evs)
+  outAsRet (ih (trans (sym (checkStmtRetMalloc fuel ctx sc rid mid args)) eq) r (EvMalloc evs))
 
 export
 retCallSafe :
@@ -80,9 +95,9 @@ retCallSafe :
   checkStmt (S fuel) ctx sc (SReturn rid (Just (ECall id callee args))) = Right sc' ->
   Represents c sc ->
   EvalCall ctx c id callee args o ->
-  SafeOut o sc'
+  SafeOut (asReturned o) sc'
 retCallSafe fuel ctx rid id callee args ih eq r evc =
-  ih (trans (sym (checkStmtRetCall fuel ctx sc rid id callee args)) eq) r (EvCallE evc)
+  outAsRet (ih (trans (sym (checkStmtRetCall fuel ctx sc rid id callee args)) eq) r (EvCallE evc))
 
 export
 retUseSafe :
@@ -96,9 +111,9 @@ retUseSafe :
   checkStmt (S fuel) ctx sc (SReturn rid (Just (EUse uid args))) = Right sc' ->
   Represents c sc ->
   EvalExprs ctx c args o ->
-  SafeOut o sc'
+  SafeOut (asReturned o) sc'
 retUseSafe fuel ctx rid uid args ih eq r evs =
-  ih (trans (sym (checkStmtRetUse fuel ctx sc rid uid args)) eq) r (EvUseAll evs)
+  outAsRet (ih (trans (sym (checkStmtRetUse fuel ctx sc rid uid args)) eq) r (EvUseAll evs))
 
 export
 retAsgSafe :
@@ -112,9 +127,9 @@ retAsgSafe :
   checkStmt (S fuel) ctx sc (SReturn rid (Just (EAssign id n nm ty rhs))) = Right sc' ->
   Represents c sc ->
   EvalExpr ctx c (EAssign id n nm ty rhs) o ->
-  SafeOut o sc'
+  SafeOut (asReturned o) sc'
 retAsgSafe fuel ctx rid id n nm ty rhs ih eq r ev =
-  ih (trans (sym (checkStmtRetAsg fuel ctx sc rid id n nm ty rhs)) eq) r ev
+  outAsRet (ih (trans (sym (checkStmtRetAsg fuel ctx sc rid id n nm ty rhs)) eq) r ev)
 
 export
 retUnsupContra :

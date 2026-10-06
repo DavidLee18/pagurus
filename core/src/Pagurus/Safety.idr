@@ -41,6 +41,19 @@ ownedNotLeft {act = Borrow} Refl impossible
 ownedNotLeft {act = Move} Refl impossible
 ownedNotLeft {act = Drop} Refl impossible
 
+nullNotLeft : {act : Action} -> {n : Nat} -> {d : Diag} ->
+              Not (stepAtom ANull act n = Left d)
+nullNotLeft {act = Use} Refl impossible
+nullNotLeft {act = Borrow} Refl impossible
+nullNotLeft {act = Move} Refl impossible
+nullNotLeft {act = Drop} Refl impossible
+
+nullStep : (act : Action) -> (n : Nat) -> stepAtom ANull act n = Right ANull
+nullStep Use _ = Refl
+nullStep Borrow _ = Refl
+nullStep Move _ = Refl
+nullStep Drop _ = Refl
+
 emptyCrashNotOwn : {act : Action} -> {n : Nat} -> {d : Diag} ->
                    stepAtom AEmpty act n = Left d ->
                    Not (IsOwnershipCrash (Crash d))
@@ -58,6 +71,7 @@ fitWeaken : {s, st : Status} -> {a : Atom} ->
             SubStatus s st -> Fits a s -> Fits a st
 fitWeaken sub (InSt p) = InSt (sub a p)
 fitWeaken _ ExtraEmpty = ExtraEmpty
+fitWeaken _ ExtraNull = ExtraNull
 
 export
 reprRewrite :
@@ -206,7 +220,22 @@ mutual
   loopFixSubGo k ctx sc lid bod scF eq (Left d) pB =
     void (leftNotRight (trans (sym (loopFixLeft lid pB)) eq))
   loopFixSubGo k ctx sc lid bod scF eq (Right sc') pB =
-    loopFixSubEq k ctx sc lid bod scF eq pB (eqScopes (joinScopes sc sc') sc) Refl
+    loopFixSubEnded k ctx sc lid bod scF eq pB (stmtsEnded bod) Refl
+
+  loopFixSubEnded :
+    (k : Nat) -> (ctx : Ctx) -> (sc : Scopes) ->
+    (lid : Nat) -> (bod : List Stmt) -> (scF : Scopes) ->
+    {scB : Scopes} ->
+    loopFix (S k) ctx sc lid bod = Right scF ->
+    checkStmts k ctx sc bod = Right scB ->
+    (ended : Bool) ->
+    stmtsEnded bod = ended ->
+    SubEnv sc scF
+  loopFixSubEnded k ctx sc lid bod scF eq pB True pEnd =
+    replace {p = SubEnv sc} (rightInj (trans (sym (loopFixBodyEnded pEnd pB)) eq))
+      (subEnvRefl sc)
+  loopFixSubEnded k ctx sc lid bod scF eq pB False pEnd =
+    loopFixSubEq k ctx sc lid bod scF eq pB pEnd (eqScopes (joinScopes sc scB) sc) Refl
 
   loopFixSubEq :
     (k : Nat) -> (ctx : Ctx) -> (sc : Scopes) ->
@@ -214,16 +243,17 @@ mutual
     {scB : Scopes} ->
     loopFix (S k) ctx sc lid bod = Right scF ->
     checkStmts k ctx sc bod = Right scB ->
+    stmtsEnded bod = False ->
     (b : Bool) ->
     eqScopes (joinScopes sc scB) sc = b ->
     SubEnv sc scF
-  loopFixSubEq k ctx sc lid bod scF eq pB True pEq =
-    replace {p = SubEnv sc} (rightInj (trans (sym (loopFixTrue pB pEq)) eq))
+  loopFixSubEq k ctx sc lid bod scF eq pB pEnd True pEq =
+    replace {p = SubEnv sc} (rightInj (trans (sym (loopFixTrue pEnd pB pEq)) eq))
       (joinLeftSub sc scB)
-  loopFixSubEq k ctx sc lid bod scF eq pB False pEq =
+  loopFixSubEq k ctx sc lid bod scF eq pB pEnd False pEq =
     subEnvTrans (joinLeftSub sc scB)
       (loopFixSub k ctx (joinScopes sc scB) lid bod scF
-        (trans (sym (loopFixFalse lid pB pEq)) eq))
+        (trans (sym (loopFixFalse lid pEnd pB pEq)) eq))
 
 --------------------------------------------------------------------------------
 -- ActOn / drop / use / move
@@ -251,6 +281,7 @@ actOnSound r look step (ActCrash a lookc crash) hit =
                  (rewrite sym sameSt in step) a inS
          in void (leftNotRight (trans (sym crash) okA))
        ExtraEmpty => emptyCrashNotOwn crash hit
+       ExtraNull => nullNotLeft crash
 
 export
 actOnPres :
@@ -273,6 +304,9 @@ actOnPres r look step (ActOk a a' lookc stepA) =
              sameA = rightInj (trans (sym stepA) okA)
          in reprSetFit r (InSt (replace {p = \x => inSet x st' = True} (sym sameA) inA))
        ExtraEmpty => void (emptyNotRight stepA)
+       ExtraNull =>
+         let sameA = rightInj (trans (sym stepA) (nullStep act nid))
+         in reprSetFit r (replace {p = \x => Fits x st'} (sym sameA) ExtraNull)
 
 export
 dropSafe :
@@ -515,11 +549,25 @@ reprSetEmpty :
 reprSetEmpty r = reprSetFit r ExtraEmpty
 
 export
+reprSetNull :
+  {n : Place} -> {c : CScopes} -> {sc : Scopes} ->
+  Represents c sc ->
+  Represents (setC n ANull c) (setPlace n (Pagurus.Status.singleton ANull) sc)
+reprSetNull r = reprSetFit r ExtraNull
+
+export
 reprSetFitEmpty :
   {n : Place} -> {st' : Status} -> {c : CScopes} -> {sc : Scopes} ->
   Represents c sc ->
   Represents (setC n AEmpty c) (setPlace n st' sc)
 reprSetFitEmpty r = reprSetFit r ExtraEmpty
+
+export
+reprSetFitNull :
+  {n : Place} -> {st' : Status} -> {c : CScopes} -> {sc : Scopes} ->
+  Represents c sc ->
+  Represents (setC n ANull c) (setPlace n st' sc)
+reprSetFitNull r = reprSetFit r ExtraNull
 
 usePlaceJustR :
   {sc : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
@@ -596,6 +644,47 @@ mutual
 
 mutual
   export
+  usePlaceNullPres :
+    {sc1, sc' : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
+    {c1 : CScopes} ->
+    usePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n nid nm = Right sc' ->
+    Represents c1 sc1 ->
+    Represents (setC n ANull c1) sc'
+  usePlaceNullPres {n} {sc1} eq r =
+    usePlaceNullGo eq r (lookupPlace n (setPlace n (Pagurus.Status.singleton AOwned) sc1)) Refl
+
+  usePlaceNullGo :
+    {sc1, sc' : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
+    {c1 : CScopes} ->
+    usePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n nid nm = Right sc' ->
+    Represents c1 sc1 ->
+    (look : Maybe Status) ->
+    lookupPlace n (setPlace n (Pagurus.Status.singleton AOwned) sc1) = look ->
+    Represents (setC n ANull c1) sc'
+  usePlaceNullGo {n} {sc1} eq r Nothing pLook =
+    void (justNotNothing (trans (sym (lookupPlaceSetHit n (Pagurus.Status.singleton AOwned) sc1)) pLook))
+  usePlaceNullGo {n} {nid} {sc1} eq r (Just st) pLook =
+    usePlaceNullStep eq r pLook (stepStatus st Use nid) Refl
+
+  usePlaceNullStep :
+    {sc1, sc' : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
+    {c1 : CScopes} -> {st : Status} ->
+    usePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n nid nm = Right sc' ->
+    Represents c1 sc1 ->
+    lookupPlace n (setPlace n (Pagurus.Status.singleton AOwned) sc1) = Just st ->
+    (resS : Either Diag Status) ->
+    stepStatus st Use nid = resS ->
+    Represents (setC n ANull c1) sc'
+  usePlaceNullStep eq r pLook (Left d) pStep =
+    void (leftNotRight (trans (sym (usePlaceJustL pLook pStep)) eq))
+  usePlaceNullStep {n} {sc1} eq r pLook (Right st') pStep =
+    reprRewrite
+      (trans (sym (setPlaceSetPlace n (Pagurus.Status.singleton AOwned) st' sc1))
+             (rightInj (trans (sym (usePlaceJustR pLook pStep)) eq)))
+      (reprSetFitNull r)
+
+mutual
+  export
   movePlaceEmptyPres :
     {sc1, sc' : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
     {c1 : CScopes} ->
@@ -635,10 +724,55 @@ mutual
              (rightInj (trans (sym (movePlaceJustR pLook pStep)) eq)))
       (reprSetFitEmpty r)
 
+mutual
+  export
+  movePlaceNullPres :
+    {sc1, sc' : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
+    {c1 : CScopes} ->
+    movePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n nid nm = Right sc' ->
+    Represents c1 sc1 ->
+    Represents (setC n ANull c1) sc'
+  movePlaceNullPres {n} {sc1} eq r =
+    movePlaceNullGo eq r (lookupPlace n (setPlace n (Pagurus.Status.singleton AOwned) sc1)) Refl
+
+  movePlaceNullGo :
+    {sc1, sc' : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
+    {c1 : CScopes} ->
+    movePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n nid nm = Right sc' ->
+    Represents c1 sc1 ->
+    (look : Maybe Status) ->
+    lookupPlace n (setPlace n (Pagurus.Status.singleton AOwned) sc1) = look ->
+    Represents (setC n ANull c1) sc'
+  movePlaceNullGo {n} {sc1} eq r Nothing pLook =
+    void (justNotNothing (trans (sym (lookupPlaceSetHit n (Pagurus.Status.singleton AOwned) sc1)) pLook))
+  movePlaceNullGo {n} {nid} {sc1} eq r (Just st) pLook =
+    movePlaceNullStep eq r pLook (stepStatus st Move nid) Refl
+
+  movePlaceNullStep :
+    {sc1, sc' : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
+    {c1 : CScopes} -> {st : Status} ->
+    movePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n nid nm = Right sc' ->
+    Represents c1 sc1 ->
+    lookupPlace n (setPlace n (Pagurus.Status.singleton AOwned) sc1) = Just st ->
+    (resS : Either Diag Status) ->
+    stepStatus st Move nid = resS ->
+    Represents (setC n ANull c1) sc'
+  movePlaceNullStep eq r pLook (Left d) pStep =
+    void (leftNotRight (trans (sym (movePlaceJustL pLook pStep)) eq))
+  movePlaceNullStep {n} {sc1} eq r pLook (Right st') pStep =
+    reprRewrite
+      (trans (sym (setPlaceSetPlace n (Pagurus.Status.singleton AOwned) st' sc1))
+             (rightInj (trans (sym (movePlaceJustR pLook pStep)) eq)))
+      (reprSetFitNull r)
+
 
 export
 ghostNotOwner : Not (Ghost = Owner)
 ghostNotOwner Refl impossible
+
+export
+nullNotOwner : Not (Null = Owner)
+nullNotOwner Refl impossible
 
 export
 ownerNotGhost : Not (Owner = Ghost)
@@ -670,6 +804,27 @@ ownerAsgMove eq pT (Left d) pM =
 ownerAsgMove eq pT (Right sc2) pM =
   sym (cong snd (rightInj (trans (sym (takeAsgPtrOwner pT pM)) eq)))
 
+export
+reallocFresh :
+  {ctx : Ctx} -> {callee : String} ->
+  isRealloc callee = True ->
+  isDefined ctx callee = False ->
+  isRealloc callee && not (isDefined ctx callee) = True
+reallocFresh pr pd = rewrite pr in rewrite pd in Refl
+
+ownerReallocGo :
+  {ctx : Ctx} -> {sc, sc' : Scopes} ->
+  {id : Nat} -> {callee : String} -> {args : List Expr} -> {fl : Flag} ->
+  takeOwner ctx sc (ECall id callee args) = Right (sc', fl) ->
+  isRealloc callee && not (isDefined ctx callee) = True ->
+  (res : Either Diag Scopes) ->
+  checkCall ctx sc id callee args = res ->
+  fl = Owner
+ownerReallocGo eq pFresh (Left d) pC =
+  void (leftNotRight (trans (sym (takeReallocLeft pFresh pC)) eq))
+ownerReallocGo eq pFresh (Right sc1) pC =
+  sym (cong snd (rightInj (trans (sym (takeReallocRight pFresh pC)) eq)))
+
 mutual
   export
   ownerFlagTrue :
@@ -685,6 +840,8 @@ mutual
     ownerVarGo ctx eq r lookc (lookupPlace n sc) Refl
   ownerFlagTrue {e = EAssign id n nm Ptr rhs} {ctx} {sc} eq r (TakeAsgPtrOwn c1 take act) =
     ownerAsgGo id n nm eq r take (takeOwner ctx sc rhs) Refl
+  ownerFlagTrue {e = ECall id callee args} {ctx} {sc} eq r (TakeRealloc pr pd evc) =
+    ownerReallocGo eq (reallocFresh pr pd) (checkCall ctx sc id callee args) Refl
 
   ownerVarGo :
     (ctx : Ctx) ->
@@ -730,6 +887,8 @@ mutual
     void (leftNotRight (trans (sym (takeAsgPtrLeft id n nm pT)) eq))
   ownerAsgGo id n nm eq r take (Right (sc1, Ghost)) pT =
     void (ghostNotOwner (ownerFlagTrue pT r take))
+  ownerAsgGo id n nm eq r take (Right (sc1, Null)) pT =
+    void (nullNotOwner (ownerFlagTrue pT r take))
   ownerAsgGo id n nm eq r take (Right (sc1, Owner)) pT =
     ownerAsgMove eq pT (movePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n id nm)
       Refl
@@ -742,11 +901,13 @@ public export
 data SafeOut : Outcome -> Scopes -> Type where
   OutOk : {c' : CScopes} -> Represents c' sc' -> SafeOut (Ok c') sc'
   OutCrash : Not (IsOwnershipCrash (Crash d)) -> SafeOut (Crash d) sc'
+  OutRet : SafeOut (Returned c') sc'
 
 export
 fromOut : SafeOut o sc' -> Not (IsOwnershipCrash o)
 fromOut (OutOk _) hit = okNotHit hit
 fromOut (OutCrash p) hit = p hit
+fromOut OutRet (Hit _) impossible
 
 export
 outRewrite : {sc1, sc2 : Scopes} -> sc1 = sc2 -> SafeOut o sc1 -> SafeOut o sc2
@@ -756,11 +917,13 @@ export
 joinOutL : {scT, scE : Scopes} -> SafeOut o scT -> SafeOut o (joinScopes scT scE)
 joinOutL (OutOk r) = OutOk (reprJoinLeft r)
 joinOutL (OutCrash p) = OutCrash p
+joinOutL OutRet = OutRet
 
 export
 joinOutR : {scT, scE : Scopes} -> SafeOut o scE -> SafeOut o (joinScopes scT scE)
 joinOutR (OutOk r) = OutOk (reprJoinRight r)
 joinOutR (OutCrash p) = OutCrash p
+joinOutR OutRet = OutRet
 
 export
 crashScope : SafeOut (Crash d) sc1 -> SafeOut (Crash d) sc2
@@ -771,6 +934,25 @@ fromOk : SafeOut (Ok c') sc' -> Represents c' sc'
 fromOk (OutOk r) = r
 
 export
+isReturnEnds : {s : Stmt} -> isReturnStmt s = True -> stmtEnds s = True
+isReturnEnds {s = SReturn _ _} Refl = Refl
+isReturnEnds {s = SBlock _ _} p = void (falseNotTrue p)
+isReturnEnds {s = SDecl _ _ _ _ _} p = void (falseNotTrue p)
+isReturnEnds {s = SAssign _ _ _ _ _} p = void (falseNotTrue p)
+isReturnEnds {s = SDrop _ _ _} p = void (falseNotTrue p)
+isReturnEnds {s = SCall _ _ _} p = void (falseNotTrue p)
+isReturnEnds {s = SIf _ _ _ _} p = void (falseNotTrue p)
+isReturnEnds {s = SLoop _ _} p = void (falseNotTrue p)
+isReturnEnds {s = SExpr _ _} p = void (falseNotTrue p)
+isReturnEnds {s = SUnsupported _ _} p = void (falseNotTrue p)
+
+export
+outAsRet : SafeOut o sc' -> SafeOut (asReturned o) sc'
+outAsRet (OutOk _) = OutRet
+outAsRet (OutCrash p) = OutCrash p
+outAsRet OutRet = OutRet
+
+export
 outUse : {sc, sc' : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
          {c : CScopes} -> {o : Outcome} ->
          usePlace sc n nid nm = Right sc' ->
@@ -779,6 +961,7 @@ outUse : {sc, sc' : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
          SafeOut o sc'
 outUse {o = Ok _} eq r act = OutOk (usePlacePres eq r act)
 outUse {o = Crash _} eq r act = OutCrash (usePlaceSafe eq r act)
+outUse {o = Returned _} eq r act impossible
 
 export
 outMove : {sc, sc' : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
@@ -789,6 +972,7 @@ outMove : {sc, sc' : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
           SafeOut o sc'
 outMove {o = Ok _} eq r act = OutOk (movePlacePres eq r act)
 outMove {o = Crash _} eq r act = OutCrash (movePlaceSafe eq r act)
+outMove {o = Returned _} eq r act impossible
 
 export
 outDrop : {sc, sc' : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
@@ -799,6 +983,64 @@ outDrop : {sc, sc' : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
           SafeOut o sc'
 outDrop {o = Ok _} eq r act = OutOk (dropPres eq r act)
 outDrop {o = Crash _} eq r act = OutCrash (dropSafe eq r act)
+outDrop {o = Returned _} eq r act impossible
+
+export
+asReturnedNotOk : {0 o : Outcome} -> {0 c : CScopes} -> asReturned o = Ok c -> Void
+asReturnedNotOk {o = Ok _} Refl impossible
+asReturnedNotOk {o = Crash _} Refl impossible
+asReturnedNotOk {o = Returned _} Refl impossible
+
+export
+retStmtNotOk :
+  {ctx : Ctx} -> {c, c' : CScopes} -> {id : Nat} -> {v : Maybe Expr} ->
+  {o : Outcome} ->
+  EvalStmt ctx c (SReturn id v) o ->
+  o = Ok c' ->
+  Void
+retStmtNotOk EvRetNone Refl impossible
+retStmtNotOk (EvRetVar o _) eq = asReturnedNotOk {o} eq
+retStmtNotOk EvRetLit Refl impossible
+retStmtNotOk EvRetNull Refl impossible
+retStmtNotOk (EvRetMalloc o _) eq = asReturnedNotOk {o} eq
+retStmtNotOk (EvRetCall o _) eq = asReturnedNotOk {o} eq
+retStmtNotOk (EvRetUse o _) eq = asReturnedNotOk {o} eq
+retStmtNotOk (EvRetAsg o _) eq = asReturnedNotOk {o} eq
+retStmtNotOk (EvRetUnsup _) Refl impossible
+
+mutual
+  export
+  stmtEndedNotOk :
+    {ctx : Ctx} -> {s : Stmt} -> {c, c' : CScopes} ->
+    stmtEnds s = True ->
+    EvalStmt ctx c s (Ok c') ->
+    Void
+  stmtEndedNotOk {s = SReturn id v} _ ev = retStmtNotOk ev Refl
+  stmtEndedNotOk {s = SBlock _ body} p (EvBlock ev) = stmtsEndedNotOk p ev
+  stmtEndedNotOk {s = SIf _ _ t e} p (EvIfThen _ _ evT) =
+    stmtsEndedNotOk (fst (andTrue {a = stmtsEnded t} {b = stmtsEnded e} p)) evT
+  stmtEndedNotOk {s = SIf _ _ t e} p (EvIfElse _ _ evE) =
+    stmtsEndedNotOk (snd (andTrue {a = stmtsEnded t} {b = stmtsEnded e} p)) evE
+  stmtEndedNotOk {s = SIf _ _ _ _} _ (EvIfCondCrash _) impossible
+  stmtEndedNotOk {s = SDecl _ _ _ _ _} p _ = void (falseNotTrue p)
+  stmtEndedNotOk {s = SAssign _ _ _ _ _} p _ = void (falseNotTrue p)
+  stmtEndedNotOk {s = SDrop _ _ _} p _ = void (falseNotTrue p)
+  stmtEndedNotOk {s = SCall _ _ _} p _ = void (falseNotTrue p)
+  stmtEndedNotOk {s = SLoop _ _} p _ = void (falseNotTrue p)
+  stmtEndedNotOk {s = SExpr _ _} p _ = void (falseNotTrue p)
+  stmtEndedNotOk {s = SUnsupported _ _} p _ = void (falseNotTrue p)
+
+  export
+  stmtsEndedNotOk :
+    {ctx : Ctx} -> {ss : List Stmt} -> {c, c' : CScopes} ->
+    stmtsEnded ss = True ->
+    EvalStmts ctx c ss (Ok c') ->
+    Void
+  stmtsEndedNotOk {ss = []} p _ = void (falseNotTrue p)
+  stmtsEndedNotOk {ss = s :: rest} pEnds (EvConsOk _ evS evSS) =
+    case orTrue {a = stmtEnds s} {b = stmtsEnded rest} pEnds of
+      Left pS => stmtEndedNotOk pS evS
+      Right pRest => stmtsEndedNotOk pRest evSS
 
 ||| If `checkStmts fuel` accepts, no concrete `EvalStmts` from a represented
 ||| store is UAM/UAF/DF. Fuel exhaustion is a rejection. The inhabitant lives

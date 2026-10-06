@@ -146,6 +146,7 @@ fn emit_expr(out: &mut String, expr: &Expr) {
             out.push_str(&format!("(var {id} {place} {name})"));
         }
         Expr::Lit { id } => out.push_str(&format!("(lit {id})")),
+        Expr::Null { id } => out.push_str(&format!("(null {id})")),
         Expr::Malloc { id, args } => {
             out.push_str(&format!("(malloc {id}"));
             for a in args {

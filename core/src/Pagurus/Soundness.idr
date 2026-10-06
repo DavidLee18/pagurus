@@ -48,6 +48,18 @@ emptyDropRejected : (n : Nat) -> IsLeft (stepAtom AEmpty Drop n)
 emptyDropRejected n = ItIsLeft
 
 export
+nullUseOk : (n : Nat) -> stepAtom ANull Use n = Right ANull
+nullUseOk n = Refl
+
+export
+nullMoveOk : (n : Nat) -> stepAtom ANull Move n = Right ANull
+nullMoveOk n = Refl
+
+export
+nullDropOk : (n : Nat) -> stepAtom ANull Drop n = Right ANull
+nullDropOk n = Refl
+
+export
 movedUseRejected : (at, n : Nat) -> IsLeft (stepAtom (AMoved at) Use n)
 movedUseRejected at n = ItIsLeft
 

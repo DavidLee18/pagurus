@@ -1,4 +1,4 @@
-/* FAIL: the identifier NULL is not rewritten; free(NULL) is rejected. */
+/* PASS: identifier NULL is modelled as the null pointer constant. */
 void *malloc(unsigned long n);
 void free(void *p);
 

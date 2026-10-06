@@ -1,12 +1,10 @@
-/* PASS: free(0) / free((void *)0) / free(NULL) is a defined no-op. */
+/* PASS: overwriting an owner with NULL, then free, is free(NULL). Leak is out of scope. */
 void *malloc(unsigned long n);
 void free(void *p);
 
 int main(void) {
     void *p = malloc(4);
-    free(0);
-    free((void *)0);
-    free(NULL);
+    p = NULL;
     free(p);
     return 0;
 }

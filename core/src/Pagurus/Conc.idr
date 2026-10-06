@@ -8,8 +8,10 @@
 ||| are desugared by the frontend to `cond; Loop[body; cond]` (and the
 ||| do-while analogue) so the exiting condition evaluation is an ordinary
 ||| statement the theorem sees. Calls do not run callee bodies; they
-||| borrow or move arguments according to `isConsuming`. `SReturn` does
-||| not stop the remaining statement list.
+||| borrow or move arguments according to `isConsuming`. Prototype
+||| `realloc` consumes its first argument and yields a fresh owner.
+||| `SReturn` produces `Returned` and does not run the remaining
+||| statement list.
 |||
 ||| Expression evaluation follows `checkExpr` (uses). Taking an owner
 ||| follows `takeOwner` (moves). Calls follow `checkCall`: builtins and
@@ -72,6 +74,7 @@ public export
 data Fits : Atom -> Status -> Type where
   InSt : inSet a st = True -> Fits a st
   ExtraEmpty : Fits AEmpty st
+  ExtraNull : Fits ANull st
 
 ||| Concrete store `c` is represented by abstract scopes `sc` when every
 ||| concrete atom fits the corresponding abstract status.
@@ -86,6 +89,8 @@ public export
 data Outcome : Type where
   Ok : CScopes -> Outcome
   Crash : Diag -> Outcome
+  ||| The function returned; remaining statements on this path do not run.
+  Returned : CScopes -> Outcome
 
 public export
 isOwnershipKind : Kind -> Bool
@@ -99,6 +104,13 @@ public export
 data IsOwnershipCrash : Outcome -> Type where
   Hit : {d : Diag} -> isOwnershipKind d.kind = True ->
         IsOwnershipCrash (Crash d)
+
+||| Successful evaluation of a `return` becomes `Returned`; crashes stay crashes.
+public export
+asReturned : Outcome -> Outcome
+asReturned (Ok c) = Returned c
+asReturned (Crash d) = Crash d
+asReturned (Returned c) = Returned c
 
 public export
 data ActOn : Action -> CScopes -> Place -> Nat -> Outcome -> Type where
@@ -138,6 +150,7 @@ mutual
   public export
   data EvalExpr : Ctx -> CScopes -> Expr -> Outcome -> Type where
     EvLit : EvalExpr ctx c (ELit _) (Ok c)
+    EvNull : EvalExpr ctx c (ENull _) (Ok c)
     EvMalloc : EvalExprs ctx c args o -> EvalExpr ctx c (EMalloc _ args) o
     EvVarUse : ActOn Use c n nid o -> EvalExpr ctx c (EVar nid n nm) o
     EvUnsupE : {d : Diag} -> d = unsupDiag nid reason ->
@@ -158,6 +171,10 @@ mutual
       (c1 : CScopes) ->
       TakeOwnerE ctx c rhs (Ok c1) Ghost ->
       EvalExpr ctx c (EAssign nid n nm Ptr rhs) (Ok (setC n AEmpty c1))
+    EvAsgPtrNull :
+      (c1 : CScopes) ->
+      TakeOwnerE ctx c rhs (Ok c1) Null ->
+      EvalExpr ctx c (EAssign nid n nm Ptr rhs) (Ok (setC n ANull c1))
 
   public export
   data EvalExprs : Ctx -> CScopes -> List Expr -> Outcome -> Type where
@@ -174,6 +191,7 @@ mutual
     TakeMalloc : EvalExprs ctx c args o ->
                  TakeOwnerE ctx c (EMalloc _ args) o Owner
     TakeLit : TakeOwnerE ctx c (ELit _) (Ok c) Ghost
+    TakeNull : TakeOwnerE ctx c (ENull _) (Ok c) Null
     TakeVarMiss :
       lookupC n c = Nothing ->
       TakeOwnerE ctx c (EVar nid n nm) (Ok c) Ghost
@@ -197,8 +215,17 @@ mutual
       (c1 : CScopes) ->
       TakeOwnerE ctx c rhs (Ok c1) Ghost ->
       TakeOwnerE ctx c (EAssign nid n nm Ptr rhs) (Ok (setC n AEmpty c1)) Ghost
-    TakeCall : EvalCall ctx c nid callee args o ->
+    TakeAsgPtrNull :
+      (c1 : CScopes) ->
+      TakeOwnerE ctx c rhs (Ok c1) Null ->
+      TakeOwnerE ctx c (EAssign nid n nm Ptr rhs) (Ok (setC n ANull c1)) Null
+    TakeCall : isRealloc callee && not (isDefined ctx callee) = False ->
+               EvalCall ctx c nid callee args o ->
                TakeOwnerE ctx c (ECall nid callee args) o Ghost
+    TakeRealloc : isRealloc callee = True ->
+                  isDefined ctx callee = False ->
+                  EvalCall ctx c nid callee args o ->
+                  TakeOwnerE ctx c (ECall nid callee args) o Owner
     TakeUse : EvalExprs ctx c args o ->
               TakeOwnerE ctx c (EUse _ args) o Ghost
     TakeUnsup : {d : Diag} -> d = unsupDiag nid reason ->
@@ -215,13 +242,31 @@ mutual
       TakeOwners ctx c1 es o ->
       TakeOwners ctx c (e :: es) o
 
+  ||| `realloc` consumes the first argument and borrows the rest (the size).
+  public export
+  data ReallocArgs : Ctx -> CScopes -> List Expr -> Outcome -> Type where
+    ReNil : ReallocArgs ctx c [] (Ok c)
+    ReHeadCrash : TakeOwnerE ctx c e (Crash d) fl ->
+                  ReallocArgs ctx c (e :: es) (Crash d)
+    ReHeadOk :
+      (c1 : CScopes) ->
+      TakeOwnerE ctx c e (Ok c1) fl ->
+      EvalExprs ctx c1 es o ->
+      ReallocArgs ctx c (e :: es) o
+
   public export
   data EvalCall : Ctx -> CScopes -> Nat -> String -> List Expr -> Outcome -> Type where
     CallBuiltin : isBuiltin callee = True ->
                   EvalExprs ctx c args o ->
                   EvalCall ctx c nid callee args o
+    CallRealloc : isBuiltin callee = False ->
+                  isRealloc callee = True ->
+                  isDefined ctx callee = False ->
+                  ReallocArgs ctx c args o ->
+                  EvalCall ctx c nid callee args o
     CallOpaque : {d : Diag} ->
                  isBuiltin callee = False ->
+                 isRealloc callee = False ->
                  isDefined ctx callee = False ->
                  d = opaqueCallDiag nid callee ->
                  EvalCall ctx c nid callee args (Crash d)
@@ -251,6 +296,10 @@ mutual
       (c1 : CScopes) ->
       TakeOwnerE ctx c rhs (Ok c1) Ghost ->
       EvalStmt ctx c (SAssign nid n nm Ptr rhs) (Ok (setC n AEmpty c1))
+    EvStmtAsgPtrNull :
+      (c1 : CScopes) ->
+      TakeOwnerE ctx c rhs (Ok c1) Null ->
+      EvalStmt ctx c (SAssign nid n nm Ptr rhs) (Ok (setC n ANull c1))
     EvDeclCopyNone : EvalStmt ctx c (SDecl _ _ _ Copy Nothing) (Ok c)
     EvDeclPtrNone : EvalStmt ctx c (SDecl _ p _ Ptr Nothing) (Ok (setC p AEmpty c))
     EvDeclCopy : EvalExpr ctx c e o ->
@@ -261,20 +310,29 @@ mutual
       (c' : CScopes) ->
       TakeOwnerE ctx c e (Ok c') Owner ->
       EvalStmt ctx c (SDecl _ p _ Ptr (Just e)) (Ok (setC p AOwned c'))
+    EvDeclPtrGhost :
+      (c' : CScopes) ->
+      TakeOwnerE ctx c e (Ok c') Ghost ->
+      EvalStmt ctx c (SDecl _ p _ Ptr (Just e)) (Ok (setC p AEmpty c'))
+    EvDeclPtrNull :
+      (c' : CScopes) ->
+      TakeOwnerE ctx c e (Ok c') Null ->
+      EvalStmt ctx c (SDecl _ p _ Ptr (Just e)) (Ok (setC p ANull c'))
     EvCallS : EvalCall ctx c nid callee args o ->
               EvalStmt ctx c (SCall nid callee args) o
-    EvRetNone : EvalStmt ctx c (SReturn _ Nothing) (Ok c)
-    EvRetVar : ActOn Move c n nid o ->
-               EvalStmt ctx c (SReturn _ (Just (EVar nid n nm))) o
-    EvRetLit : EvalStmt ctx c (SReturn _ (Just (ELit _))) (Ok c)
-    EvRetMalloc : EvalExprs ctx c args o ->
-                  EvalStmt ctx c (SReturn _ (Just (EMalloc _ args))) o
-    EvRetCall : EvalCall ctx c nid callee args o ->
-                EvalStmt ctx c (SReturn _ (Just (ECall nid callee args))) o
-    EvRetUse : EvalExprs ctx c args o ->
-               EvalStmt ctx c (SReturn _ (Just (EUse _ args))) o
-    EvRetAsg : EvalExpr ctx c (EAssign nid n nm sty rhs) o ->
-               EvalStmt ctx c (SReturn _ (Just (EAssign nid n nm sty rhs))) o
+    EvRetNone : EvalStmt ctx c (SReturn _ Nothing) (Returned c)
+    EvRetVar : (o : Outcome) -> ActOn Move c n nid o ->
+               EvalStmt ctx c (SReturn _ (Just (EVar nid n nm))) (asReturned o)
+    EvRetLit : EvalStmt ctx c (SReturn _ (Just (ELit _))) (Returned c)
+    EvRetNull : EvalStmt ctx c (SReturn _ (Just (ENull _))) (Returned c)
+    EvRetMalloc : (o : Outcome) -> EvalExprs ctx c args o ->
+                  EvalStmt ctx c (SReturn _ (Just (EMalloc _ args))) (asReturned o)
+    EvRetCall : (o : Outcome) -> EvalCall ctx c nid callee args o ->
+                EvalStmt ctx c (SReturn _ (Just (ECall nid callee args))) (asReturned o)
+    EvRetUse : (o : Outcome) -> EvalExprs ctx c args o ->
+               EvalStmt ctx c (SReturn _ (Just (EUse _ args))) (asReturned o)
+    EvRetAsg : (o : Outcome) -> EvalExpr ctx c (EAssign nid n nm sty rhs) o ->
+               EvalStmt ctx c (SReturn _ (Just (EAssign nid n nm sty rhs))) (asReturned o)
     EvRetUnsup : {d : Diag} -> d = unsupDiag nid reason ->
                  EvalStmt ctx c (SReturn _ (Just (EUnsupported nid reason))) (Crash d)
     EvExprS : EvalExpr ctx c e o -> EvalStmt ctx c (SExpr _ e) o
@@ -303,11 +361,15 @@ mutual
       EvalStmt ctx c (SLoop nid bod) o
     EvLoopCrash : EvalStmts ctx c bod (Crash d) ->
                   EvalStmt ctx c (SLoop nid bod) (Crash d)
+    EvLoopRet : EvalStmts ctx c bod (Returned c1) ->
+                EvalStmt ctx c (SLoop nid bod) (Returned c1)
 
   public export
   data EvalStmts : Ctx -> CScopes -> List Stmt -> Outcome -> Type where
     EvNil : EvalStmts ctx c [] (Ok c)
     EvConsCrash : EvalStmt ctx c s (Crash d) -> EvalStmts ctx c (s :: ss) (Crash d)
+    EvConsRet : EvalStmt ctx c s (Returned c1) ->
+                EvalStmts ctx c (s :: ss) (Returned c1)
     EvConsOk :
       (c1 : CScopes) ->
       EvalStmt ctx c s (Ok c1) -> EvalStmts ctx c1 ss o ->

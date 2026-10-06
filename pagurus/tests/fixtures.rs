@@ -92,6 +92,43 @@ fn pass_free_null_constant_is_clean() {
 }
 
 #[test]
+fn pass_free_null_identifier_is_clean() {
+    let diags = check(&fixture("pass", "free_null_ident.c"));
+    assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+}
+
+#[test]
+fn pass_known_null_free_is_clean() {
+    for name in [
+        "null_after_free.c",
+        "assign_null_then_free.c",
+        "free_null_twice.c",
+    ] {
+        let diags = check(&fixture("pass", name));
+        assert!(diags.is_empty(), "{name} must be accepted, got {diags:?}");
+    }
+}
+
+#[test]
+fn pass_return_ends_the_path() {
+    for name in [
+        "early_return_free.c",
+        "dead_free_after_return.c",
+        "return_mid_loop_safe.c",
+        "for_empty_cond_return.c",
+    ] {
+        let diags = check(&fixture("pass", name));
+        assert!(diags.is_empty(), "{name} must be accepted, got {diags:?}");
+    }
+}
+
+#[test]
+fn pass_realloc_ok_is_clean() {
+    let diags = check(&fixture("pass", "realloc_ok.c"));
+    assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+}
+
+#[test]
 fn fail_use_after_move() {
     let path = fixture("fail", "use_after_move.c");
     let diags = check(&path);
@@ -283,11 +320,39 @@ fn fail_opaque_prototype_is_unsupported() {
 }
 
 #[test]
-fn fail_free_null_identifier_is_rejected() {
-    let diags = check(&fixture("fail", "free_null_ident.c"));
+fn fail_else_return_then_df() {
+    let diags = check(&fixture("fail", "else_return_then_df.c"));
+    assert!(
+        diags.iter().any(|d| d.kind == DiagnosticKind::DoubleFree
+            || d.kind == DiagnosticKind::UseAfterFree),
+        "expected double-free after a non-returning then-branch, got {diags:?}"
+    );
+}
+
+#[test]
+fn fail_wrap_return_df_is_not_treated_as_null() {
+    let diags = check(&fixture("fail", "wrap_return_df.c"));
     assert!(
         !diags.is_empty(),
-        "expected conservative rejection of free(NULL) as an identifier"
+        "a malloc-returning wrapper must not be modelled as known-null (would hide a double free)"
+    );
+}
+
+#[test]
+fn fail_realloc_result_df() {
+    let diags = check(&fixture("fail", "realloc_result_df.c"));
+    assert!(
+        diags.iter().any(|d| d.kind == DiagnosticKind::DoubleFree),
+        "expected double-free of realloc result, got {diags:?}"
+    );
+}
+
+#[test]
+fn fail_tu_realloc_is_not_synthetic() {
+    let diags = check(&fixture("fail", "tu_realloc.c"));
+    assert!(
+        !diags.is_empty(),
+        "a realloc defined in this TU must not be the synthetic allocator"
     );
 }
 
@@ -299,6 +364,8 @@ const CEX2_PASS: &[&str] = &[
     "safe_while_int.c",
     "safe_while_ptr_use.c",
     "safe_while_realloc.c",
+    "return_mid_loop_safe.c",
+    "for_empty_cond_return.c",
 ];
 
 /// Programs from the pg-cex2 suite that must be rejected (false accepts,
@@ -311,7 +378,6 @@ const CEX2_FAIL: &[&str] = &[
     "cond_assign_consume.c",
     "continue_for.c",
     "elseif_consume.c",
-    "for_empty_cond_return.c",
     "for_empty_init_cond_df.c",
     "for_empty_step_df.c",
     "goto_stmt.c",
@@ -322,7 +388,6 @@ const CEX2_FAIL: &[&str] = &[
     "ptr_compound_alias.c",
     "ptr_increment_free.c",
     "return_consume_df.c",
-    "return_mid_loop_safe.c",
     "sc_and_assign_move.c",
     "sc_and_consume_safe.c",
     "sc_and_reinit.c",
@@ -358,7 +423,12 @@ fn cex2_false_accepts_and_rejects_are_rejected() {
 }
 
 /// pg-cex3 programmes that pagurus accepted at c3de693 (`pag_rc=0`).
-const CEX3_PASS: &[&str] = &["cast_lhs_assign.c", "two_sinks.c"];
+const CEX3_PASS: &[&str] = &[
+    "cast_lhs_assign.c",
+    "two_sinks.c",
+    "null_after_free.c",
+    "realloc_ok.c",
+];
 
 /// pg-cex3 programmes rejected by the checker at c3de693 (`pag_rc=1`).
 const CEX3_FAIL: &[&str] = &[
@@ -376,12 +446,10 @@ const CEX3_FAIL: &[&str] = &[
     "id_alias_only_q.c",
     "if_guard_free.c",
     "mutual_rec.c",
-    "null_after_free.c",
     "param_consume_unseen.c",
     "pp_addr_consume.c",
     "pp_deref_free.c",
     "realloc_df.c",
-    "realloc_ok.c",
     "return_p_alias.c",
     "strdup_df.c",
     "unary_addr.c",
@@ -425,4 +493,46 @@ fn cex3_stmt_expr_stays_a_parse_failure() {
         err.to_string().contains("failed to parse"),
         "expected a parse error, got {err}"
     );
+}
+
+/// pg-cex4 programmes that must be rejected. `a1`–`a4` are the
+/// literal-as-null soundness regression; the rest are sound rejects
+/// from that suite's RESULTS.txt.
+const CEX4_FAIL: &[&str] = &[
+    "a1_lit1.c",
+    "a2_free_then_lit.c",
+    "a3_litnocast.c",
+    "a4_strlit.c",
+    "c1_ifnull_df.c",
+    "c2_join_df.c",
+    "r1_realloc_old_df.c",
+    "r2_realloc_self_df.c",
+    "ret1_elsepath_df.c",
+];
+
+#[test]
+fn cex4_literal_null_false_accepts_are_rejected() {
+    for name in [
+        "a1_lit1.c",
+        "a2_free_then_lit.c",
+        "a3_litnocast.c",
+        "a4_strlit.c",
+    ] {
+        let diags = check(&fixture("fail", name));
+        assert!(
+            !diags.is_empty(),
+            "{name} must be rejected (non-null literal is not ANull), got a clean verdict"
+        );
+    }
+}
+
+#[test]
+fn cex4_rejected_programs_stay_rejected() {
+    for name in CEX4_FAIL {
+        let diags = check(&fixture("fail", name));
+        assert!(
+            !diags.is_empty(),
+            "{name} must stay rejected (RESULTS.txt pag_rc=1), got a clean verdict"
+        );
+    }
 }

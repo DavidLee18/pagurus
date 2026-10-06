@@ -622,9 +622,8 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} bok evs veq pMode
         OverApprox env0 h0 sc0 ->
         a = b ->
         Void
-      ownConsumed pc rec Refl (HEVarLive a lookN cl) HEArgsNil pM oaC beq
-          {e = EVar nid n nm} {env0} {h0} {envX = env0} {hX = h0}
-          {env1 = env0} {h1 = h0} {ms0} =
+      ownConsumed pc rec Refl (HEVarLive c lookN cl) HEArgsNil pM oaC beq
+          {e = EVar nid n nm} {env0} {h0 = h1} {envX = env0} {hX = h1} {ms0} =
         let (sc1 ** (fl ** (pT, pEs))) = argsModesMoveSplit pc pM
             scEq = rightInj (trans (sym (checkArgsModesNil ctx sc1 callee ms0)) pEs)
             (stN ** lpN) = oaC.tracked n (HVPtr a) lookN
@@ -2011,7 +2010,7 @@ mutual
                     stepGo (Right stN) pSt =
                       let scEqM = rightInj (trans (sym (movePlaceJust pL pSt)) pMv)
                           nuoS = replace {p = \s => NoUniqueOwner env s a}
-                                   (sym scEqM)
+                                   scEqM
                                    (nuoSetPlaceMiss {st' = stN} ln.nuoLN
                                       (lookNotPtrMiss missV))
                       in nuoRewrite (cong fst (rightInj

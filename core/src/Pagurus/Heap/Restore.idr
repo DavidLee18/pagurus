@@ -585,7 +585,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} bok evs veq pMode
             | False =
           skipExtra rec evE evEs (consTailEq veq0) pM oaC
             (noOwnerHereSkipPtrExtra fid id pl nm ps0 vs0 a b pab pno)
-      go (BOPtrExtraLive rec) HEArgsNil veq0 _ _ _ =
+      go (BOPtrExtraLive clive nuo rec) HEArgsNil veq0 _ _ _ =
         void (nilNotCons (sym veq0))
       go (BOPtrExtraNone {id} {pl} {nm} {ps = ps0} {vs = vs0} rec)
           (HEArgsCons v envX hX evE evEs) veq0 pM oaC pno =
@@ -2000,12 +2000,17 @@ mutual
                   NoUniqueOwner env sc' a
                 moveOk (Left d) pMv =
                   void (leftNotRight (trans (sym (takeVarJustL ctx pL pMv)) pT))
-                moveOk (Right scM) pMv with (stepStatus st Move nid) proof pS
-                  moveOk (Right scM) pMv | Left d =
-                    void (leftNotRight (trans (sym (movePlaceJustL pL pS)) pMv))
-                  moveOk (Right scM) pMv | Right stN =
-                    nuoRewrite (cong fst (rightInj (trans (sym (takeVarJustR ctx pL pMv)) pT)))
-                      (nuoSetPlaceMiss {st' = stN} ln.nuoLN (lookNotPtrMiss missV))
+                moveOk (Right scM) pMv = stepGo (stepStatus st Move nid) Refl
+                  where
+                    stepGo :
+                      (res : Either Diag Status) ->
+                      stepStatus st Move nid = res ->
+                      NoUniqueOwner env sc' a
+                    stepGo (Left d) pSt =
+                      void (leftNotRight (trans (sym (movePlaceJustL pL pSt)) pMv))
+                    stepGo (Right stN) pSt =
+                      nuoRewrite (cong fst (rightInj (trans (sym (takeVarJustR ctx pL pMv)) pT)))
+                        (nuoSetPlaceMiss {st' = stN} ln.nuoLN (lookNotPtrMiss missV))
   takeLN ln eq HEUnsup {e = EUnsupported nid reason} =
     void (takeUnsupContraH nid reason eq)
   takeLN ln eq (HEMalloc env1 h1 evs) {e = EMalloc mid args} =
@@ -2132,10 +2137,20 @@ mutual
         callNotCopyV :
           HEvalExpr {funs} env h (ECall id callee args)
             (HROk HVCopy env' h') -> Void
-        callNotCopyV (HECall _ _ _ _) impossible
-        callNotCopyV (HECallUser _ _ _ _ _ _ _ _ _ _) impossible
-        callNotCopyV (HECallUserRet _ _ _ _ _ _ _ _ _ _) impossible
-        callNotCopyV (HERealloc _ _ _ _ _) impossible
+        callNotCopyV evC = copyGo evC Refl
+          where
+            copyGo :
+              {v0 : HVal} ->
+              HEvalExpr {funs} env h (ECall id callee args)
+                (HROk v0 env' h') ->
+              v0 = HVCopy -> Void
+            copyGo (HECall _ _ _ _) Refl impossible
+            copyGo (HECallUser _ _ _ _ _ _ _ _ _ _) Refl impossible
+            copyGo (HECallUserRet _ _ _ _ _ _ _ _ _ _) Refl impossible
+            copyGo (HERealloc _ _ _ _ _) eq = void (ptrNotCopy eq)
+              where
+                ptrNotCopy : {b : Addr} -> HVPtr b = HVCopy -> Void
+                ptrNotCopy Refl impossible
 
         ||| Inspect `v` first so matching `HECall` / `HERealloc` refines the
         ||| eval result instead of fighting the parent `v`.

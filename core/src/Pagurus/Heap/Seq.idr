@@ -83,7 +83,7 @@ seqOkCont :
   checkStmt fuel ctx sc s = Right sc1 ->
   (ret : Bool) ->
   isReturnStmt s = ret ->
-  HEvalStmt env h s (HOk env1 h1) ->
+  HEvalStmt [] env h s (HOk env1 h1) ->
   HSafeOut o sc'
 seqOkCont ss ihS ihSS eq pS True pRet evS =
   void (stmtEndedNotHOk (isReturnEnds pRet) evS)
@@ -105,7 +105,7 @@ seqOkH :
   checkStmts (S fuel) ctx sc (s :: ss) = Right sc' ->
   (res : Either Diag Scopes) ->
   checkStmt fuel ctx sc s = res ->
-  HEvalStmt env h s (HOk env1 h1) ->
+  HEvalStmt [] env h s (HOk env1 h1) ->
   HSafeOut o sc'
 seqOkH ss ihS ihSS eq (Left _) pS _ =
   void (leftNotRight (trans (sym (stmtsConsLeft ss pS)) eq))

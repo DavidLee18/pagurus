@@ -19,7 +19,7 @@ hEndOut :
   {ss : List Stmt} -> {env : HEnv} -> {h : Heap} ->
   {scFrom, scTo : Scopes} -> {o : HOutcome} ->
   stmtsEnded ss = True ->
-  HEvalStmts env h ss o ->
+  HEvalStmts [] env h ss o ->
   HSafeOut o scFrom ->
   HSafeOut o scTo
 hEndOut p ev (HOutOk _) = void (stmtsEndedNotHOk p ev)
@@ -55,7 +55,7 @@ mutual
              checkStmts fuel ctx sc0 thn = Right scT ->
              OverApprox env0 h0 sc0 ->
              HSafeOut o scT) ->
-    HEvalStmts env0 h0 thn o ->
+    HEvalStmts [] env0 h0 thn o ->
     checkStmt (S fuel) ctx sc (SIf iid cond thn els) = Right sc' ->
     (resC : Either Diag Scopes) ->
     checkExpr ctx sc cond = resC ->
@@ -74,7 +74,7 @@ mutual
              checkStmts fuel ctx sc0X thn = Right scT ->
              OverApprox env0 h0 sc0X ->
              HSafeOut o scT) ->
-    HEvalStmts env0 h0 thn o ->
+    HEvalStmts [] env0 h0 thn o ->
     checkStmt (S fuel) ctx sc (SIf iid cond thn els) = Right sc' ->
     checkExpr ctx sc cond = Right sc0 ->
     OverApprox env0 h0 sc0 ->
@@ -94,7 +94,7 @@ mutual
              checkStmts fuel ctx sc0X thn = Right scX ->
              OverApprox env0 h0 sc0X ->
              HSafeOut o scX) ->
-    HEvalStmts env0 h0 thn o ->
+    HEvalStmts [] env0 h0 thn o ->
     checkStmt (S fuel) ctx sc (SIf iid cond thn els) = Right sc' ->
     checkExpr ctx sc cond = Right sc0 ->
     checkStmts fuel ctx sc0 thn = Right scT ->
@@ -116,7 +116,7 @@ mutual
              checkStmts fuel ctx sc0X thn = Right scX ->
              OverApprox env0 h0 sc0X ->
              HSafeOut o scX) ->
-    HEvalStmts env0 h0 thn o ->
+    HEvalStmts [] env0 h0 thn o ->
     checkStmt (S fuel) ctx sc (SIf iid cond thn els) = Right sc' ->
     checkExpr ctx sc cond = Right sc0 ->
     checkStmts fuel ctx sc0 thn = Right scT ->
@@ -153,7 +153,7 @@ mutual
              checkStmts fuel ctx sc0 els = Right scE ->
              OverApprox env0 h0 sc0 ->
              HSafeOut o scE) ->
-    HEvalStmts env0 h0 els o ->
+    HEvalStmts [] env0 h0 els o ->
     checkStmt (S fuel) ctx sc (SIf iid cond thn els) = Right sc' ->
     (resC : Either Diag Scopes) ->
     checkExpr ctx sc cond = resC ->
@@ -172,7 +172,7 @@ mutual
              checkStmts fuel ctx sc0X els = Right scE ->
              OverApprox env0 h0 sc0X ->
              HSafeOut o scE) ->
-    HEvalStmts env0 h0 els o ->
+    HEvalStmts [] env0 h0 els o ->
     checkStmt (S fuel) ctx sc (SIf iid cond thn els) = Right sc' ->
     checkExpr ctx sc cond = Right sc0 ->
     OverApprox env0 h0 sc0 ->
@@ -192,7 +192,7 @@ mutual
              checkStmts fuel ctx sc0X els = Right scE ->
              OverApprox env0 h0 sc0X ->
              HSafeOut o scE) ->
-    HEvalStmts env0 h0 els o ->
+    HEvalStmts [] env0 h0 els o ->
     checkStmt (S fuel) ctx sc (SIf iid cond thn els) = Right sc' ->
     checkExpr ctx sc cond = Right sc0 ->
     checkStmts fuel ctx sc0 thn = Right scT ->
@@ -214,7 +214,7 @@ mutual
              checkStmts fuel ctx sc0X els = Right scE ->
              OverApprox env0 h0 sc0X ->
              HSafeOut o scE) ->
-    HEvalStmts env0 h0 els o ->
+    HEvalStmts [] env0 h0 els o ->
     checkStmt (S fuel) ctx sc (SIf iid cond thn els) = Right sc' ->
     checkExpr ctx sc cond = Right sc0 ->
     checkStmts fuel ctx sc0 thn = Right scT ->

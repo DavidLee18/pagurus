@@ -300,10 +300,26 @@ summarise (S k) funs acc =
       next = map (\f => (f.name, joinModes (lookupNamedList acc f.name) (paramModes acc f))) defs
   in if eqNamedModes next acc then acc else summarise k funs next
 
+export
 paramStatus : Consume -> Nat -> Status
 paramStatus Never fid = Pagurus.Status.singleton (ABorrowed fid)
 paramStatus May _ = Pagurus.Status.singleton AOwned
 paramStatus Always _ = Pagurus.Status.singleton AOwned
+
+export
+paramStatusNever : (fid : Nat) ->
+  paramStatus Never fid = Pagurus.Status.singleton (ABorrowed fid)
+paramStatusNever _ = Refl
+
+export
+paramStatusMay : (fid : Nat) ->
+  paramStatus May fid = Pagurus.Status.singleton AOwned
+paramStatusMay _ = Refl
+
+export
+paramStatusAlways : (fid : Nat) ->
+  paramStatus Always fid = Pagurus.Status.singleton AOwned
+paramStatusAlways _ = Refl
 
 bindParams : Nat -> List Param -> List Consume -> Env
 bindParams _ [] _ = []
@@ -315,6 +331,14 @@ bindParams fid (p :: ps) (m :: ms) =
   case p.ty of
     Ptr => (p.place, paramStatus m fid) :: bindParams fid ps ms
     Copy => bindParams fid ps ms
+
+||| Starting abstract environment of a function: one status per pointer
+||| parameter, from that parameter's `Consume` mode (`funModes`). Copy
+||| parameters are omitted. Per-argument Never/May/Always (#6) slots in
+||| here: `paramScopes` already takes `List Consume`, not a function-level Bool.
+export
+paramScopes : Ctx -> Fun -> Scopes
+paramScopes ctx f = bindParams f.id f.params (funModes ctx f.name)
 
 ||| Whether `takeOwner` produced a unique owner (`Owner`), a known null
 ||| (`Null`, only from `ENull`: `0` / `NULL` / `(void*)0`), or another
@@ -681,28 +705,101 @@ mutual
   loopFixFrom fuel ctx sc id body (Right sc') =
     loopFixEnded (stmtsEnded body) fuel ctx sc id body sc'
 
+export
 checkFun : Nat -> Ctx -> Fun -> Either Diag ()
 checkFun fuel ctx f =
   if not f.defined then Right ()
-  else
-    let sc = bindParams f.id f.params (funModes ctx f.name)
-    in case checkStmts fuel ctx sc f.body of
+  else case checkStmts fuel ctx (paramScopes ctx f) f.body of
          Left d => Left d
          Right _ => Right ()
 
 export
+definedNames : List Fun -> List String
+definedNames funs = map (\f => f.name) (filter (\f => f.defined) funs)
+
+export
+mkProgCtx : List Fun -> Ctx
+mkProgCtx funs = MkCtx (summarise 32 funs []) (definedNames funs)
+
+export
+mkProgCtxEq : (funs : List Fun) ->
+  mkProgCtx funs = MkCtx (summarise 32 funs []) (definedNames funs)
+mkProgCtxEq _ = Refl
+
+public export
+checkFunsFrom : Nat -> Ctx -> List Fun -> Either Diag ()
+checkFunsFrom _ _ [] = Right ()
+checkFunsFrom fuel ctx (f :: fs) =
+  case checkFun fuel ctx f of
+    Left d => Left d
+    Right () => checkFunsFrom fuel ctx fs
+
+export
 checkProgram : Program -> Either Diag ()
-checkProgram (MkProgram funs) =
-  let defs = map (\f => f.name) (filter (\f => f.defined) funs)
-      summaries = summarise 32 funs []
-      ctx = MkCtx summaries defs
-      go : List Fun -> Either Diag ()
-      go [] = Right ()
-      go (f :: fs) =
-        case checkFun 2048 ctx f of
-          Left d => Left d
-          Right () => go fs
-  in go funs
+checkProgram (MkProgram funs) = checkFunsFrom 2048 (mkProgCtx funs) funs
+
+export
+checkProgramEq : (funs : List Fun) ->
+  checkProgram (MkProgram funs) = checkFunsFrom 2048 (mkProgCtx funs) funs
+checkProgramEq _ = Refl
+
+export
+checkFunUndef :
+  {fuel : Nat} -> {ctx : Ctx} -> {f : Fun} ->
+  f.defined = False ->
+  checkFun fuel ctx f = Right ()
+checkFunUndef prf = rewrite prf in Refl
+
+export
+checkFunDefLeft :
+  {fuel : Nat} -> {ctx : Ctx} -> {f : Fun} -> {d : Diag} ->
+  f.defined = True ->
+  checkStmts fuel ctx (paramScopes ctx f) f.body = Left d ->
+  checkFun fuel ctx f = Left d
+checkFunDefLeft prf pB = rewrite prf in rewrite pB in Refl
+
+export
+checkFunDefRight :
+  {fuel : Nat} -> {ctx : Ctx} -> {f : Fun} -> {sc' : Scopes} ->
+  f.defined = True ->
+  checkStmts fuel ctx (paramScopes ctx f) f.body = Right sc' ->
+  checkFun fuel ctx f = Right ()
+checkFunDefRight prf pB = rewrite prf in rewrite pB in Refl
+
+export
+checkFunDefCase :
+  {fuel : Nat} -> {ctx : Ctx} -> {f : Fun} ->
+  f.defined = True ->
+  checkFun fuel ctx f =
+    case checkStmts fuel ctx (paramScopes ctx f) f.body of
+      Left d => Left d
+      Right _ => Right ()
+checkFunDefCase prf = rewrite prf in Refl
+
+export
+paramScopesNil : (ctx : Ctx) -> (f : Fun) ->
+  f.params = [] ->
+  paramScopes ctx f = []
+paramScopesNil ctx f prf = rewrite prf in Refl
+
+export
+checkFunsFromNil : (fuel : Nat) -> (ctx : Ctx) ->
+  checkFunsFrom fuel ctx [] = Right ()
+checkFunsFromNil _ _ = Refl
+
+export
+checkFunsFromLeft :
+  {fuel : Nat} -> {ctx : Ctx} -> {f : Fun} -> {fs : List Fun} -> {d : Diag} ->
+  checkFun fuel ctx f = Left d ->
+  checkFunsFrom fuel ctx (f :: fs) = Left d
+checkFunsFromLeft prf = rewrite prf in Refl
+
+export
+checkFunsFromRight :
+  {fuel : Nat} -> {ctx : Ctx} -> {f : Fun} -> {fs : List Fun} ->
+  checkFun fuel ctx f = Right () ->
+  checkFunsFrom fuel ctx (f :: fs) = checkFunsFrom fuel ctx fs
+checkFunsFromRight prf = rewrite prf in Refl
 
 --------------------------------------------------------------------------------
 -- Unfold lemmas (visible here; checker bodies are opaque elsewhere)

@@ -29,7 +29,7 @@ mutual
   export
   stmtHSafe :
     {ctx : Ctx} -> {s : Stmt} -> {env : HEnv} -> {h : Heap} -> {o : HOutcome} ->
-    HEvalStmt env h s o ->
+    HEvalStmt [] env h s o ->
     (fuel : Nat) ->
     (sc, sc' : Scopes) ->
     checkStmt fuel ctx sc s = Right sc' ->
@@ -71,8 +71,14 @@ mutual
     dropStmtH k ctx nid n nm eq oa ev
   stmtHSafe {s = SCall id callee args} (HSCallCrash evs) (S k) sc sc' eq oa =
     hrToCrashOut (callHSafe evs sc sc' (trans (sym (checkStmtCall k ctx sc id callee args)) eq) oa)
-  stmtHSafe {s = SCall id callee args} (HSCall env1 h1 evs) (S k) sc sc' eq oa =
+  stmtHSafe {s = SCall id callee args} (HSCall _ env1 h1 evs) (S k) sc sc' eq oa =
     hResToOut (callHSafe evs sc sc' (trans (sym (checkStmtCall k ctx sc id callee args)) eq) oa)
+  stmtHSafe {s = SCall id callee args} (HSCallUser _ _ look _ _ _ _ _ _ _ _) (S k) sc sc' eq oa =
+    void (emptyFunsNoUser callee look)
+  stmtHSafe {s = SCall id callee args} (HSCallUserCrash _ _ look _ _ _ _ _ _) (S k) sc sc' eq oa =
+    void (emptyFunsNoUser callee look)
+  stmtHSafe {s = SCall id callee args} (HSCallUserRet _ _ look _ _ _ _ _ _ _ _) (S k) sc sc' eq oa =
+    void (emptyFunsNoUser callee look)
   stmtHSafe {s = SReturn id Nothing} HSRetNone (S k) sc sc' eq oa =
     retNoneH k ctx id eq oa
   stmtHSafe {s = SReturn rid (Just (EVar nid n nm))} (HSRetCrash ev) (S k) sc sc' eq oa =
@@ -136,7 +142,7 @@ mutual
     {ctx : Ctx} -> {env : HEnv} -> {h : Heap} -> {lid : Nat} -> {bod : List Stmt} ->
     {o : HOutcome} ->
     (k : Nat) ->
-    HEvalStmt env h (SLoop lid bod) o ->
+    HEvalStmt [] env h (SLoop lid bod) o ->
     (sc, sc' : Scopes) ->
     loopFix k ctx sc lid bod = Right sc' ->
     OverApprox env h sc ->
@@ -175,7 +181,7 @@ mutual
   export
   stmtsHSafe :
     {ctx : Ctx} -> {ss : List Stmt} -> {env : HEnv} -> {h : Heap} -> {o : HOutcome} ->
-    HEvalStmts env h ss o ->
+    HEvalStmts [] env h ss o ->
     (fuel : Nat) ->
     (sc, sc' : Scopes) ->
     checkStmts fuel ctx sc ss = Right sc' ->

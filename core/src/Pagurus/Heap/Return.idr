@@ -31,7 +31,7 @@ retVarH :
   {sc, sc' : Scopes} -> {env : HEnv} -> {h : Heap} -> {o : HResult} ->
   checkStmt (S fuel) ctx sc (SReturn rid (Just (EVar nid n nm))) = Right sc' ->
   OverApprox env h sc ->
-  HEvalExpr env h (EVar nid n nm) o ->
+  HEvalExpr [] env h (EVar nid n nm) o ->
   (res : Either Diag (Scopes, Flag)) ->
   takeOwner ctx sc (EVar nid n nm) = res ->
   HSafeRes o sc'

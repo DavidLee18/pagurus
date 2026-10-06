@@ -155,5 +155,60 @@ CheckAcceptedNoHeapCrash =
   checkStmts fuel ctx sc ss = Right sc' ->
   (env : HEnv) -> (h : Heap) ->
   OverApprox env h sc ->
-  (o : HOutcome) -> HEvalStmts env h ss o ->
+  (o : HOutcome) -> HEvalStmts [] env h ss o ->
+  Not (IsHCrash o)
+
+||| Every defined function in the unit was accepted at this fuel.
+public export
+data FunsChecked : Nat -> Ctx -> List Fun -> Type where
+  FNil : FunsChecked fuel ctx []
+  FCons :
+    checkFun fuel ctx f = Right () ->
+    FunsChecked fuel ctx fs ->
+    FunsChecked fuel ctx (f :: fs)
+
+export
+checkedLookup :
+  {fuel : Nat} -> {ctx : Ctx} -> {funs : List Fun} -> {n : String} -> {f : Fun} ->
+  FunsChecked fuel ctx funs ->
+  findFun funs n = Just f ->
+  checkFun fuel ctx f = Right ()
+checkedLookup {funs = []} FNil look =
+  void (emptyFunsNoUser n look)
+checkedLookup {funs = g :: gs} (FCons ok rest) look with (g.name == n)
+  checkedLookup {funs = g :: gs} (FCons ok rest) look | True with (g.defined)
+    checkedLookup {funs = g :: gs} (FCons ok rest) look | True | True =
+      replace {p = \x => checkFun fuel ctx x = Right ()} (justInjH look) ok
+    checkedLookup {funs = g :: gs} (FCons ok rest) look | True | False =
+      checkedLookup rest look
+  checkedLookup {funs = g :: gs} (FCons ok rest) look | False =
+    checkedLookup rest look
+
+||| If `checkFun` accepts a defined function, its body is heap-crash-free
+||| from an over-approximation of `paramScopes` (per-argument `funModes`).
+||| Instantiates the intra theorem at `funs = []` (calls in the body do not
+||| run callees; that is the remaining interprocedural OA gap, see README).
+public export
+CheckFunNoHeapCrash : Type
+CheckFunNoHeapCrash =
+  (fuel : Nat) -> (ctx : Ctx) -> (f : Fun) ->
+  checkFun fuel ctx f = Right () ->
+  f.defined = True ->
+  (env : HEnv) -> (h : Heap) ->
+  OverApprox env h (paramScopes ctx f) ->
+  (o : HOutcome) -> HEvalStmts [] env h f.body o ->
+  Not (IsHCrash o)
+
+||| If `checkProgram` accepts the unit, every defined function's body is
+||| heap-crash-free from an over-approximation of its `paramScopes`.
+public export
+CheckProgramNoHeapCrash : Type
+CheckProgramNoHeapCrash =
+  (p : Program) ->
+  checkProgram p = Right () ->
+  (f : Fun) ->
+  findFun p.functions f.name = Just f ->
+  (env : HEnv) -> (h : Heap) ->
+  OverApprox env h (paramScopes (mkProgCtx p.functions) f) ->
+  (o : HOutcome) -> HEvalStmts [] env h f.body o ->
   Not (IsHCrash o)

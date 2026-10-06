@@ -46,7 +46,7 @@ varUseH :
   {ctx : Ctx} -> {sc, sc' : Scopes} -> {env : HEnv} -> {h : Heap} -> {o : HResult} ->
   checkExpr ctx sc (EVar nid n nm) = Right sc' ->
   OverApprox env h sc ->
-  HEvalExpr env h (EVar nid n nm) o ->
+  HEvalExpr [] env h (EVar nid n nm) o ->
   HSafeRes o sc'
 varUseH nid n nm eq oa (HEVarLive a look live) =
   HROutOk (oaUsePlace oa (varEq nid n nm eq))
@@ -251,7 +251,7 @@ takeVarH :
   {sc, sc' : Scopes} -> {env : HEnv} -> {h : Heap} -> {fl : Flag} -> {o : HResult} ->
   takeOwner ctx sc (EVar nid n nm) = Right (sc', fl) ->
   OverApprox env h sc ->
-  HEvalExpr env h (EVar nid n nm) o ->
+  HEvalExpr [] env h (EVar nid n nm) o ->
   HTOut fl o sc'
 takeVarH ctx nid n nm eq oa (HEVarLive a look live) = takeVarLiveH ctx nid n nm eq oa look live
 takeVarH ctx nid n nm eq oa (HEVarFreed a look fr) = void (takeVarFreedContra ctx nid n nm eq oa look fr)

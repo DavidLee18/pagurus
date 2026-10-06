@@ -61,6 +61,25 @@ public export
 isReallocName : String -> Bool
 isReallocName n = n == "realloc"
 
+||| Name-only builtin test, independent of `Pagurus.Checker`.
+public export
+isBuiltinName : String -> Bool
+isBuiltinName n = n == "malloc" || n == "calloc"
+
+||| First *defined* function of this name. Prototypes (`defined = False`) are skipped.
+public export
+findFun : List Fun -> String -> Maybe Fun
+findFun [] _ = Nothing
+findFun (f :: fs) n with (f.name == n)
+  findFun (f :: fs) n | True with (f.defined)
+    findFun (f :: fs) n | True | True = Just f
+    findFun (f :: fs) n | True | False = findFun fs n
+  findFun (f :: fs) n | False = findFun fs n
+
+export
+findFunNil : (n : String) -> findFun [] n = Nothing
+findFunNil _ = Refl
+
 --------------------------------------------------------------------------------
 -- Crashes (the spec a reviewer audits)
 --------------------------------------------------------------------------------
@@ -106,6 +125,20 @@ public export
 setH : Place -> HVal -> HEnv -> HEnv
 setH n v [] = [(n, v)]
 setH n v ((k, x) :: xs) = if n == k then (n, v) :: xs else (k, x) :: setH n v xs
+
+||| Callee frame: pointer parameters receive the corresponding argument values.
+||| Copy parameters are not heap-tracked. Missing values become `HVNone`.
+public export
+bindFrame : List Param -> List HVal -> HEnv
+bindFrame [] _ = []
+bindFrame (p :: ps) [] =
+  case p.ty of
+    Ptr => setH p.place HVNone (bindFrame ps [])
+    Copy => bindFrame ps []
+bindFrame (p :: ps) (v :: vs) =
+  case p.ty of
+    Ptr => setH p.place v (bindFrame ps vs)
+    Copy => bindFrame ps vs
 
 export
 lookupHSetHit : (n : Place) -> (v : HVal) -> (e : HEnv) ->
@@ -193,8 +226,27 @@ nothingNotJustH : {0 x : a} -> Not (Nothing = Just x)
 nothingNotJustH Refl impossible
 
 export
+emptyFunsNoUser : (n : String) -> {f : Fun} -> findFun [] n = Just f -> Void
+emptyFunsNoUser n look = nothingNotJustH (trans (sym (findFunNil n)) look)
+
+export
 justInjH : Just x = Just y -> x = y
 justInjH Refl = Refl
+
+export
+findFunDefined :
+  {funs : List Fun} -> {n : String} -> {f : Fun} ->
+  findFun funs n = Just f ->
+  f.defined = True
+findFunDefined {funs = []} look = void (nothingNotJustH (trans (sym (findFunNil n)) look))
+findFunDefined {funs = g :: gs} look with (g.name == n)
+  findFunDefined {funs = g :: gs} look | True with (g.defined) proof pd
+    findFunDefined {funs = g :: gs} look | True | True =
+      trans (sym (cong (.defined) (justInjH look))) pd
+    findFunDefined {funs = g :: gs} look | True | False =
+      findFunDefined {funs = gs} look
+  findFunDefined {funs = g :: gs} look | False =
+    findFunDefined {funs = gs} look
 
 export
 ltIrrefl : (n : Nat) -> Not (n < n = True)

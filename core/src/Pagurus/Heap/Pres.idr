@@ -339,6 +339,7 @@ mutual
 --------------------------------------------------------------------------------
 
 mutual
+  export
   exprWf :
     {funs : List Fun} -> {env, env' : HEnv} -> {h, h' : Heap} ->
     {e : Expr} -> {v : HVal} ->
@@ -363,6 +364,7 @@ mutual
   exprWf wf (HEUse _ _ evs) = exprsWf wf evs
   exprWf wf HEUnsup = wf
 
+  export
   exprsWf :
     {funs : List Fun} -> {env, env' : HEnv} -> {h, h' : Heap} ->
     {es : List Expr} -> {v : HVal} ->
@@ -372,6 +374,7 @@ mutual
   exprsWf wf HEArgsNil = wf
   exprsWf wf (HEArgsCons _ _ _ evE evEs) = exprsWf (exprWf wf evE) evEs
 
+  export
   reallocWf :
     {funs : List Fun} -> {env, env' : HEnv} -> {h, h' : Heap} ->
     {es : List Expr} -> {v : HVal} ->

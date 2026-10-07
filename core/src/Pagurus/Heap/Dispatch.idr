@@ -30,6 +30,7 @@ import Pagurus.Heap.If
 import Pagurus.Heap.Seq
 import Pagurus.Heap.Ended
 import Pagurus.Heap.Restore
+import Pagurus.Heap.Unique
 
 %default total
 
@@ -59,6 +60,16 @@ definedFromCall eq pb =
     definedGo False True pd pr _ _ = Right (pr, pd)
 
 mutual
+  ||| Bundle Dispatch `exprHSafe` / `takeHSafe` for Unique `uniqueOwnGo`
+  ||| (nested `HECallUser` covering) and Restore LiveNuo threading.
+  dispatchIhs :
+    {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
+    {auto chk : FunsChecked cfuel ctx funs} ->
+    CallIHs funs ctx
+  dispatchIhs {funs} {chk} {ctx} = MkCallIHs
+    (\ev, sc0, sc1, p, oa => exprHSafe {funs} {chk} ev sc0 sc1 p oa)
+    (\ev, sc0, sc1, fl, p, oa => takeHSafe {funs} {chk} ev sc0 sc1 fl p oa)
+
   export
   exprHSafe :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
@@ -621,10 +632,18 @@ mutual
         LeftoverSafeFreed env1 h1 hB sc' f.id f.params (funModes ctx f.name)
           (collectArgVals evs0)
       uniqueOwnFrom pB0 eq0 oa0 bok0 evs0 with (isDefined ctx callee) proof pd
-        uniqueOwnFrom pB0 eq0 oa0 bok0 evs0 | True =
-          uniqueOwnCall {funs} {hB} oa0 eq0
-            (replace {p = \b => b = False} (builtinEq callee) pB0) pd
-            bok0 evs0 Refl
+        uniqueOwnFrom pB0 eq0 oa0 bok0 evs0 | True with
+            (consumeListEq (funModes ctx f.name) (funModes ctx callee))
+          uniqueOwnFrom pB0 eq0 oa0 bok0 evs0 | True | Left meq =
+            replace {p = \ms => LeftoverSafeFreed env1 h1 hB sc' f.id f.params ms
+                                  (collectArgVals evs0)}
+              (sym meq)
+              (uniqueOwnCall {funs} {hB} dispatchIhs oa0 eq0
+                (replace {p = \b => b = False} (builtinEq callee) pB0) pd
+                (replace {p = \ms => BindOk f.id h1 f.params ms
+                                       (collectArgVals evs0)}
+                   meq bok0)
+                evs0 Refl)
         uniqueOwnFrom pB0 eq0 oa0 bok0 evs0 | False with (isRealloc callee) proof pr
           uniqueOwnFrom pB0 eq0 oa0 bok0 evs0 | False | False =
             void (callOpaqueContraH
@@ -823,10 +842,18 @@ mutual
         LeftoverSafeFreed env1 h1 hB sc' f.id f.params (funModes ctx f.name)
           (collectArgVals evs0)
       uniqueOwnRet pB0 eq0 oa0 bok0 evs0 with (isDefined ctx callee) proof pd
-        uniqueOwnRet pB0 eq0 oa0 bok0 evs0 | True =
-          uniqueOwnCall {funs} {hB} oa0 eq0
-            (replace {p = \b => b = False} (builtinEq callee) pB0) pd
-            bok0 evs0 Refl
+        uniqueOwnRet pB0 eq0 oa0 bok0 evs0 | True with
+            (consumeListEq (funModes ctx f.name) (funModes ctx callee))
+          uniqueOwnRet pB0 eq0 oa0 bok0 evs0 | True | Left meq =
+            replace {p = \ms => LeftoverSafeFreed env1 h1 hB sc' f.id f.params ms
+                                  (collectArgVals evs0)}
+              (sym meq)
+              (uniqueOwnCall {funs} {hB} dispatchIhs oa0 eq0
+                (replace {p = \b => b = False} (builtinEq callee) pB0) pd
+                (replace {p = \ms => BindOk f.id h1 f.params ms
+                                       (collectArgVals evs0)}
+                   meq bok0)
+                evs0 Refl)
         uniqueOwnRet pB0 eq0 oa0 bok0 evs0 | False with (isRealloc callee) proof pr
           uniqueOwnRet pB0 eq0 oa0 bok0 evs0 | False | False =
             void (callOpaqueContraH

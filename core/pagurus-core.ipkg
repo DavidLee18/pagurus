@@ -47,6 +47,7 @@ modules = Pagurus.IR
         , Pagurus.Heap.Decl
         , Pagurus.Heap.If
         , Pagurus.Heap.Return
+        , Pagurus.Heap.Unique
         , Pagurus.Heap.Restore
         , Pagurus.Heap.Dispatch
         , Pagurus.Heap.Expr

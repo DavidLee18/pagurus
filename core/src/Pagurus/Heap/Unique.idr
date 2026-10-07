@@ -313,7 +313,7 @@ uniqueOwnGo :
   OverApprox env h sc ->
   LeftoverSafeFreed env1 h1 hPost sc' fid ps cmodes vs
 uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hPost} ihs bok evs veq pModes oa0
-    p st a pnoF lookP lp safe live ph =
+    pL stL a pnoF lookP lpL safeL liveL phL =
   go bok evs veq pModes oa0 pnoF
   where
     mutual
@@ -530,9 +530,9 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hPost} ihs bok evs ve
         Void
       ownInHand inh HEArgsNil pEs _ =
         let scEq = rightInj (trans (sym (checkArgsModesNil ctx sc1 callee ms0)) pEs)
-            uns = inh.holdersUnsafe p st lookP
-                    (replace {p = \s => lookupPlace p s = Just st} (sym scEq) lp)
-        in trueNotFalse (trans (sym uns) safe)
+            uns = inh.holdersUnsafe pL stL lookP
+                    (replace {p = \s => lookupPlace pL s = Just stL} (sym scEq) lpL)
+        in trueNotFalse (trans (sym uns) safeL)
       ownInHand inh (HEArgsCons HVCopy _ _ HELit evEs) pEs oa1
           {es = ELit id :: esR} =
         ownRestLit {id} {es = esR} inh evEs pEs oa1
@@ -1592,8 +1592,8 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hPost} ihs bok evs ve
 
       inhAsgPtr :
         {id : Nat} -> {n : Place} -> {nm : String} -> {rhs : Expr} ->
+        {env0 : HEnv} -> {h0 : Heap} -> {sc0, scY : Scopes} ->
         {w : HVal} -> {envA : HEnv} -> {hA : Heap} ->
-        {sc0, scY : Scopes} ->
         InHand env0 h0 sc0 a ->
         OverApprox env0 h0 sc0 ->
         HEvalExpr {funs} env0 h0 rhs (HROk w envA hA) ->
@@ -1629,47 +1629,47 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hPost} ihs bok evs ve
       ||| `usePlace` of leftover intern of `a` fails: intern is already unsafe.
       inhUseLeftover :
         {nid : Nat} -> {n : Place} -> {nm : String} ->
-        {env : HEnv} -> {h : Heap} -> {sc, scU : Scopes} ->
-        InHand env h sc a ->
-        OverApprox env h sc ->
-        lookupH n env = Just (HVPtr a) ->
-        usePlace sc n nid nm = Right scU ->
+        {envU : HEnv} -> {hU : Heap} -> {scU0, scU : Scopes} ->
+        InHand envU hU scU0 a ->
+        OverApprox envU hU scU0 ->
+        lookupH n envU = Just (HVPtr a) ->
+        usePlace scU0 n nid nm = Right scU ->
         Void
-      inhUseLeftover {n} {nid} {sc} inh oa lookN eq =
-        let (st ** lp) = oa.tracked n (HVPtr a) lookN
-        in useGo st lp
+      inhUseLeftover {n} {nid} {scU0} inh oa lookN eq =
+        let (stU ** lpU) = oa.tracked n (HVPtr a) lookN
+        in useGo stU lpU
         where
-          useGo : (st0 : Status) -> lookupPlace n sc = Just st0 -> Void
-          useGo st0 lp with (stepStatus st0 Use nid) proof pS
-            useGo st0 lp | Left d =
-              void (leftNotRight (trans (sym (usePlaceJustL lp pS)) eq))
-            useGo st0 lp | Right st' =
-              let uns0 = inh.holdersUnsafe n st0 lookN lp
+          useGo : (st0 : Status) -> lookupPlace n scU0 = Just st0 -> Void
+          useGo st0 lpU with (stepStatus st0 Use nid) proof pS
+            useGo st0 lpU | Left d =
+              void (leftNotRight (trans (sym (usePlaceJustL lpU pS)) eq))
+            useGo st0 lpU | Right st' =
+              let uns0 = inh.holdersUnsafe n st0 lookN lpU
               in trueNotFalse (trans (sym uns0) (stepUseSafe st0 nid st' pS))
 
       ||| `takeOwner` of leftover intern of `a` fails: intern is already unsafe.
       inhTakeVarLeftover :
         {nid : Nat} -> {n : Place} -> {nm : String} -> {flV : Flag} ->
-        {env : HEnv} -> {h : Heap} -> {sc, scU : Scopes} ->
-        InHand env h sc a ->
-        OverApprox env h sc ->
-        lookupH n env = Just (HVPtr a) ->
-        takeOwner ctx sc (EVar nid n nm) = Right (scU, flV) ->
+        {envU : HEnv} -> {hU : Heap} -> {scU0, scU : Scopes} ->
+        InHand envU hU scU0 a ->
+        OverApprox envU hU scU0 ->
+        lookupH n envU = Just (HVPtr a) ->
+        takeOwner ctx scU0 (EVar nid n nm) = Right (scU, flV) ->
         Void
-      inhTakeVarLeftover {n} {nid} {nm} {sc} inh oa lookN pT =
-        let (st ** lp) = oa.tracked n (HVPtr a) lookN
-            mv = takeVarMove pT lp
-        in mvGo st lp mv
+      inhTakeVarLeftover {n} {nid} {nm} {scU0} inh oa lookN pT =
+        let (stU ** lpU) = oa.tracked n (HVPtr a) lookN
+            mv = takeVarMove pT lpU
+        in mvGo stU lpU mv
         where
           mvGo : (st0 : Status) ->
-                 lookupPlace n sc = Just st0 ->
-                 movePlace sc n nid nm = Right scU ->
+                 lookupPlace n scU0 = Just st0 ->
+                 movePlace scU0 n nid nm = Right scU ->
                  Void
-          mvGo st0 lp mv with (stepStatus st0 Move nid) proof pS
-            mvGo st0 lp mv | Left d =
-              void (leftNotRight (trans (sym (movePlaceJustL lp pS)) mv))
-            mvGo st0 lp mv | Right st' =
-              let uns0 = inh.holdersUnsafe n st0 lookN lp
+          mvGo st0 lpU mv with (stepStatus st0 Move nid) proof pS
+            mvGo st0 lpU mv | Left d =
+              void (leftNotRight (trans (sym (movePlaceJustL lpU pS)) mv))
+            mvGo st0 lpU mv | Right st' =
+              let uns0 = inh.holdersUnsafe n st0 lookN lpU
               in trueNotFalse (trans (sym uns0) (stepMoveSafe st0 nid st' pS))
 
       ||| Nested `HECallUser`: leftover intern is already unsafe, so nested
@@ -1677,6 +1677,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hPost} ihs bok evs ve
       ||| `framePres` keeps leftover `a` live.
       inhCallUser :
         {id : Nat} -> {calleeC : String} -> {args : List Expr} ->
+        {env0 : HEnv} -> {h0 : Heap} -> {sc0, scY : Scopes} ->
         {envA, envB : HEnv} -> {hA, hB : Heap} ->
         InHand env0 h0 sc0 a ->
         OverApprox env0 h0 sc0 ->
@@ -1699,6 +1700,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hPost} ihs bok evs ve
 
       inhCallUserRet :
         {id : Nat} -> {calleeC : String} -> {args : List Expr} ->
+        {env0 : HEnv} -> {h0 : Heap} -> {sc0, scY : Scopes} ->
         {envA, envB : HEnv} -> {hA, hB : Heap} ->
         InHand env0 h0 sc0 a ->
         OverApprox env0 h0 sc0 ->
@@ -1721,6 +1723,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hPost} ihs bok evs ve
 
       inhRealloc :
         {id : Nat} -> {calleeC : String} -> {args : List Expr} ->
+        {env0 : HEnv} -> {h0 : Heap} -> {sc0, scY : Scopes} ->
         {envA : HEnv} -> {hA : Heap} ->
         InHand env0 h0 sc0 a ->
         OverApprox env0 h0 sc0 ->
@@ -1735,6 +1738,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hPost} ihs bok evs ve
 
       inhReallocArgs :
         {idC : Nat} -> {calleeC : String} -> {argsC : List Expr} ->
+        {env0 : HEnv} -> {h0 : Heap} -> {sc0, scY : Scopes} ->
         {envY : HEnv} -> {hY : Heap} ->
         InHand env0 h0 sc0 a ->
         OverApprox env0 h0 sc0 ->
@@ -1749,6 +1753,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hPost} ihs bok evs ve
 
       inhReallocTail :
         {eC : Expr} -> {esC : List Expr} -> {w : HVal} ->
+        {env0 : HEnv} -> {h0 : Heap} -> {sc0, scY : Scopes} ->
         {envA, envY : HEnv} -> {hA, hY : Heap} ->
         InHand env0 h0 sc0 a ->
         OverApprox env0 h0 sc0 ->
@@ -1771,6 +1776,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hPost} ihs bok evs ve
 
       inhNoTakeLeftover :
         {e0 : Expr} -> {v0 : HVal} -> {fl0 : Flag} ->
+        {env0 : HEnv} -> {h0 : Heap} -> {sc0 : Scopes} ->
         {envY : HEnv} -> {hY : Heap} -> {scT : Scopes} ->
         InHand env0 h0 sc0 a ->
         OverApprox env0 h0 sc0 ->
@@ -1863,6 +1869,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hPost} ihs bok evs ve
 
       inhNotPtrExpr :
         {e0 : Expr} -> {v0 : HVal} ->
+        {env0 : HEnv} -> {h0 : Heap} -> {sc0, scY : Scopes} ->
         {envY : HEnv} -> {hY : Heap} ->
         InHand env0 h0 sc0 a ->
         OverApprox env0 h0 sc0 ->
@@ -1920,6 +1927,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hPost} ihs bok evs ve
 
       inhValsCall :
         {idC : Nat} -> {calleeC : String} -> {argsC : List Expr} ->
+        {env0 : HEnv} -> {h0 : Heap} -> {sc0, scY : Scopes} ->
         {envY : HEnv} -> {hY : Heap} ->
         InHand env0 h0 sc0 a ->
         OverApprox env0 h0 sc0 ->
@@ -1933,6 +1941,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hPost} ihs bok evs ve
       inhValsCons :
         {idC : Nat} -> {calleeC : String} ->
         {eC : Expr} -> {esC : List Expr} -> {w : HVal} ->
+        {env0 : HEnv} -> {h0 : Heap} -> {sc0, scY : Scopes} ->
         {envA, envY : HEnv} -> {hA, hY : Heap} ->
         InHand env0 h0 sc0 a ->
         OverApprox env0 h0 sc0 ->
@@ -1964,6 +1973,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hPost} ihs bok evs ve
 
       inhValsReallocTail :
         {eC : Expr} -> {esC : List Expr} -> {w : HVal} ->
+        {env0 : HEnv} -> {h0 : Heap} -> {sc0, scY : Scopes} ->
         {envA, envY : HEnv} -> {hA, hY : Heap} ->
         InHand env0 h0 sc0 a ->
         OverApprox env0 h0 sc0 ->
@@ -1987,6 +1997,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hPost} ihs bok evs ve
 
       inhValsBorrow :
         {es0 : List Expr} -> {vB : HVal} ->
+        {env0 : HEnv} -> {h0 : Heap} -> {sc0, scY : Scopes} ->
         {envY : HEnv} -> {hY : Heap} ->
         InHand env0 h0 sc0 a ->
         OverApprox env0 h0 sc0 ->
@@ -2004,6 +2015,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hPost} ihs bok evs ve
       inhValsModes :
         {calleeC : String} -> {eC : Expr} -> {esC : List Expr} ->
         {w : HVal} -> {modes : List Consume} ->
+        {env0 : HEnv} -> {h0 : Heap} -> {sc0, scY : Scopes} ->
         {envA, envY : HEnv} -> {hA, hY : Heap} ->
         InHand env0 h0 sc0 a ->
         OverApprox env0 h0 sc0 ->
@@ -2061,6 +2073,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hPost} ihs bok evs ve
 
       inhValsModesRest :
         {calleeC : String} -> {esC : List Expr} -> {modes : List Consume} ->
+        {env0 : HEnv} -> {h0 : Heap} -> {sc0, scY : Scopes} ->
         {envY : HEnv} -> {hY : Heap} ->
         InHand env0 h0 sc0 a ->
         OverApprox env0 h0 sc0 ->

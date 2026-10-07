@@ -682,18 +682,18 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
         OverApprox envX hX sc1 ->
         Void
       ownRestVarGhost inh evEs pEs oa1 {ms0 = []} =
-        let (sc2 ** (fl ** (pT, pEs2))) = argsModesExtraSplit pEs
-        in vgExtra fl pT pEs2
+        extraSplit (argsModesExtraSplit pEs)
         where
-          vgExtra :
-            (fl : Flag) ->
-            takeOwner ctx sc1 (EVar nid n nm) = Right (sc2, fl) ->
-            checkArgsModes ctx sc2 callee es [] = Right sc' ->
+          extraSplit :
+            (sc2 ** (fl : Flag **
+              (takeOwner ctx sc1 (EVar nid n nm) = Right (sc2, fl),
+               checkArgsModes ctx sc2 callee es [] = Right sc'))) ->
             Void
-          vgExtra Owner pT pEs2 = ownRestVarTaken pT inh evEs pEs2 oa1
-          vgExtra Ghost pT _ =
+          extraSplit (sc2 ** (Owner ** (pT, pEs2))) =
+            ownRestVarTaken pT inh evEs pEs2 oa1
+          extraSplit (_ ** (Ghost ** (pT, _))) =
             void (leftNotRight (trans (sym (argsModesExtraGhost es pT)) pEs))
-          vgExtra Null pT _ = varNotNull pT
+          extraSplit (sc2 ** (Null ** (pT, _))) = varNotNull pT
             where
               varNotNull : takeOwner ctx sc1 (EVar nid n nm) = Right (sc2, Null) -> Void
               varNotNull pTN = vn (lookupPlace n sc1) Refl
@@ -714,18 +714,18 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
       ownRestVarGhost inh evEs pEs oa1 {ms0 = m :: msR} with
           (doesConsume m) proof pc
         ownRestVarGhost inh evEs pEs oa1 {ms0 = m :: msR} | True =
-          let (sc2 ** (fl ** (pT, pEs2))) = argsModesMoveSplit pc pEs
-          in vgMove fl pT pEs2
+          moveSplit (argsModesMoveSplit pc pEs)
           where
-            vgMove :
-              (fl : Flag) ->
-              takeOwner ctx sc1 (EVar nid n nm) = Right (sc2, fl) ->
-              checkArgsModes ctx sc2 callee es msR = Right sc' ->
+            moveSplit :
+              (sc2 ** (fl : Flag **
+                (takeOwner ctx sc1 (EVar nid n nm) = Right (sc2, fl),
+                 checkArgsModes ctx sc2 callee es msR = Right sc'))) ->
               Void
-            vgMove Owner pT pEs2 = ownRestVarTaken pT inh evEs pEs2 oa1
-            vgMove Ghost pT _ =
+            moveSplit (sc2 ** (Owner ** (pT, pEs2))) =
+              ownRestVarTaken pT inh evEs pEs2 oa1
+            moveSplit (_ ** (Ghost ** (pT, _))) =
               void (leftNotRight (trans (sym (argsModesMoveGhost es msR pc pT)) pEs))
-            vgMove Null pT _ = varNotNullM pT
+            moveSplit (sc2 ** (Null ** (pT, _))) = varNotNullM pT
               where
                 varNotNullM : takeOwner ctx sc1 (EVar nid n nm) = Right (sc2, Null) -> Void
                 varNotNullM pTN = vn (lookupPlace n sc1) Refl

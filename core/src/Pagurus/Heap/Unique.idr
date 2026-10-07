@@ -942,9 +942,9 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
         InHand envX hX sc1 a ->
         OverApprox envX hX sc1 ->
         Void
-      restTaken TKOwner (HOwnLive {a = b} _ inhB) evE pT oa2 evEs pEs2 _ _ with
+      restTaken TKOwner (HOwnLive {a = b} _ inhB) evE pT oa2 evEs pEs2 inh oa0 with
           (a == b) proof pab
-        restTaken TKOwner (HOwnLive {a = b} _ inhB) evE pT oa2 evEs pEs2 _ _ | True =
+        restTaken TKOwner (HOwnLive {a = b} _ inhB) evE pT oa2 evEs pEs2 inh oa0 | True =
           ownInHand (replace {p = \x => InHand envY hY sc2 x}
                        (sym (eqNatTrue a b pab)) inhB)
             evEs pEs2 oa2

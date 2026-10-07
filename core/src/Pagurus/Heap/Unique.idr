@@ -1307,7 +1307,6 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hPost} ihs bok evs ve
 
       inhTakeCall :
         {id : Nat} -> {calleeC : String} -> {args : List Expr} ->
-        {unk : Either (isBuiltinName calleeC = True) (findFun funs calleeC = Nothing)} ->
         {env0 : HEnv} -> {h0 : Heap} -> {sc0, scY : Scopes} -> {fl0 : Flag} ->
         {envA : HEnv} -> {hA : Heap} ->
         InHand env0 h0 sc0 a ->
@@ -1771,8 +1770,8 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hPost} ihs bok evs ve
           tGo (Right (sc1, fl)) pT =
             let ht = ihs.takeIH evE sc0 sc1 fl pT oa
                 inh1 = inhTake inh oa evE pT (htFromOk ht)
-            in inhBorrow inh1 (htFromOk ht)
-                 (trans (sym (reallocTailRight esC pT)) eq) evEs
+            in inhBorrow inh1 (htFromOk ht) evEs
+                 (trans (sym (reallocTailRight esC pT)) eq)
 
       inhNoTakeLeftover :
         {e0 : Expr} -> {v0 : HVal} -> {fl0 : Flag} ->
@@ -1784,88 +1783,81 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hPost} ihs bok evs ve
         takeOwner ctx sc0 e0 = Right (scT, fl0) ->
         v0 = HVPtr a ->
         Void
-      inhNoTakeLeftover inh oa ev pT veq = noTake ev pT veq
+      inhNoTakeLeftover inh oa HELit pT veq =
+        void (copyNotPtrA veq)
+      inhNoTakeLeftover inh oa HENull pT veq =
+        void (noneNotPtrA veq)
+      inhNoTakeLeftover inh oa (HEVarLive b lookN cl) {e0 = EVar nid n nm} pT veq =
+        inhTakeVarLeftover inh oa
+          (replace {p = \x => lookupH n env0 = Just (HVPtr x)}
+             (hvPtrInj veq) lookN)
+          pT
+      inhNoTakeLeftover inh oa (HEVarNone lookN) pT veq =
+        void (noneNotPtrA veq)
+      inhNoTakeLeftover inh oa (HEVarCopy lookN) pT veq =
+        void (copyNotPtrA veq)
+      inhNoTakeLeftover inh oa (HEVarMiss lookN) pT veq =
+        void (noneNotPtrA veq)
+      inhNoTakeLeftover inh oa HEUnsup {e0 = EUnsupported nid reason} pT _ =
+        void (takeUnsupContraH nid reason pT)
+      inhNoTakeLeftover inh oa (HEMalloc envA hA evs) {e0 = EMalloc mid margs} pT veq =
+        mGo (checkArgsBorrow ctx sc0 margs) Refl veq
         where
-          noTake :
-            HEvalExpr {funs} env0 h0 e0 (HROk v0 envY hY) ->
-            takeOwner ctx sc0 e0 = Right (scT, fl0) ->
-            v0 = HVPtr a ->
-            Void
-          noTake HELit pT0 veq0 =
-            void (copyNotPtrA veq0)
-          noTake HENull pT0 veq0 =
-            void (noneNotPtrA veq0)
-          noTake (HEVarLive b lookN cl) {e0 = EVar nid n nm} pT0 veq0 =
-            inhTakeVarLeftover inh oa
-              (replace {p = \x => lookupH n env0 = Just (HVPtr x)}
-                 (hvPtrInj veq0) lookN)
-              pT0
-          noTake (HEVarNone lookN) pT0 veq0 =
-            void (noneNotPtrA veq0)
-          noTake (HEVarCopy lookN) pT0 veq0 =
-            void (copyNotPtrA veq0)
-          noTake (HEVarMiss lookN) pT0 veq0 =
-            void (noneNotPtrA veq0)
-          noTake HEUnsup {e0 = EUnsupported nid reason} pT0 _ =
-            void (takeUnsupContraH nid reason pT0)
-          noTake (HEMalloc envA hA evs) {e0 = EMalloc mid margs} pT0 veq0 =
-            mGo (checkArgsBorrow ctx sc0 margs) Refl veq0
-            where
-              mGo : (res : Either Diag Scopes) ->
-                    checkArgsBorrow ctx sc0 margs = res ->
-                    HVPtr (fst (alloc hA)) = HVPtr a ->
-                    Void
-              mGo (Left d) pA _ =
-                void (leftNotRight (trans (sym (takeMallocLeft mid pA)) pT0))
-              mGo (Right scA) pA veq1 =
-                let inhA = inhBorrow inh oa evs pA
-                    nf = liveNotFresh hA (exprsWf oa.wf evs) a inhA.inLive
-                in eqNatFalse a hA.next nf (hvPtrInj (sym veq1))
-          noTake (HEAsgCopy w envA hA evR) {e0 = EAssign id n nm Copy rhs} pT0 veq0 =
-            cGo (checkExpr ctx sc0 rhs) Refl veq0
-            where
-              cGo : (res : Either Diag Scopes) ->
-                    checkExpr ctx sc0 rhs = res ->
-                    w = HVPtr a ->
-                    Void
-              cGo (Left d) pE _ =
-                void (leftNotRight (trans (sym (takeAsgCopyLeft id n nm pE)) pT0))
-              cGo (Right scA) pE veq1 =
-                inhNotPtrExpr inh oa evR pE veq1
-          noTake (HEUse envA hA evs) pT0 veq0 =
-            void (noneNotPtrA veq0)
-          noTake (HECall unk envA hA evs) pT0 veq0 =
-            void (noneNotPtrA veq0)
-          noTake (HECallUser pBu f look pDef envA hA evs envB hB evBody) pT0 veq0 =
-            void (noneNotPtrA veq0)
-          noTake (HECallUserRet pBu f look pDef envA hA evs envB hB evBody) pT0 veq0 =
-            void (noneNotPtrA veq0)
-          noTake (HERealloc pName pMiss envA hA evs)
-              {e0 = ECall id calleeC args} pT0 veq0 =
-            rGo (checkCall ctx sc0 id calleeC args) Refl veq0
-            where
-              rGo : (res : Either Diag Scopes) ->
-                    checkCall ctx sc0 id calleeC args = res ->
-                    HVPtr (fst (alloc hA)) = HVPtr a ->
-                    Void
-              rGo (Left d) pC _ =
-                void (leftNotRight (trans (sym (takeCallLeft
-                  (trans (checkExprCall ctx sc0 id calleeC args) pC))) pT0))
-              rGo (Right scA) pC veq1 =
-                let inhA = inhReallocArgs inh oa evs pC
-                    nf = liveNotFresh hA (reallocWf oa.wf evs) a inhA.inLive
-                in eqNatFalse a hA.next nf (hvPtrInj (sym veq1))
-          noTake (HEAsgPtr w envA hA evR) {e0 = EAssign id n nm Ptr rhs} pT0 veq0 =
-            aGo (takeOwner ctx sc0 rhs) Refl veq0
-            where
-              aGo : (res : Either Diag (Scopes, Flag)) ->
-                    takeOwner ctx sc0 rhs = res ->
-                    w = HVPtr a ->
-                    Void
-              aGo (Left d) pR _ =
-                void (leftNotRight (trans (sym (takeAsgPtrLeft id n nm pR)) pT0))
-              aGo (Right (scR, flR)) pR veq1 =
-                inhNoTakeLeftover inh oa evR pR veq1
+          mGo : (res : Either Diag Scopes) ->
+                checkArgsBorrow ctx sc0 margs = res ->
+                HVPtr (fst (alloc hA)) = HVPtr a ->
+                Void
+          mGo (Left d) pA _ =
+            void (leftNotRight (trans (sym (takeMallocLeft mid pA)) pT))
+          mGo (Right scA) pA veq1 =
+            let inhA = inhBorrow inh oa evs pA
+                nf = liveNotFresh hA (exprsWf oa.wf evs) a inhA.inLive
+            in eqNatFalse a hA.next nf (hvPtrInj (sym veq1))
+      inhNoTakeLeftover inh oa (HEAsgCopy w envA hA evR) {e0 = EAssign id n nm Copy rhs} pT veq =
+        cGo (checkExpr ctx sc0 rhs) Refl veq
+        where
+          cGo : (res : Either Diag Scopes) ->
+                checkExpr ctx sc0 rhs = res ->
+                w = HVPtr a ->
+                Void
+          cGo (Left d) pE _ =
+            void (leftNotRight (trans (sym (takeAsgCopyLeft id n nm pE)) pT))
+          cGo (Right scA) pE veq1 =
+            inhNotPtrExpr inh oa evR pE veq1
+      inhNoTakeLeftover inh oa (HEUse envA hA evs) pT veq =
+        void (noneNotPtrA veq)
+      inhNoTakeLeftover inh oa (HECall unk envA hA evs) pT veq =
+        void (noneNotPtrA veq)
+      inhNoTakeLeftover inh oa (HECallUser pBu f look pDef envA hA evs envB hB evBody) pT veq =
+        void (noneNotPtrA veq)
+      inhNoTakeLeftover inh oa (HECallUserRet pBu f look pDef envA hA evs envB hB evBody) pT veq =
+        void (noneNotPtrA veq)
+      inhNoTakeLeftover inh oa (HERealloc pName pMiss envA hA evs)
+          {e0 = ECall id calleeC args} pT veq =
+        rGo (checkCall ctx sc0 id calleeC args) Refl veq
+        where
+          rGo : (res : Either Diag Scopes) ->
+                checkCall ctx sc0 id calleeC args = res ->
+                HVPtr (fst (alloc hA)) = HVPtr a ->
+                Void
+          rGo (Left d) pC _ =
+            void (leftNotRight (trans (sym (takeCallLeft
+              (trans (checkExprCall ctx sc0 id calleeC args) pC))) pT))
+          rGo (Right scA) pC veq1 =
+            let inhA = inhReallocArgs inh oa evs pC
+                nf = liveNotFresh hA (reallocWf oa.wf evs) a inhA.inLive
+            in eqNatFalse a hA.next nf (hvPtrInj (sym veq1))
+      inhNoTakeLeftover inh oa (HEAsgPtr w envA hA evR) {e0 = EAssign id n nm Ptr rhs} pT veq =
+        aGo (takeOwner ctx sc0 rhs) Refl veq
+        where
+          aGo : (res : Either Diag (Scopes, Flag)) ->
+                takeOwner ctx sc0 rhs = res ->
+                w = HVPtr a ->
+                Void
+          aGo (Left d) pR _ =
+            void (leftNotRight (trans (sym (takeAsgPtrLeft id n nm pR)) pT))
+          aGo (Right (scR, flR)) pR veq1 =
+            inhNoTakeLeftover inh oa evR pR veq1
 
       inhNotPtrExpr :
         {e0 : Expr} -> {v0 : HVal} ->
@@ -1992,8 +1984,8 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hPost} ihs bok evs ve
             let ht = ihs.takeIH evE sc0 sc1 fl pT oa
                 nv = \veq => inhNoTakeLeftover inh oa evE pT veq
                 inh1 = inhTake inh oa evE pT (htFromOk ht)
-            in notPtrVal nv (inhValsBorrow inh1 (htFromOk ht)
-                 (trans (sym (reallocTailRight esC pT)) eq) evEs)
+            in notPtrVal nv (inhValsBorrow inh1 (htFromOk ht) evEs
+                 (trans (sym (reallocTailRight esC pT)) eq))
 
       inhValsBorrow :
         {es0 : List Expr} -> {vB : HVal} ->

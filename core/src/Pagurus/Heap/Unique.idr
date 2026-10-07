@@ -1026,8 +1026,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
       inhMallocGo inh oa evs eq =
         let pA = trans (sym (checkExprMalloc ctx sc0 mid args)) eq
             inhA = inhBorrow inh oa evs pA
-            oaM = hrFromOk (ihs.exprIH (HEMalloc envA hA evs) sc0 scY eq oa)
-            nf = liveNotFresh hA oaM.wf a inhA.inLive
+            nf = liveNotFresh hA (exprsWf oa.wf evs) a inhA.inLive
         in inhAllocPres inhA nf
 
       inhBorrow :
@@ -1271,9 +1270,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
           mGo (Right scA) pA =
             let scEq = cong fst (rightInj (trans (sym (takeMallocRight mid pA)) pT))
                 inhA = inhBorrow inh oa evs pA
-                oaA = hrFromOk (ihs.exprIH (HEMalloc envA hA evs) sc0 scA
-                        (trans (checkExprMalloc ctx sc0 mid args) pA) oa)
-                nf = liveNotFresh hA oaA.wf a inhA.inLive
+                nf = liveNotFresh hA (exprsWf oa.wf evs) a inhA.inLive
             in replace {p = \s => InHand envA (snd (alloc hA)) s a} scEq
                  (inhAllocPres inhA nf)
 

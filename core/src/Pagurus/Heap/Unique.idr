@@ -293,14 +293,11 @@ callArgsModes :
 callArgsModes pb pd eq =
   trans (sym (checkCallDefined pb pd (callDefinedNoAlias eq pb pd))) eq
 
-||| Preserve leftover `InHand` through remaining / nested arguments.
-||| Top-level mutual parameterized by leftover `a` and `CallIHs`, so it
-||| does not capture `uniqueOwnGo` implicits and typechecks separately.
 mutual
-    ||| Preserve leftover `InHand` through `checkExpr` of a remaining
-    ||| (or nested) argument. Nested `HECallUser` cannot consume leftover
-    ||| intern (`InHand` already unsafe), so the nested frame is unheld
-    ||| and `framePres` keeps leftover `a` live.
+  ||| Preserve leftover `InHand` through `checkExpr` of a remaining
+  ||| (or nested) argument. Nested `HECallUser` cannot consume leftover
+  ||| intern (`InHand` already unsafe), so the nested frame is unheld
+  ||| and `framePres` keeps leftover `a` live.
   inhExpr :
       {funs : List Fun} -> {ctx : Ctx} -> {a : Addr} ->
       CallIHs funs ctx ->
@@ -1009,7 +1006,7 @@ mutual
                 scEq = rightInj (trans (sym (checkExprAsgPtrOwner pT pU)) eq)
             in exprAsgUse ihs inh oa ev eq pT scEq (htFromOk ht) (htTaken ht) pU
 
-    ||| `usePlace` of leftover intern of `a` fails: intern is already unsafe.
+  ||| `usePlace` of leftover intern of `a` fails: intern is already unsafe.
   inhUseLeftover :
       {funs : List Fun} -> {ctx : Ctx} -> {a : Addr} ->
       CallIHs funs ctx ->
@@ -1032,7 +1029,7 @@ mutual
             let uns0 = inh.holdersUnsafe n st0 lookN lpU
             in trueNotFalse (trans (sym uns0) (stepUseSafe st0 nid st' pS))
 
-    ||| `takeOwner` of leftover intern of `a` fails: intern is already unsafe.
+  ||| `takeOwner` of leftover intern of `a` fails: intern is already unsafe.
   inhTakeVarLeftover :
       {funs : List Fun} -> {ctx : Ctx} -> {a : Addr} ->
       CallIHs funs ctx ->
@@ -1059,9 +1056,9 @@ mutual
             let uns0 = inh.holdersUnsafe n st0 lookN lpU
             in trueNotFalse (trans (sym uns0) (stepMoveSafe st0 nid st' pS))
 
-    ||| Nested `HECallUser`: leftover intern is already unsafe, so nested
-    ||| args cannot name leftover `a`. The nested frame is unheld and
-    ||| `framePres` keeps leftover `a` live.
+  ||| Nested `HECallUser`: leftover intern is already unsafe, so nested
+  ||| args cannot name leftover `a`. The nested frame is unheld and
+  ||| `framePres` keeps leftover `a` live.
   inhCallUser :
       {funs : List Fun} -> {ctx : Ctx} -> {a : Addr} ->
       CallIHs funs ctx ->

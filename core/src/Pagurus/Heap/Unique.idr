@@ -30,9 +30,30 @@ import Pagurus.Heap.Assign
 
 %default total
 
-||| Expression and take IHs from the Dispatch mutual. Restore threads this
-||| record from `restoreFromBind`; Dispatch builds it from `exprHSafe` /
-||| `takeHSafe`.
+||| Expression / take IHs only. `Pagurus.Heap.Inh` takes this so leftover
+||| `InHand` covering does not close over `CallIHs.inhIH` (which would
+||| cycle through Dispatch `dispatchIhs`).
+public export
+record ExprIHs (funs : List Fun) (ctx : Ctx) where
+  constructor MkExprIHs
+  exprIH :
+    {e : Expr} -> {env : HEnv} -> {h : Heap} -> {o : HResult} ->
+    HEvalExpr {funs} env h e o ->
+    (sc0, sc1 : Scopes) ->
+    checkExpr ctx sc0 e = Right sc1 ->
+    OverApprox env h sc0 ->
+    HSafeRes o sc1
+  takeIH :
+    {e : Expr} -> {env : HEnv} -> {h : Heap} -> {o : HResult} ->
+    HEvalExpr {funs} env h e o ->
+    (sc0, sc1 : Scopes) -> (flChk : Flag) ->
+    takeOwner ctx sc0 e = Right (sc1, flChk) ->
+    OverApprox env h sc0 ->
+    HTOut flChk o sc1
+
+||| Expression, take, and leftover-InHand IHs from the Dispatch mutual.
+||| Restore threads this record from `restoreFromBind`; Dispatch builds
+||| it from `exprHSafe` / `takeHSafe` plus `Inh.inhExprH` / `inhTakeH`.
 public export
 record CallIHs (funs : List Fun) (ctx : Ctx) where
   constructor MkCallIHs
@@ -96,6 +117,7 @@ consTailEq Refl = Refl
 nilNotCons : {x : a} -> {xs : List a} -> Not ([] = x :: xs)
 nilNotCons Refl impossible
 
+export
 noneNotPtrA : Not (HVNone = HVPtr a)
 noneNotPtrA = hvNoneNotPtr
 
@@ -105,6 +127,7 @@ inhRewrite :
 inhRewrite Refl inh = inh
 
 ||| `usePlace` of `n` cannot make a leftover name of `b` use-safe.
+export
 inhUse :
   {env : HEnv} -> {h : Heap} -> {sc, sc' : Scopes} ->
   {n : Place} -> {nid : Nat} -> {nm : String} -> {b : Addr} ->
@@ -151,6 +174,7 @@ inhUse {n} {nid} {sc} inh eq = MkInHand inh.inLive hold
               in inh.holdersUnsafe q stQ lq lp0
 
 ||| `movePlace` of `n` cannot make a leftover name of `b` use-safe.
+export
 inhMove :
   {env : HEnv} -> {h : Heap} -> {sc, sc' : Scopes} ->
   {n : Place} -> {nid : Nat} -> {nm : String} -> {b : Addr} ->
@@ -193,6 +217,7 @@ inhMove {n} {nid} {sc} inh eq = MkInHand inh.inLive hold
               in inh.holdersUnsafe q stQ lq lp0
 
 ||| Allocating a fresh cell does not make leftover `b` use-safe.
+export
 inhAllocPres :
   {env : HEnv} -> {h : Heap} -> {sc : Scopes} -> {b : Addr} ->
   InHand env h sc b ->
@@ -202,6 +227,7 @@ inhAllocPres {h} {b} inh ne =
   MkInHand (trans (allocPresCell h b ne) inh.inLive)
     (\q, stQ, lq, lpQ => inh.holdersUnsafe q stQ lq lpQ)
 
+export
 copyNotPtrA : Not (HVCopy = HVPtr a)
 copyNotPtrA = hvCopyNotPtr
 
@@ -211,6 +237,7 @@ data TakeKeep : Flag -> Type where
   TKNull : TakeKeep Null
 
 ||| Split whether `v` names leftover `a`.
+export
 valNotPtrA : (v : HVal) -> {a : Addr} -> Either (v = HVPtr a) (Not (v = HVPtr a))
 valNotPtrA HVNone = Right noneNotPtrA
 valNotPtrA HVCopy = Right copyNotPtrA
@@ -278,6 +305,7 @@ inhSetHPlace {n} {v} {st'} {sc} {b} inh unsV = MkInHand inh.inLive hold
             lp0 = trans (sym (lookupPlaceSetMiss q n st' sc ne)) lpQ
         in inh.holdersUnsafe q stQ look0 lp0
 
+export
 inhSetHPlaceEmpty :
   {n : Place} -> {v : HVal} ->
   {env : HEnv} -> {h : Heap} -> {sc : Scopes} -> {b : Addr} ->
@@ -285,6 +313,7 @@ inhSetHPlaceEmpty :
   InHand (setH n v env) h (setPlace n (Pagurus.Status.singleton AEmpty) sc) b
 inhSetHPlaceEmpty inh = inhSetHPlace inh (\_ => emptyUnsafeUse)
 
+export
 inhSetHPlaceNull :
   {n : Place} -> {v : HVal} ->
   {env : HEnv} -> {h : Heap} -> {sc : Scopes} -> {b : Addr} ->
@@ -293,6 +322,7 @@ inhSetHPlaceNull :
   InHand (setH n v env) h (setPlace n (Pagurus.Status.singleton ANull) sc) b
 inhSetHPlaceNull inh nv = inhSetHPlace inh (\eq => void (nv eq))
 
+export
 inhSetHPlaceOwnedUnsafe :
   {n : Place} -> {v : HVal} ->
   {env : HEnv} -> {h : Heap} -> {sc : Scopes} -> {b : Addr} ->
@@ -610,6 +640,8 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hPost} ihs bok evs ve
               oa2 = hrFromOk (ihs.exprIH evE sc1 sc2 pE oa1)
           in ownInHand inh1 evEs pEs2 oa2
 
+      ||| Match `TakeKeep` first so `HTaken`'s Flag index is known; a
+      ||| combined `TakeKeep`/`HTaken` match is not covering in Idris 0.8.
       restTaken :
         {envX : HEnv} -> {hX : Heap} -> {sc1, sc2 : Scopes} ->
         {e : Expr} -> {es : List Expr} -> {msR : List Consume} ->
@@ -625,20 +657,52 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hPost} ihs bok evs ve
         InHand envX hX sc1 a ->
         OverApprox envX hX sc1 ->
         Void
-      restTaken TKOwner (HOwnLive {a = b} _ inhB) evE pT oa2 evEs pEs2 inh oaPre with
+      restTaken TKOwner tk evE pT oa2 evEs pEs2 inh oaPre =
+        restOwner tk evE pT oa2 evEs pEs2 inh oaPre
+      restTaken TKNull tk evE pT oa2 evEs pEs2 inh oaPre =
+        restNull tk evE pT oa2 evEs pEs2 inh oaPre
+
+      restOwner :
+        {envX : HEnv} -> {hX : Heap} -> {sc1, sc2 : Scopes} ->
+        {e : Expr} -> {es : List Expr} -> {msR : List Consume} ->
+        {v : HVal} -> {envY : HEnv} -> {hY : Heap} ->
+        HTaken Owner v envY hY sc2 ->
+        HEvalExpr {funs} envX hX e (HROk v envY hY) ->
+        takeOwner ctx sc1 e = Right (sc2, Owner) ->
+        OverApprox envY hY sc2 ->
+        HEvalExprs {funs} envY hY es (HROk HVNone env1 h1) ->
+        checkArgsModes ctx sc2 callee es msR = Right sc' ->
+        InHand envX hX sc1 a ->
+        OverApprox envX hX sc1 ->
+        Void
+      restOwner (HOwnLive {a = b} _ inhB) evE pT oa2 evEs pEs2 inh oaPre with
           (a == b) proof pab
-        restTaken TKOwner (HOwnLive {a = b} _ inhB) evE pT oa2 evEs pEs2 inh oaPre | True =
+        restOwner (HOwnLive {a = b} _ inhB) evE pT oa2 evEs pEs2 inh oaPre | True =
           ownInHand {envX = envY} {hX = hY} {sc1 = sc2}
             (replace {p = \x => InHand envY hY sc2 x}
                (sym (eqNatTrue a b pab)) inhB)
             evEs pEs2 oa2
-        restTaken TKOwner (HOwnLive {a = b} _ inhB) evE pT oa2 evEs pEs2 inh oaPre | False =
+        restOwner (HOwnLive {a = b} _ inhB) evE pT oa2 evEs pEs2 inh oaPre | False =
           ownInHand {envX = envY} {hX = hY} {sc1 = sc2}
             (ihs.takeInhIH evE pT inh oaPre oa2) evEs pEs2 oa2
-      restTaken TKOwner HOwnNone evE pT oa2 evEs pEs2 inh oaPre =
+      restOwner HOwnNone evE pT oa2 evEs pEs2 inh oaPre =
         ownInHand {envX = envY} {hX = hY} {sc1 = sc2}
           (ihs.takeInhIH evE pT inh oaPre oa2) evEs pEs2 oa2
-      restTaken TKNull HNull evE pT oa2 evEs pEs2 inh oaPre =
+
+      restNull :
+        {envX : HEnv} -> {hX : Heap} -> {sc1, sc2 : Scopes} ->
+        {e : Expr} -> {es : List Expr} -> {msR : List Consume} ->
+        {v : HVal} -> {envY : HEnv} -> {hY : Heap} ->
+        HTaken Null v envY hY sc2 ->
+        HEvalExpr {funs} envX hX e (HROk v envY hY) ->
+        takeOwner ctx sc1 e = Right (sc2, Null) ->
+        OverApprox envY hY sc2 ->
+        HEvalExprs {funs} envY hY es (HROk HVNone env1 h1) ->
+        checkArgsModes ctx sc2 callee es msR = Right sc' ->
+        InHand envX hX sc1 a ->
+        OverApprox envX hX sc1 ->
+        Void
+      restNull HNull evE pT oa2 evEs pEs2 inh oaPre =
         ownInHand {envX = envY} {hX = hY} {sc1 = sc2}
           (ihs.takeInhIH evE pT inh oaPre oa2) evEs pEs2 oa2
 

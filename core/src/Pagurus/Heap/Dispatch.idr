@@ -31,6 +31,7 @@ import Pagurus.Heap.Seq
 import Pagurus.Heap.Ended
 import Pagurus.Heap.Restore
 import Pagurus.Heap.Unique
+import Pagurus.Heap.Inh
 
 %default total
 
@@ -69,8 +70,17 @@ mutual
   dispatchIhs {funs} {chk} {ctx} = MkCallIHs
     (\ev, sc0, sc1, p, oa => exprHSafe {funs} {chk} ev sc0 sc1 p oa)
     (\ev, sc0, sc1, fl, p, oa => takeHSafe {funs} {chk} ev sc0 sc1 fl p oa)
-    (\ev, pE, inh, oa => inhExprH {funs} {chk} ev pE inh oa)
-    (\ev, pT, inh, oa, oaY => inhTakeH {funs} {chk} ev pT inh oa oaY)
+    (\ev, pE, inh, oa => inhExprH {funs} dispatchExprs inh oa ev pE)
+    (\ev, pT, inh, oa, oaY => inhTakeH {funs} dispatchExprs inh oa ev pT oaY)
+
+  ||| `exprHSafe` / `takeHSafe` only, so `Inh` does not close over `inhIH`.
+  dispatchExprs :
+    {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
+    {auto chk : FunsChecked cfuel ctx funs} ->
+    ExprIHs funs ctx
+  dispatchExprs {funs} {chk} {ctx} = MkExprIHs
+    (\ev, sc0, sc1, p, oa => exprHSafe {funs} {chk} ev sc0 sc1 p oa)
+    (\ev, sc0, sc1, fl, p, oa => takeHSafe {funs} {chk} ev sc0 sc1 fl p oa)
 
   export
   exprHSafe :

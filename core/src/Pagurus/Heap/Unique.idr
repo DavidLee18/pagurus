@@ -763,8 +763,8 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
         where
           tv : (look : Maybe Status) -> lookupPlace n sc1 = look -> Void
           tv Nothing pL =
-            void (ownerNotGhost (cong snd (rightInj
-              (trans (sym (takeVarMiss ctx nid nm pL)) pT))))
+            void (ownerNotGhost (sym (cong snd (rightInj
+              (trans (sym (takeVarMiss ctx nid nm pL)) pT)))))
           tv (Just stN) pL =
             let mv = takeVarMove pT pL
                 oa2 = oaMovePlace oa1 mv

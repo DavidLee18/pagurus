@@ -942,22 +942,22 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
         InHand envX hX sc1 a ->
         OverApprox envX hX sc1 ->
         Void
-      restTaken TKOwner (HOwnLive {a = b} _ inhB) evE pT oa2 evEs pEs2 inh oa0 with
+      restTaken TKOwner (HOwnLive {a = b} _ inhB) evE pT oa2 evEs pEs2 inh oaPre with
           (a == b) proof pab
-        restTaken TKOwner (HOwnLive {a = b} _ inhB) evE pT oa2 evEs pEs2 inh oa0 | True =
+        restTaken TKOwner (HOwnLive {a = b} _ inhB) evE pT oa2 evEs pEs2 inh oaPre | True =
           ownInHand {envX = envY} {hX = hY} {sc1 = sc2}
             (replace {p = \x => InHand envY hY sc2 x}
                (sym (eqNatTrue a b pab)) inhB)
             evEs pEs2 oa2
-        restTaken TKOwner (HOwnLive {a = b} _ inhB) evE pT oa2 evEs pEs2 inh oa0 | False =
+        restTaken TKOwner (HOwnLive {a = b} _ inhB) evE pT oa2 evEs pEs2 inh oaPre | False =
           ownInHand {envX = envY} {hX = hY} {sc1 = sc2}
-            (inhTake inh oa0 evE pT oa2) evEs pEs2 oa2
-      restTaken TKOwner HOwnNone evE pT oa2 evEs pEs2 inh oa0 =
+            (inhTake inh oaPre evE pT oa2) evEs pEs2 oa2
+      restTaken TKOwner HOwnNone evE pT oa2 evEs pEs2 inh oaPre =
         ownInHand {envX = envY} {hX = hY} {sc1 = sc2}
-          (inhTake inh oa0 evE pT oa2) evEs pEs2 oa2
-      restTaken TKNull HNull evE pT oa2 evEs pEs2 inh oa0 =
+          (inhTake inh oaPre evE pT oa2) evEs pEs2 oa2
+      restTaken TKNull HNull evE pT oa2 evEs pEs2 inh oaPre =
         ownInHand {envX = envY} {hX = hY} {sc1 = sc2}
-          (inhTake inh oa0 evE pT oa2) evEs pEs2 oa2
+          (inhTake inh oaPre evE pT oa2) evEs pEs2 oa2
 
       ||| Preserve leftover `InHand` through `checkExpr` of a remaining
       ||| (or nested) argument. Nested `HECallUser` cannot consume leftover

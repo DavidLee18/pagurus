@@ -194,8 +194,14 @@ argsModesMoveConsH :
   HSafeRes o sc'
 argsModesMoveConsH es ms pc ihE ihEs eq (Left _) pT =
   void (leftNotRight (trans (sym (argsModesMoveLeft es ms pc pT)) eq))
-argsModesMoveConsH es ms pc ihE ihEs eq (Right (sc1, fl1)) pT =
-  ihEs sc1 (trans (sym (argsModesMoveRight es ms pc pT)) eq) (htFromOk (ihE sc1 fl1 pT))
+argsModesMoveConsH es ms pc ihE ihEs eq (Right (sc1, Ghost)) pT =
+  void (leftNotRight (trans (sym (argsModesMoveGhost es ms pc pT)) eq))
+argsModesMoveConsH es ms pc ihE ihEs eq (Right (sc1, Owner)) pT =
+  ihEs sc1 (trans (sym (argsModesMoveRight es ms pc pT ownerNotGhost)) eq)
+    (htFromOk (ihE sc1 Owner pT))
+argsModesMoveConsH es ms pc ihE ihEs eq (Right (sc1, Null)) pT =
+  ihEs sc1 (trans (sym (argsModesMoveRight es ms pc pT nullNotGhost)) eq)
+    (htFromOk (ihE sc1 Null pT))
 
 export
 argsModesExtraCrashH :
@@ -233,5 +239,11 @@ argsModesExtraConsH :
   HSafeRes o sc'
 argsModesExtraConsH es ihE ihEs eq (Left _) pT =
   void (leftNotRight (trans (sym (argsModesExtraLeft es pT)) eq))
-argsModesExtraConsH es ihE ihEs eq (Right (sc1, fl1)) pT =
-  ihEs sc1 (trans (sym (argsModesExtraRight es pT)) eq) (htFromOk (ihE sc1 fl1 pT))
+argsModesExtraConsH es ihE ihEs eq (Right (sc1, Ghost)) pT =
+  void (leftNotRight (trans (sym (argsModesExtraGhost es pT)) eq))
+argsModesExtraConsH es ihE ihEs eq (Right (sc1, Owner)) pT =
+  ihEs sc1 (trans (sym (argsModesExtraRight es pT ownerNotGhost)) eq)
+    (htFromOk (ihE sc1 Owner pT))
+argsModesExtraConsH es ihE ihEs eq (Right (sc1, Null)) pT =
+  ihEs sc1 (trans (sym (argsModesExtraRight es pT nullNotGhost)) eq)
+    (htFromOk (ihE sc1 Null pT))

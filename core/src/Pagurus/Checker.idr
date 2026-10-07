@@ -475,6 +475,27 @@ mapDiscardFlag : Either Diag (Scopes, Flag) -> Either Diag Scopes
 mapDiscardFlag (Left d) = Left d
 mapDiscardFlag (Right (sc, _)) = Right sc
 
+||| Copy-assignment, literals, and non-realloc calls are `Ghost`: they do
+||| not transfer unique ownership. Passing them as May/Always (or extra
+||| Always) would leave the source use-safe while BindOk unique-owns the
+||| address — leftover unique-owner-of-Freed. Null is allowed (`free(NULL)`).
+public export
+ghostNotOwner : Expr -> Diag
+ghostNotOwner e =
+  MkDiag KUnproven
+    "cannot prove unique ownership of this argument"
+    (exprId e) "consumed here"
+    []
+    "a consuming argument must be a unique owner or null; copy-assignment, literals, and non-realloc calls do not transfer ownership"
+
+||| Consume-mode take: keep Owner and Null, reject Ghost.
+public export
+consumeTake : Expr -> Either Diag (Scopes, Flag) -> Either Diag Scopes
+consumeTake _ (Left d) = Left d
+consumeTake _ (Right (sc, Owner)) = Right sc
+consumeTake _ (Right (sc, Null)) = Right sc
+consumeTake e (Right (_, Ghost)) = Left (ghostNotOwner e)
+
 public export
 usePlace : Scopes -> Place -> Nat -> String -> Either Diag Scopes
 usePlace sc n nid nm =
@@ -666,7 +687,7 @@ mutual
   public export
   argAction : Bool -> Ctx -> Scopes -> Expr -> Either Diag Scopes
   argAction False ctx sc e = checkExpr ctx sc e
-  argAction True ctx sc e = mapDiscardFlag (takeOwner ctx sc e)
+  argAction True ctx sc e = consumeTake e (takeOwner ctx sc e)
 
   public export
   argsModesFrom : Bool -> String -> Expr -> Ctx -> List Expr -> List Consume ->
@@ -1049,6 +1070,38 @@ export
 mapDiscardFlagRight : {sc : Scopes} -> {fl : Flag} ->
                       mapDiscardFlag (Right (sc, fl)) = Right sc
 mapDiscardFlagRight = Refl
+
+export
+consumeTakeLeft : {e : Expr} -> {d : Diag} ->
+                  consumeTake e (Left d) = Left d
+consumeTakeLeft = Refl
+
+export
+consumeTakeOwner : {e : Expr} -> {sc : Scopes} ->
+                   consumeTake e (Right (sc, Owner)) = Right sc
+consumeTakeOwner = Refl
+
+export
+consumeTakeNull : {e : Expr} -> {sc : Scopes} ->
+                  consumeTake e (Right (sc, Null)) = Right sc
+consumeTakeNull = Refl
+
+export
+consumeTakeGhost : {e : Expr} -> {sc : Scopes} ->
+                   consumeTake e (Right (sc, Ghost)) = Left (ghostNotOwner e)
+consumeTakeGhost = Refl
+
+export
+ownerNotGhost : Not (Owner = Ghost)
+ownerNotGhost Refl impossible
+
+export
+nullNotGhost : Not (Null = Ghost)
+nullNotGhost Refl impossible
+
+export
+ownerNotNull : Not (Owner = Null)
+ownerNotNull Refl impossible
 
 export
 checkReallocNil : (ctx : Ctx) -> (sc : Scopes) ->
@@ -1803,15 +1856,29 @@ argsModesMoveLeft :
 argsModesMoveLeft _ _ pc pT = rewrite pc in rewrite pT in Refl
 
 export
+argsModesMoveGhost :
+  (es : List Expr) -> (ms : List Consume) ->
+  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {e : Expr} -> {callee : String} ->
+  {m : Consume} ->
+  doesConsume m = True ->
+  takeOwner ctx sc e = Right (sc1, Ghost) ->
+  checkArgsModes ctx sc callee (e :: es) (m :: ms) =
+    Left (nameConsumedArg callee e (ghostNotOwner e))
+argsModesMoveGhost _ _ pc pT = rewrite pc in rewrite pT in Refl
+
+export
 argsModesMoveRight :
   (es : List Expr) -> (ms : List Consume) ->
   {ctx : Ctx} -> {sc, sc1 : Scopes} -> {e : Expr} -> {callee : String} ->
   {m : Consume} -> {fl : Flag} ->
   doesConsume m = True ->
   takeOwner ctx sc e = Right (sc1, fl) ->
+  Not (fl = Ghost) ->
   checkArgsModes ctx sc callee (e :: es) (m :: ms) =
     checkArgsModes ctx sc1 callee es ms
-argsModesMoveRight _ _ pc pT = rewrite pc in rewrite pT in Refl
+argsModesMoveRight {fl = Owner} _ _ pc pT _ = rewrite pc in rewrite pT in Refl
+argsModesMoveRight {fl = Null} _ _ pc pT _ = rewrite pc in rewrite pT in Refl
+argsModesMoveRight {fl = Ghost} _ _ _ _ ng = void (ng Refl)
 
 export
 argsModesExtraLeft :
@@ -1822,13 +1889,25 @@ argsModesExtraLeft :
 argsModesExtraLeft _ pT = rewrite pT in Refl
 
 export
+argsModesExtraGhost :
+  (es : List Expr) ->
+  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {e : Expr} -> {callee : String} ->
+  takeOwner ctx sc e = Right (sc1, Ghost) ->
+  checkArgsModes ctx sc callee (e :: es) [] =
+    Left (nameConsumedArg callee e (ghostNotOwner e))
+argsModesExtraGhost _ pT = rewrite pT in Refl
+
+export
 argsModesExtraRight :
   (es : List Expr) ->
   {ctx : Ctx} -> {sc, sc1 : Scopes} -> {e : Expr} -> {callee : String} -> {fl : Flag} ->
   takeOwner ctx sc e = Right (sc1, fl) ->
+  Not (fl = Ghost) ->
   checkArgsModes ctx sc callee (e :: es) [] =
     checkArgsModes ctx sc1 callee es []
-argsModesExtraRight _ pT = rewrite pT in Refl
+argsModesExtraRight {fl = Owner} _ pT _ = rewrite pT in Refl
+argsModesExtraRight {fl = Null} _ pT _ = rewrite pT in Refl
+argsModesExtraRight {fl = Ghost} _ _ ng = void (ng Refl)
 
 export
 argsModesBorrowSplit :
@@ -1867,8 +1946,12 @@ argsModesMoveSplit pc eq = splitGo (takeOwner ctx sc e) Refl
                checkArgsModes ctx sc1 callee es ms = Right sc')))
     splitGo (Left d) pT =
       void (leftNotRightChk (trans (sym (argsModesMoveLeft es ms pc pT)) eq))
-    splitGo (Right (sc1, fl)) pT =
-      (sc1 ** (fl ** (pT, trans (sym (argsModesMoveRight es ms pc pT)) eq)))
+    splitGo (Right (sc1, Ghost)) pT =
+      void (leftNotRightChk (trans (sym (argsModesMoveGhost es ms pc pT)) eq))
+    splitGo (Right (sc1, Owner)) pT =
+      (sc1 ** (Owner ** (pT, trans (sym (argsModesMoveRight es ms pc pT ownerNotGhost)) eq)))
+    splitGo (Right (sc1, Null)) pT =
+      (sc1 ** (Null ** (pT, trans (sym (argsModesMoveRight es ms pc pT nullNotGhost)) eq)))
 
 export
 argsModesExtraSplit :
@@ -1886,8 +1969,12 @@ argsModesExtraSplit eq = splitGo (takeOwner ctx sc e) Refl
                checkArgsModes ctx sc1 callee es [] = Right sc')))
     splitGo (Left d) pT =
       void (leftNotRightChk (trans (sym (argsModesExtraLeft es pT)) eq))
-    splitGo (Right (sc1, fl)) pT =
-      (sc1 ** (fl ** (pT, trans (sym (argsModesExtraRight es pT)) eq)))
+    splitGo (Right (sc1, Ghost)) pT =
+      void (leftNotRightChk (trans (sym (argsModesExtraGhost es pT)) eq))
+    splitGo (Right (sc1, Owner)) pT =
+      (sc1 ** (Owner ** (pT, trans (sym (argsModesExtraRight es pT ownerNotGhost)) eq)))
+    splitGo (Right (sc1, Null)) pT =
+      (sc1 ** (Null ** (pT, trans (sym (argsModesExtraRight es pT nullNotGhost)) eq)))
 
 export
 stmtsConsLeft :

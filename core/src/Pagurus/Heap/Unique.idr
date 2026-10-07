@@ -302,7 +302,7 @@ callArgsModes pb pd eq =
 export
 uniqueOwnGo :
   {funs : List Fun} -> {ctx : Ctx} -> {callee : String} ->
-  {env, env1 : HEnv} -> {h, h1, hB : Heap} -> {sc, sc' : Scopes} ->
+  {env, env1 : HEnv} -> {h, h1, hPost : Heap} -> {sc, sc' : Scopes} ->
   {fid : Nat} -> {ps : List Param} -> {cmodes : List Consume} -> {vs : List HVal} ->
   {cargs : List Expr} ->
   CallIHs funs ctx ->
@@ -311,9 +311,9 @@ uniqueOwnGo :
   vs = collectArgVals evs ->
   checkArgsModes ctx sc callee cargs cmodes = Right sc' ->
   OverApprox env h sc ->
-  LeftoverSafeFreed env1 h1 hB sc' fid ps cmodes vs
-uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq pModes oa0
-    p st a pnoF look lp safe live ph =
+  LeftoverSafeFreed env1 h1 hPost sc' fid ps cmodes vs
+uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hPost} ihs bok evs veq pModes oa0
+    p st a pnoF lookP lp safe live ph =
   go bok evs veq pModes oa0 pnoF
   where
     mutual
@@ -530,7 +530,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
         Void
       ownInHand inh HEArgsNil pEs _ =
         let scEq = rightInj (trans (sym (checkArgsModesNil ctx sc1 callee ms0)) pEs)
-            uns = inh.holdersUnsafe p st look
+            uns = inh.holdersUnsafe p st lookP
                     (replace {p = \s => lookupPlace p s = Just st} (sym scEq) lp)
         in trueNotFalse (trans (sym uns) safe)
       ownInHand inh (HEArgsCons HVCopy _ _ HELit evEs) pEs oa1
@@ -1337,9 +1337,8 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
             void (leftNotRight (trans (sym (takeCallLeft
               (trans (checkExprCall ctx sc0 id calleeC args) pC))) pT))
           tGo (Right scA) pC =
-            let inhA = inhCallArgs inh oa evs pC
-                pF = isRealloc calleeC && not (isDefined ctx calleeC)
-            in tFl scA pF Refl inhA pC
+            tFl scA (isRealloc calleeC && not (isDefined ctx calleeC)) Refl
+              (inhCallArgs inh oa evs pC) pC
 
       inhTakeCallUser :
         {id : Nat} -> {calleeC : String} -> {args : List Expr} ->
@@ -1379,9 +1378,8 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
             void (leftNotRight (trans (sym (takeCallLeft
               (trans (checkExprCall ctx sc0 id calleeC args) pC))) pT))
           tGo (Right scA) pC =
-            let inhB = inhCallUser inh oa pB f look pDef evs evBody pC
-                pF = isRealloc calleeC && not (isDefined ctx calleeC)
-            in tFl scA pF Refl inhB pC
+            tFl scA (isRealloc calleeC && not (isDefined ctx calleeC)) Refl
+              (inhCallUser inh oa pB f look pDef evs evBody pC) pC
 
       inhTakeCallUserRet :
         {id : Nat} -> {calleeC : String} -> {args : List Expr} ->
@@ -1421,9 +1419,8 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
             void (leftNotRight (trans (sym (takeCallLeft
               (trans (checkExprCall ctx sc0 id calleeC args) pC))) pT))
           tGo (Right scA) pC =
-            let inhB = inhCallUserRet inh oa pB f look pDef evs evBody pC
-                pF = isRealloc calleeC && not (isDefined ctx calleeC)
-            in tFlR scA pF Refl inhB pC
+            tFlR scA (isRealloc calleeC && not (isDefined ctx calleeC)) Refl
+              (inhCallUserRet inh oa pB f look pDef evs evBody pC) pC
 
       inhTakeRealloc :
         {id : Nat} -> {calleeC : String} -> {args : List Expr} ->
@@ -1458,11 +1455,56 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
             void (leftNotRight (trans (sym (takeCallLeft
               (trans (checkExprCall ctx sc0 id calleeC args) pC))) pT))
           tGo (Right scA) pC =
-            let inhA = inhRealloc inh oa pName evs pC
-                pF = trans (cong (\r => r && Delay (not (isDefined ctx calleeC)))
-                               (reallocNameEq calleeC))
-                       (rewrite pName in Refl)
-            in tFlA scA pF Refl inhA pC
+            tFlA scA (isRealloc calleeC && not (isDefined ctx calleeC)) Refl
+              (inhRealloc inh oa pName evs pC) pC
+
+      takeAsgNull :
+        {id : Nat} -> {n : Place} -> {nm : String} -> {rhs : Expr} ->
+        {env0 : HEnv} -> {h0 : Heap} -> {sc0, scY : Scopes} -> {fl0 : Flag} ->
+        {w : HVal} -> {envA : HEnv} -> {hA : Heap} -> {scT : Scopes} ->
+        InHand env0 h0 sc0 a ->
+        OverApprox env0 h0 sc0 ->
+        HEvalExpr {funs} env0 h0 rhs (HROk w envA hA) ->
+        takeOwner ctx sc0 (EAssign id n nm Ptr rhs) = Right (scY, fl0) ->
+        takeOwner ctx sc0 rhs = Right (scT, Null) ->
+        OverApprox envA hA scT ->
+        HTaken Null w envA hA scT ->
+        InHand (setH n w envA) hA scY a
+      takeAsgNull inh oa ev pT pR oaT HNull =
+        let inhR = inhTake inh oa ev pR oaT
+            scEq = cong fst (rightInj (trans (sym (takeAsgPtrNull id n nm pR)) pT))
+        in replace {p = \s => InHand (setH n HVNone envA) hA s a} scEq
+             (inhSetHPlaceNull inhR noneNotPtrA)
+
+      takeAsgMove :
+        {id : Nat} -> {n : Place} -> {nm : String} -> {rhs : Expr} ->
+        {env0 : HEnv} -> {h0 : Heap} -> {sc0, scY : Scopes} -> {fl0 : Flag} ->
+        {w : HVal} -> {envA : HEnv} -> {hA : Heap} -> {scT, sc2 : Scopes} ->
+        InHand env0 h0 sc0 a ->
+        OverApprox env0 h0 sc0 ->
+        HEvalExpr {funs} env0 h0 rhs (HROk w envA hA) ->
+        takeOwner ctx sc0 (EAssign id n nm Ptr rhs) = Right (scY, fl0) ->
+        takeOwner ctx sc0 rhs = Right (scT, Owner) ->
+        sc2 = scY ->
+        OverApprox envA hA scT ->
+        HTaken Owner w envA hA scT ->
+        movePlace (setPlace n (Pagurus.Status.singleton AOwned) scT) n id nm
+          = Right sc2 ->
+        InHand (setH n w envA) hA scY a
+      takeAsgMove inh oa ev pT pR scEq oaT HOwnNone pM0 =
+        let inhR = inhTake inh oa ev pR oaT
+        in replace {p = \s => InHand (setH n HVNone envA) hA s a} scEq
+             (inhMove {n} {nid = id} {nm} {b = a}
+                (inhSetHPlaceOwnedUnsafe inhR noneNotPtrA) pM0)
+      takeAsgMove inh oa ev pT pR scEq oaT (HOwnLive {a = b} clB ihB) pM0 =
+        case valNotPtrA {a} (HVPtr b) of
+          Left veq =>
+            void (inhNoTakeLeftover inh oa ev pR veq)
+          Right nv =>
+            let inhR = inhTake inh oa ev pR oaT
+            in replace {p = \s => InHand (setH n (HVPtr b) envA) hA s a} scEq
+                 (inhMove {n} {nid = id} {nm} {b = a}
+                    (inhSetHPlaceOwnedUnsafe inhR nv) pM0)
 
       inhTakeAsgPtr :
         {id : Nat} -> {n : Place} -> {nm : String} -> {rhs : Expr} ->
@@ -1489,18 +1531,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
                  (inhSetHPlaceEmpty inhR)
           asgT (Right (scT, Null)) pR =
             let ht = ihs.takeIH ev sc0 scT Null pR oa
-            in asgTN ht
-            where
-              asgTN :
-                HTOut Null w envA hA scT ->
-                InHand (setH n w envA) hA scY a
-              asgTN ht = case htTaken ht of
-                HNull =>
-                  let inhR = inhTake inh oa ev pR (htFromOk ht)
-                      scEq = cong fst (rightInj
-                        (trans (sym (takeAsgPtrNull id n nm pR)) pT))
-                  in replace {p = \s => InHand (setH n HVNone envA) hA s a} scEq
-                       (inhSetHPlaceNull inhR noneNotPtrA)
+            in takeAsgNull inh oa ev pT pR (htFromOk ht) (htTaken ht)
           asgT (Right (scT, Owner)) pR with
               (movePlace (setPlace n (Pagurus.Status.singleton AOwned) scT) n id nm)
               proof pM
@@ -1508,30 +1539,56 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
               void (leftNotRight (trans (sym (takeAsgPtrFail pR pM)) pT))
             asgT (Right (scT, Owner)) pR | Right sc2 =
               let ht = ihs.takeIH ev sc0 scT Owner pR oa
-                  inhR = inhTake inh oa ev pR (htFromOk ht)
                   scEq = cong fst (rightInj (trans (sym (takeAsgPtrOwner pR pM)) pT))
-              in asgTO scEq inhR (htTaken ht) pM
-              where
-                asgTO :
-                  sc2 = scY ->
-                  InHand envA hA scT a ->
-                  HTaken Owner w envA hA scT ->
-                  movePlace (setPlace n (Pagurus.Status.singleton AOwned) scT) n id nm
-                    = Right sc2 ->
-                  InHand (setH n w envA) hA scY a
-                asgTO scEq inhR HOwnNone pM0 =
-                  replace {p = \s => InHand (setH n HVNone envA) hA s a} scEq
-                    (inhMove {n} {nid = id} {nm} {b = a}
-                       (inhSetHPlaceOwnedUnsafe inhR noneNotPtrA) pM0)
-                asgTO scEq inhR (HOwnLive {a = b} live ihB) pM0 =
-                  case valNotPtrA {a} (HVPtr b) of
-                    Left veq =>
-                      void (inhNoTakeLeftover inh oa ev pR veq)
-                    Right nv =>
-                      replace {p = \s => InHand (setH n (HVPtr b) envA) hA s a}
-                        scEq
-                        (inhMove {n} {nid = id} {nm} {b = a}
-                           (inhSetHPlaceOwnedUnsafe inhR nv) pM0)
+              in takeAsgMove inh oa ev pT pR scEq (htFromOk ht) (htTaken ht) pM
+
+      exprAsgNull :
+        {id : Nat} -> {n : Place} -> {nm : String} -> {rhs : Expr} ->
+        {env0 : HEnv} -> {h0 : Heap} -> {sc0, scY : Scopes} ->
+        {w : HVal} -> {envA : HEnv} -> {hA : Heap} -> {scT : Scopes} ->
+        InHand env0 h0 sc0 a ->
+        OverApprox env0 h0 sc0 ->
+        HEvalExpr {funs} env0 h0 rhs (HROk w envA hA) ->
+        checkExpr ctx sc0 (EAssign id n nm Ptr rhs) = Right scY ->
+        takeOwner ctx sc0 rhs = Right (scT, Null) ->
+        OverApprox envA hA scT ->
+        HTaken Null w envA hA scT ->
+        InHand (setH n w envA) hA scY a
+      exprAsgNull inh oa ev eq pT oaT HNull =
+        let inhR = inhTake inh oa ev pT oaT
+            scEq = rightInj (trans (sym (checkExprAsgPtrNull id n nm pT)) eq)
+        in replace {p = \s => InHand (setH n HVNone envA) hA s a} scEq
+             (inhSetHPlaceNull inhR noneNotPtrA)
+
+      exprAsgUse :
+        {id : Nat} -> {n : Place} -> {nm : String} -> {rhs : Expr} ->
+        {env0 : HEnv} -> {h0 : Heap} -> {sc0, scY : Scopes} ->
+        {w : HVal} -> {envA : HEnv} -> {hA : Heap} -> {scT, sc2 : Scopes} ->
+        InHand env0 h0 sc0 a ->
+        OverApprox env0 h0 sc0 ->
+        HEvalExpr {funs} env0 h0 rhs (HROk w envA hA) ->
+        checkExpr ctx sc0 (EAssign id n nm Ptr rhs) = Right scY ->
+        takeOwner ctx sc0 rhs = Right (scT, Owner) ->
+        sc2 = scY ->
+        OverApprox envA hA scT ->
+        HTaken Owner w envA hA scT ->
+        usePlace (setPlace n (Pagurus.Status.singleton AOwned) scT) n id nm
+          = Right sc2 ->
+        InHand (setH n w envA) hA scY a
+      exprAsgUse inh oa ev eq pT scEq oaT HOwnNone pU0 =
+        let inhR = inhTake inh oa ev pT oaT
+        in replace {p = \s => InHand (setH n HVNone envA) hA s a} scEq
+             (inhUse {n} {nid = id} {nm} {b = a}
+                (inhSetHPlaceOwnedUnsafe inhR noneNotPtrA) pU0)
+      exprAsgUse inh oa ev eq pT scEq oaT (HOwnLive {a = b} clB ihB) pU0 =
+        case valNotPtrA {a} (HVPtr b) of
+          Left veq =>
+            void (inhNoTakeLeftover inh oa ev pT veq)
+          Right nv =>
+            let inhR = inhTake inh oa ev pT oaT
+            in replace {p = \s => InHand (setH n (HVPtr b) envA) hA s a} scEq
+                 (inhUse {n} {nid = id} {nm} {b = a}
+                    (inhSetHPlaceOwnedUnsafe inhR nv) pU0)
 
       inhAsgPtr :
         {id : Nat} -> {n : Place} -> {nm : String} -> {rhs : Expr} ->
@@ -1558,17 +1615,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
                  (inhSetHPlaceEmpty inhR)
           asgGo (Right (scT, Null)) pT =
             let ht = ihs.takeIH ev sc0 scT Null pT oa
-            in asgNull ht
-            where
-              asgNull :
-                HTOut Null w envA hA scT ->
-                InHand (setH n w envA) hA scY a
-              asgNull ht = case htTaken ht of
-                HNull =>
-                  let inhR = inhTake inh oa ev pT (htFromOk ht)
-                      scEq = rightInj (trans (sym (checkExprAsgPtrNull id n nm pT)) eq)
-                  in replace {p = \s => InHand (setH n HVNone envA) hA s a} scEq
-                       (inhSetHPlaceNull inhR noneNotPtrA)
+            in exprAsgNull inh oa ev eq pT (htFromOk ht) (htTaken ht)
           asgGo (Right (scT, Owner)) pT with
               (usePlace (setPlace n (Pagurus.Status.singleton AOwned) scT) n id nm)
               proof pU
@@ -1576,30 +1623,8 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
               void (leftNotRight (trans (sym (checkExprAsgPtrUseFail pT pU)) eq))
             asgGo (Right (scT, Owner)) pT | Right sc2 =
               let ht = ihs.takeIH ev sc0 scT Owner pT oa
-                  inhR = inhTake inh oa ev pT (htFromOk ht)
                   scEq = rightInj (trans (sym (checkExprAsgPtrOwner pT pU)) eq)
-              in asgOwner scEq inhR (htTaken ht) pU
-              where
-                asgOwner :
-                  sc2 = scY ->
-                  InHand envA hA scT a ->
-                  HTaken Owner w envA hA scT ->
-                  usePlace (setPlace n (Pagurus.Status.singleton AOwned) scT) n id nm
-                    = Right sc2 ->
-                  InHand (setH n w envA) hA scY a
-                asgOwner scEq inhR HOwnNone pU0 =
-                  replace {p = \s => InHand (setH n HVNone envA) hA s a} scEq
-                    (inhUse {n} {nid = id} {nm} {b = a}
-                       (inhSetHPlaceOwnedUnsafe inhR noneNotPtrA) pU0)
-                asgOwner scEq inhR (HOwnLive {a = b} live ihB) pU0 =
-                  case valNotPtrA {a} (HVPtr b) of
-                    Left veq =>
-                      void (inhNoTakeLeftover inh oa ev pT veq)
-                    Right nv =>
-                      replace {p = \s => InHand (setH n (HVPtr b) envA) hA s a}
-                        scEq
-                        (inhUse {n} {nid = id} {nm} {b = a}
-                           (inhSetHPlaceOwnedUnsafe inhR nv) pU0)
+              in exprAsgUse inh oa ev eq pT scEq (htFromOk ht) (htTaken ht) pU
 
       ||| `usePlace` of leftover intern of `a` fails: intern is already unsafe.
       inhUseLeftover :
@@ -2143,7 +2168,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
 export
 uniqueOwnCall :
   {funs : List Fun} -> {ctx : Ctx} -> {callee : String} ->
-  {env, env1 : HEnv} -> {h, h1, hB : Heap} -> {sc, sc' : Scopes} ->
+  {env, env1 : HEnv} -> {h, h1, hPost : Heap} -> {sc, sc' : Scopes} ->
   {fid : Nat} -> {ps : List Param} -> {vs : List HVal} ->
   {args : List Expr} -> {id : Nat} ->
   CallIHs funs ctx ->
@@ -2154,7 +2179,7 @@ uniqueOwnCall :
   BindOk fid h1 ps (funModes ctx callee) vs ->
   (evs : HEvalExprs {funs} env h args (HROk HVNone env1 h1)) ->
   vs = collectArgVals evs ->
-  LeftoverSafeFreed env1 h1 hB sc' fid ps (funModes ctx callee) vs
+  LeftoverSafeFreed env1 h1 hPost sc' fid ps (funModes ctx callee) vs
 uniqueOwnCall ihs oa0 eq pb pd bok evs veq =
   uniqueOwnGo ihs bok evs veq (callArgsModes pb pd eq) oa0
 
@@ -2164,7 +2189,7 @@ uniqueOwnCall ihs oa0 eq pb pd bok evs veq =
 export
 uniqueOwnCallFun :
   {funs : List Fun} -> {ctx : Ctx} -> {callee : String} ->
-  {env, env1 : HEnv} -> {h, h1, hB : Heap} -> {sc, sc' : Scopes} ->
+  {env, env1 : HEnv} -> {h, h1, hPost : Heap} -> {sc, sc' : Scopes} ->
   {args : List Expr} -> {id : Nat} -> {f : Fun} ->
   CallIHs funs ctx ->
   OverApprox env h sc ->
@@ -2173,7 +2198,7 @@ uniqueOwnCallFun :
   isDefined ctx callee = True ->
   (evs : HEvalExprs {funs} env h args (HROk HVNone env1 h1)) ->
   BindOk f.id h1 f.params (funModes ctx f.name) (collectArgVals evs) ->
-  Maybe (LeftoverSafeFreed env1 h1 hB sc' f.id f.params (funModes ctx f.name)
+  Maybe (LeftoverSafeFreed env1 h1 hPost sc' f.id f.params (funModes ctx f.name)
            (collectArgVals evs))
 uniqueOwnCallFun {f} ihs oa0 eq pb pd evs bok =
   modesGo (consumeListEq (funModes ctx f.name) (funModes ctx callee)) Refl
@@ -2182,10 +2207,10 @@ uniqueOwnCallFun {f} ihs oa0 eq pb pd evs bok =
       (res : Either (funModes ctx f.name = funModes ctx callee)
                     (Not (funModes ctx f.name = funModes ctx callee))) ->
       consumeListEq (funModes ctx f.name) (funModes ctx callee) = res ->
-      Maybe (LeftoverSafeFreed env1 h1 hB sc' f.id f.params (funModes ctx f.name)
+      Maybe (LeftoverSafeFreed env1 h1 hPost sc' f.id f.params (funModes ctx f.name)
                (collectArgVals evs))
     modesGo (Left meq) _ =
-      Just (replace {p = \ms => LeftoverSafeFreed env1 h1 hB sc' f.id f.params ms
+      Just (replace {p = \ms => LeftoverSafeFreed env1 h1 hPost sc' f.id f.params ms
                                   (collectArgVals evs)}
               (sym meq)
               (uniqueOwnCall ihs oa0 eq pb pd

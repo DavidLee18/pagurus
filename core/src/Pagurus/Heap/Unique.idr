@@ -171,6 +171,16 @@ inhMove {n} {nid} {sc} inh eq = MkInHand inh.inLive hold
                           (replace {p = \s => lookupPlace q s = Just stQ} (sym scEq) lpQ)
               in inh.holdersUnsafe q stQ lq lp0
 
+||| Allocating a fresh cell does not make leftover `b` use-safe.
+inhAllocPres :
+  {env : HEnv} -> {h : Heap} -> {sc : Scopes} -> {b : Addr} ->
+  InHand env h sc b ->
+  b == h.next = False ->
+  InHand env (snd (alloc h)) sc b
+inhAllocPres {h} {b} inh ne =
+  MkInHand (trans (allocPresCell h b ne) inh.inLive)
+    (\q, stQ, lq, lpQ => inh.holdersUnsafe q stQ lq lpQ)
+
 export
 callArgsModes :
   {ctx : Ctx} -> {sc, sc' : Scopes} -> {id : Nat} -> {callee : String} ->
@@ -425,6 +435,12 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
       ownInHand inh (HEArgsCons HVNone _ _ HEUnsup evEs) pEs oa1
           {es = EUnsupported nid reason :: esR} =
         ownRestUnsup {nid} {reason} {es = esR} inh evEs pEs oa1
+      ownInHand inh (HEArgsCons (HVPtr _) _ _ (HEMalloc _ _ HEArgsNil) evEs) pEs oa1
+          {es = EMalloc mid [] :: esR} =
+        ownRestMallocNil {mid} inh evEs pEs oa1
+      ownInHand inh (HEArgsCons HVNone _ _ (HEUse _ _ HEArgsNil) evEs) pEs oa1
+          {es = EUse uid [] :: esR} =
+        ownRestUseNil {uid} inh evEs pEs oa1
 
       ownRestLit :
         {envX : HEnv} -> {hX : Heap} -> {sc1 : Scopes} ->
@@ -576,6 +592,70 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
         ownRestUnsup _ _ pEs _ {ms0 = m :: msR} | False =
           let (sc2 ** (pE, _)) = argsModesBorrowSplit pc pEs
           in void (unsupExprContraH nid reason pE)
+
+      ownRestMallocNil :
+        {envX : HEnv} -> {hX : Heap} -> {sc1 : Scopes} ->
+        {ms0 : List Consume} -> {mid : Nat} -> {es : List Expr} ->
+        InHand envX hX sc1 a ->
+        HEvalExprs {funs} envX (snd (alloc hX)) es (HROk HVNone env1 h1) ->
+        checkArgsModes ctx sc1 callee (EMalloc mid [] :: es) ms0 = Right sc' ->
+        OverApprox envX hX sc1 ->
+        Void
+      ownRestMallocNil inh evEs pEs oa1 {ms0 = []} =
+        let (sc2 ** (fl ** (pT, pEs2))) = argsModesExtraSplit pEs
+            scEq = cong fst (rightInj (trans (sym (takeMallocRight mid
+                     (checkArgsBorrowNil ctx sc1))) pT))
+            nf = liveNotFresh hX oa1.wf a inh.inLive
+        in ownInHand (replace {p = \s => InHand envX (snd (alloc hX)) s a} scEq
+                        (inhAllocPres inh nf))
+             evEs pEs2 (oaRewrite scEq (oaAlloc oa1))
+      ownRestMallocNil inh evEs pEs oa1 {ms0 = m :: msR} with
+          (doesConsume m) proof pc
+        ownRestMallocNil inh evEs pEs oa1 {ms0 = m :: msR} | True =
+          let (sc2 ** (fl ** (pT, pEs2))) = argsModesMoveSplit pc pEs
+              scEq = cong fst (rightInj (trans (sym (takeMallocRight mid
+                       (checkArgsBorrowNil ctx sc1))) pT))
+              nf = liveNotFresh hX oa1.wf a inh.inLive
+          in ownInHand (replace {p = \s => InHand envX (snd (alloc hX)) s a} scEq
+                          (inhAllocPres inh nf))
+               evEs pEs2 (oaRewrite scEq (oaAlloc oa1))
+        ownRestMallocNil inh evEs pEs oa1 {ms0 = m :: msR} | False =
+          let (sc2 ** (pE, pEs2)) = argsModesBorrowSplit pc pEs
+              scEq = rightInj (trans (sym (checkArgsBorrowNil ctx sc1))
+                       (trans (sym (checkExprMalloc ctx sc1 mid [])) pE))
+              nf = liveNotFresh hX oa1.wf a inh.inLive
+          in ownInHand (replace {p = \s => InHand envX (snd (alloc hX)) s a} scEq
+                          (inhAllocPres inh nf))
+               evEs pEs2 (oaRewrite scEq (oaAlloc oa1))
+
+      ownRestUseNil :
+        {envX : HEnv} -> {hX : Heap} -> {sc1 : Scopes} ->
+        {ms0 : List Consume} -> {uid : Nat} -> {es : List Expr} ->
+        InHand envX hX sc1 a ->
+        HEvalExprs {funs} envX hX es (HROk HVNone env1 h1) ->
+        checkArgsModes ctx sc1 callee (EUse uid [] :: es) ms0 = Right sc' ->
+        OverApprox envX hX sc1 ->
+        Void
+      ownRestUseNil inh evEs pEs oa1 {ms0 = []} =
+        let (sc2 ** (fl ** (pT, pEs2))) = argsModesExtraSplit pEs
+            scEq = cong fst (rightInj (trans (sym (takeUseRight uid
+                     (checkArgsBorrowNil ctx sc1))) pT))
+        in ownInHand (replace {p = \s => InHand envX hX s a} scEq inh)
+             evEs pEs2 (oaRewrite scEq oa1)
+      ownRestUseNil inh evEs pEs oa1 {ms0 = m :: msR} with
+          (doesConsume m) proof pc
+        ownRestUseNil inh evEs pEs oa1 {ms0 = m :: msR} | True =
+          let (sc2 ** (fl ** (pT, pEs2))) = argsModesMoveSplit pc pEs
+              scEq = cong fst (rightInj (trans (sym (takeUseRight uid
+                       (checkArgsBorrowNil ctx sc1))) pT))
+          in ownInHand (replace {p = \s => InHand envX hX s a} scEq inh)
+               evEs pEs2 (oaRewrite scEq oa1)
+        ownRestUseNil inh evEs pEs oa1 {ms0 = m :: msR} | False =
+          let (sc2 ** (pE, pEs2)) = argsModesBorrowSplit pc pEs
+              scEq = rightInj (trans (sym (checkArgsBorrowNil ctx sc1))
+                       (trans (sym (checkExprUse ctx sc1 uid [])) pE))
+          in ownInHand (replace {p = \s => InHand envX hX s a} scEq inh)
+               evEs pEs2 (oaRewrite scEq oa1)
 
       skipMove :
         {m : Consume} -> {ms0 : List Consume} ->

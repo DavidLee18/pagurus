@@ -303,15 +303,15 @@ export
 uniqueOwnGo :
   {funs : List Fun} -> {ctx : Ctx} -> {callee : String} ->
   {env, env1 : HEnv} -> {h, h1, hB : Heap} -> {sc, sc' : Scopes} ->
-  {fid : Nat} -> {ps : List Param} -> {ms : List Consume} -> {vs : List HVal} ->
+  {fid : Nat} -> {ps : List Param} -> {cmodes : List Consume} -> {vs : List HVal} ->
   {cargs : List Expr} ->
   CallIHs funs ctx ->
-  BindOk fid h1 ps ms vs ->
+  BindOk fid h1 ps cmodes vs ->
   (evs : HEvalExprs {funs} env h cargs (HROk HVNone env1 h1)) ->
   vs = collectArgVals evs ->
-  checkArgsModes ctx sc callee cargs ms = Right sc' ->
+  checkArgsModes ctx sc callee cargs cmodes = Right sc' ->
   OverApprox env h sc ->
-  LeftoverSafeFreed env1 h1 hB sc' fid ps ms vs
+  LeftoverSafeFreed env1 h1 hB sc' fid ps cmodes vs
 uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq pModes oa0
     p st a pnoF look lp safe live ph =
   go bok evs veq pModes oa0 pnoF

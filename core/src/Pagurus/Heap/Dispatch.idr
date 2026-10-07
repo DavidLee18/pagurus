@@ -72,6 +72,9 @@ mutual
     (\ev, sc0, sc1, fl, p, oa => takeHSafe {funs} {chk} ev sc0 sc1 fl p oa)
     (\ev, pE, inh, oa => inhExprH {funs} dispatchExprs inh oa ev pE)
     (\ev, pT, inh, oa, oaY => inhTakeH {funs} dispatchExprs inh oa ev pT oaY)
+    (\ev, pE, ln => exprLN {funs} {chk} ln pE ev)
+    (\ev, pT, ln => (takeLN {funs} {chk} ln pT ev).lnTLN)
+    (\ev, pT, ln, veq => nuoNoTakeLeftover {funs} {chk} ev pT ln veq)
 
   ||| `exprHSafe` / `takeHSafe` only, so `Inh` does not close over `inhIH`.
   dispatchExprs :

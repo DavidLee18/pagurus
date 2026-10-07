@@ -83,6 +83,94 @@ inhRewrite :
   xs = ys -> InHand env h xs b -> InHand env h ys b
 inhRewrite Refl inh = inh
 
+||| `usePlace` of `n` cannot make a leftover name of `b` use-safe.
+inhUse :
+  {env : HEnv} -> {h : Heap} -> {sc, sc' : Scopes} ->
+  {n : Place} -> {nid : Nat} -> {nm : String} -> {b : Addr} ->
+  InHand env h sc b ->
+  usePlace sc n nid nm = Right sc' ->
+  InHand env h sc' b
+inhUse {n} {nid} {sc} inh eq = MkInHand inh.inLive hold
+  where
+    hold : (q : Place) -> (stQ : Status) ->
+           lookupH q env = Just (HVPtr b) ->
+           lookupPlace q sc' = Just stQ ->
+           unsafeUse stQ = True
+    hold q stQ lq lpQ with (natEqDec q n)
+      hold q stQ lq lpQ | Left eqq = hit (lookupPlace n sc) Refl
+        where
+          hit : (look : Maybe Status) -> lookupPlace n sc = look ->
+                unsafeUse stQ = True
+          hit Nothing pL =
+            let scEq = rightInj (trans (sym (usePlaceNothing pL)) eq)
+            in inh.holdersUnsafe q stQ lq
+                 (replace {p = \s => lookupPlace q s = Just stQ} (sym scEq) lpQ)
+          hit (Just stN) pL with (stepStatus stN Use nid) proof pS
+            hit (Just stN) pL | Left d =
+              void (leftNotRight (trans (sym (usePlaceJustL pL pS)) eq))
+            hit (Just stN) pL | Right st' =
+              let uns0 = inh.holdersUnsafe n stN
+                    (replace {p = \x => lookupH x env = Just (HVPtr b)} eqq lq) pL
+              in void (trueNotFalse (trans (sym uns0) (stepUseSafe stN nid st' pS)))
+      hold q stQ lq lpQ | Right ne = miss (lookupPlace n sc) Refl
+        where
+          miss : (look : Maybe Status) -> lookupPlace n sc = look ->
+                 unsafeUse stQ = True
+          miss Nothing pL =
+            let scEq = rightInj (trans (sym (usePlaceNothing pL)) eq)
+            in inh.holdersUnsafe q stQ lq
+                 (replace {p = \s => lookupPlace q s = Just stQ} (sym scEq) lpQ)
+          miss (Just stN) pL with (stepStatus stN Use nid) proof pS
+            miss (Just stN) pL | Left d =
+              void (leftNotRight (trans (sym (usePlaceJustL pL pS)) eq))
+            miss (Just stN) pL | Right st' =
+              let scEq = rightInj (trans (sym (usePlaceJust pL pS)) eq)
+                  lp0 = trans (sym (lookupPlaceSetMiss q n st' sc ne))
+                          (replace {p = \s => lookupPlace q s = Just stQ} (sym scEq) lpQ)
+              in inh.holdersUnsafe q stQ lq lp0
+
+||| `movePlace` of `n` cannot make a leftover name of `b` use-safe.
+inhMove :
+  {env : HEnv} -> {h : Heap} -> {sc, sc' : Scopes} ->
+  {n : Place} -> {nid : Nat} -> {nm : String} -> {b : Addr} ->
+  InHand env h sc b ->
+  movePlace sc n nid nm = Right sc' ->
+  InHand env h sc' b
+inhMove {n} {nid} {sc} inh eq = MkInHand inh.inLive hold
+  where
+    hold : (q : Place) -> (stQ : Status) ->
+           lookupH q env = Just (HVPtr b) ->
+           lookupPlace q sc' = Just stQ ->
+           unsafeUse stQ = True
+    hold q stQ lq lpQ with (natEqDec q n)
+      hold q stQ lq lpQ | Left eqq = hit (lookupPlace n sc) Refl
+        where
+          hit : (look : Maybe Status) -> lookupPlace n sc = look ->
+                unsafeUse stQ = True
+          hit Nothing pL =
+            void (leftNotRight (trans (sym (movePlaceNothing pL)) eq))
+          hit (Just stN) pL with (stepStatus stN Move nid) proof pS
+            hit (Just stN) pL | Left d =
+              void (leftNotRight (trans (sym (movePlaceJustL pL pS)) eq))
+            hit (Just stN) pL | Right st' =
+              let uns0 = inh.holdersUnsafe n stN
+                    (replace {p = \x => lookupH x env = Just (HVPtr b)} eqq lq) pL
+              in void (trueNotFalse (trans (sym uns0) (stepMoveSafe stN nid st' pS)))
+      hold q stQ lq lpQ | Right ne = miss (lookupPlace n sc) Refl
+        where
+          miss : (look : Maybe Status) -> lookupPlace n sc = look ->
+                 unsafeUse stQ = True
+          miss Nothing pL =
+            void (leftNotRight (trans (sym (movePlaceNothing pL)) eq))
+          miss (Just stN) pL with (stepStatus stN Move nid) proof pS
+            miss (Just stN) pL | Left d =
+              void (leftNotRight (trans (sym (movePlaceJustL pL pS)) eq))
+            miss (Just stN) pL | Right st' =
+              let scEq = rightInj (trans (sym (movePlaceJust pL pS)) eq)
+                  lp0 = trans (sym (lookupPlaceSetMiss q n st' sc ne))
+                          (replace {p = \s => lookupPlace q s = Just stQ} (sym scEq) lpQ)
+              in inh.holdersUnsafe q stQ lq lp0
+
 export
 callArgsModes :
   {ctx : Ctx} -> {sc, sc' : Scopes} -> {id : Nat} -> {callee : String} ->
@@ -322,6 +410,21 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
       ownInHand inh (HEArgsCons HVNone _ _ HENull evEs) pEs oa1
           {es = ENull id :: esR} =
         ownRestNull {id} {es = esR} inh evEs pEs oa1
+      ownInHand inh (HEArgsCons (HVPtr c) _ _ (HEVarLive _ lookN cl) evEs) pEs oa1
+          {es = EVar nid n nm :: esR} =
+        ownRestVarLive {c} {nid} {n} {nm} {es = esR} lookN cl inh evEs pEs oa1
+      ownInHand inh (HEArgsCons HVNone _ _ (HEVarNone lookN) evEs) pEs oa1
+          {es = EVar nid n nm :: esR} =
+        ownRestVarGhost {nid} {n} {nm} {es = esR} inh evEs pEs oa1
+      ownInHand inh (HEArgsCons HVCopy _ _ (HEVarCopy lookN) evEs) pEs oa1
+          {es = EVar nid n nm :: esR} =
+        ownRestVarGhost {nid} {n} {nm} {es = esR} inh evEs pEs oa1
+      ownInHand inh (HEArgsCons HVNone _ _ (HEVarMiss lookN) evEs) pEs oa1
+          {es = EVar nid n nm :: esR} =
+        ownRestVarGhost {nid} {n} {nm} {es = esR} inh evEs pEs oa1
+      ownInHand inh (HEArgsCons HVNone _ _ HEUnsup evEs) pEs oa1
+          {es = EUnsupported nid reason :: esR} =
+        ownRestUnsup {nid} {reason} {es = esR} inh evEs pEs oa1
 
       ownRestLit :
         {envX : HEnv} -> {hX : Heap} -> {sc1 : Scopes} ->
@@ -374,6 +477,105 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
               scEq = rightInj (trans (sym (checkExprNull ctx sc1 id)) pE)
           in ownInHand (replace {p = \s => InHand envX hX s a} scEq inh)
                evEs pEs2 (oaRewrite scEq oa1)
+
+      ownRestVarLive :
+        {envX : HEnv} -> {hX : Heap} -> {sc1 : Scopes} ->
+        {ms0 : List Consume} -> {c : Addr} ->
+        {nid : Nat} -> {n : Place} -> {nm : String} -> {es : List Expr} ->
+        lookupH n envX = Just (HVPtr c) ->
+        cell hX c = Just Live ->
+        InHand envX hX sc1 a ->
+        HEvalExprs {funs} envX hX es (HROk HVNone env1 h1) ->
+        checkArgsModes ctx sc1 callee (EVar nid n nm :: es) ms0 = Right sc' ->
+        OverApprox envX hX sc1 ->
+        Void
+      ownRestVarLive lookN cl inh evEs pEs oa1 {ms0 = []} =
+        let (sc2 ** (fl ** (pT, pEs2))) = argsModesExtraSplit pEs
+            (stN ** lpN) = oa1.tracked n (HVPtr c) lookN
+            mv = takeVarMove pT lpN
+            ht = ihs.takeIH (HEVarLive c lookN cl) sc1 sc2 fl pT oa1
+        in ownInHand (inhMove {n} {nid} {nm} {b = a} inh mv)
+             evEs pEs2 (htFromOk ht)
+      ownRestVarLive lookN cl inh evEs pEs oa1 {ms0 = m :: msR} with
+          (doesConsume m) proof pc
+        ownRestVarLive lookN cl inh evEs pEs oa1 {ms0 = m :: msR} | True =
+          let (sc2 ** (fl ** (pT, pEs2))) = argsModesMoveSplit pc pEs
+              (stN ** lpN) = oa1.tracked n (HVPtr c) lookN
+              mv = takeVarMove pT lpN
+              ht = ihs.takeIH (HEVarLive c lookN cl) sc1 sc2 fl pT oa1
+          in ownInHand (inhMove {n} {nid} {nm} {b = a} inh mv)
+               evEs pEs2 (htFromOk ht)
+        ownRestVarLive lookN cl inh evEs pEs oa1 {ms0 = m :: msR} | False =
+          let (sc2 ** (pE, pEs2)) = argsModesBorrowSplit pc pEs
+              pU = trans (sym (checkExprVar ctx sc1 nid n nm)) pE
+              oa2 = hrFromOk (ihs.exprIH (HEVarLive c lookN cl) sc1 sc2 pE oa1)
+          in ownInHand (inhUse {n} {nid} {nm} {b = a} inh pU)
+               evEs pEs2 oa2
+
+      ownRestVarGhost :
+        {envX : HEnv} -> {hX : Heap} -> {sc1 : Scopes} ->
+        {ms0 : List Consume} ->
+        {nid : Nat} -> {n : Place} -> {nm : String} -> {es : List Expr} ->
+        InHand envX hX sc1 a ->
+        HEvalExprs {funs} envX hX es (HROk HVNone env1 h1) ->
+        checkArgsModes ctx sc1 callee (EVar nid n nm :: es) ms0 = Right sc' ->
+        OverApprox envX hX sc1 ->
+        Void
+      ownRestVarGhost inh evEs pEs oa1 {ms0 = []} =
+        let (sc2 ** (fl ** (pT, pEs2))) = argsModesExtraSplit pEs
+        in ownRestVarTaken pT inh evEs pEs2 oa1
+      ownRestVarGhost inh evEs pEs oa1 {ms0 = m :: msR} with
+          (doesConsume m) proof pc
+        ownRestVarGhost inh evEs pEs oa1 {ms0 = m :: msR} | True =
+          let (sc2 ** (fl ** (pT, pEs2))) = argsModesMoveSplit pc pEs
+          in ownRestVarTaken pT inh evEs pEs2 oa1
+        ownRestVarGhost inh evEs pEs oa1 {ms0 = m :: msR} | False =
+          let (sc2 ** (pE, pEs2)) = argsModesBorrowSplit pc pEs
+              pU = trans (sym (checkExprVar ctx sc1 nid n nm)) pE
+              oa2 = oaUsePlace oa1 pU
+          in ownInHand (inhUse {n} {nid} {nm} {b = a} inh pU) evEs pEs2 oa2
+
+      ownRestVarTaken :
+        {envX : HEnv} -> {hX : Heap} -> {sc1, sc2 : Scopes} ->
+        {fl : Flag} -> {msR : List Consume} ->
+        {nid : Nat} -> {n : Place} -> {nm : String} -> {es : List Expr} ->
+        takeOwner ctx sc1 (EVar nid n nm) = Right (sc2, fl) ->
+        InHand envX hX sc1 a ->
+        HEvalExprs {funs} envX hX es (HROk HVNone env1 h1) ->
+        checkArgsModes ctx sc2 callee es msR = Right sc' ->
+        OverApprox envX hX sc1 ->
+        Void
+      ownRestVarTaken pT inh evEs pEs2 oa1 = tv (lookupPlace n sc1) Refl
+        where
+          tv : (look : Maybe Status) -> lookupPlace n sc1 = look -> Void
+          tv Nothing pL =
+            let scEq = cong fst (rightInj (trans (sym (takeVarMiss ctx nid nm pL)) pT))
+            in ownInHand (replace {p = \s => InHand envX hX s a} scEq inh)
+                 evEs pEs2 (oaRewrite scEq oa1)
+          tv (Just stN) pL =
+            let mv = takeVarMove pT pL
+                oa2 = oaMovePlace oa1 mv
+            in ownInHand (inhMove {n} {nid} {nm} {b = a} inh mv) evEs pEs2 oa2
+
+      ownRestUnsup :
+        {envX : HEnv} -> {hX : Heap} -> {sc1 : Scopes} ->
+        {ms0 : List Consume} ->
+        {nid : Nat} -> {reason : String} -> {es : List Expr} ->
+        InHand envX hX sc1 a ->
+        HEvalExprs {funs} envX hX es (HROk HVNone env1 h1) ->
+        checkArgsModes ctx sc1 callee (EUnsupported nid reason :: es) ms0 = Right sc' ->
+        OverApprox envX hX sc1 ->
+        Void
+      ownRestUnsup _ _ pEs _ {ms0 = []} =
+        let (sc2 ** (fl ** (pT, _))) = argsModesExtraSplit pEs
+        in void (takeUnsupContraH nid reason pT)
+      ownRestUnsup _ _ pEs _ {ms0 = m :: msR} with (doesConsume m) proof pc
+        ownRestUnsup _ _ pEs _ {ms0 = m :: msR} | True =
+          let (sc2 ** (fl ** (pT, _))) = argsModesMoveSplit pc pEs
+          in void (takeUnsupContraH nid reason pT)
+        ownRestUnsup _ _ pEs _ {ms0 = m :: msR} | False =
+          let (sc2 ** (pE, _)) = argsModesBorrowSplit pc pEs
+          in void (unsupExprContraH nid reason pE)
 
       skipMove :
         {m : Consume} -> {ms0 : List Consume} ->

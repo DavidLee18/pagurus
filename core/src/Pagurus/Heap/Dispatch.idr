@@ -69,6 +69,8 @@ mutual
   dispatchIhs {funs} {chk} {ctx} = MkCallIHs
     (\ev, sc0, sc1, p, oa => exprHSafe {funs} {chk} ev sc0 sc1 p oa)
     (\ev, sc0, sc1, fl, p, oa => takeHSafe {funs} {chk} ev sc0 sc1 fl p oa)
+    (\ev, pE, inh, oa => inhExprH {funs} {chk} ev pE inh oa)
+    (\ev, pT, inh, oa, oaY => inhTakeH {funs} {chk} ev pT inh oa oaY)
 
   export
   exprHSafe :

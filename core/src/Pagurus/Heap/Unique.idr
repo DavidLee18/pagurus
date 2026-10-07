@@ -304,12 +304,12 @@ uniqueOwnGo :
   {funs : List Fun} -> {ctx : Ctx} -> {callee : String} ->
   {env, env1 : HEnv} -> {h, h1, hB : Heap} -> {sc, sc' : Scopes} ->
   {fid : Nat} -> {ps : List Param} -> {ms : List Consume} -> {vs : List HVal} ->
-  {args : List Expr} ->
+  {cargs : List Expr} ->
   CallIHs funs ctx ->
   BindOk fid h1 ps ms vs ->
-  (evs : HEvalExprs {funs} env h args (HROk HVNone env1 h1)) ->
+  (evs : HEvalExprs {funs} env h cargs (HROk HVNone env1 h1)) ->
   vs = collectArgVals evs ->
-  checkArgsModes ctx sc callee args ms = Right sc' ->
+  checkArgsModes ctx sc callee cargs ms = Right sc' ->
   OverApprox env h sc ->
   LeftoverSafeFreed env1 h1 hB sc' fid ps ms vs
 uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq pModes oa0
@@ -991,7 +991,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
           (trans (sym (checkExprVar ctx sc0 nid n nm)) eq)
       inhExpr _ _ HEUnsup {e0 = EUnsupported nid reason} eq =
         void (unsupExprContraH nid reason eq)
-      inhExpr inh oa (HEMalloc env1 hA evs) {e0 = EMalloc mid args} eq =
+      inhExpr inh oa (HEMalloc env1 hA evs) {e0 = EMalloc mid margs} eq =
         inhMallocGo inh oa evs eq
       inhExpr inh oa (HEAsgCopy w env1 hA ev) {e0 = EAssign id n nm Copy rhs} eq =
         inhExpr inh oa ev (trans (sym (checkExprAsgCopy id n nm)) eq)
@@ -1017,14 +1017,14 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
 
       inhMallocGo :
         {env0, envA : HEnv} -> {h0, hA : Heap} -> {sc0, scY : Scopes} ->
-        {mid : Nat} -> {args : List Expr} ->
+        {mid : Nat} -> {margs : List Expr} ->
         InHand env0 h0 sc0 a ->
         OverApprox env0 h0 sc0 ->
-        HEvalExprs {funs} env0 h0 args (HROk HVNone envA hA) ->
-        checkExpr ctx sc0 (EMalloc mid args) = Right scY ->
+        HEvalExprs {funs} env0 h0 margs (HROk HVNone envA hA) ->
+        checkExpr ctx sc0 (EMalloc mid margs) = Right scY ->
         InHand envA (snd (alloc hA)) scY a
       inhMallocGo inh oa evs eq =
-        let pA = trans (sym (checkExprMalloc ctx sc0 mid args)) eq
+        let pA = trans (sym (checkExprMalloc ctx sc0 mid margs)) eq
             inhA = inhBorrow inh oa evs pA
             nf = liveNotFresh hA (exprsWf oa.wf evs) a inhA.inLive
         in inhAllocPres inhA nf
@@ -1199,7 +1199,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
             inhTakeVarMiss inh pT0
           inhTakeGo HEUnsup {e0 = EUnsupported nid reason} pT0 =
             void (takeUnsupContraH nid reason pT0)
-          inhTakeGo (HEMalloc envA hA evs) {e0 = EMalloc mid args} pT0 =
+          inhTakeGo (HEMalloc envA hA evs) {e0 = EMalloc mid margs} pT0 =
             inhTakeMalloc inh oa evs pT0
           inhTakeGo (HEAsgCopy w envA hA ev) {e0 = EAssign id n nm Copy rhs} pT0 =
             inhTakeAsgCopy inh oa ev pT0
@@ -1253,17 +1253,17 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
             in inhMove {n} {nid} {nm} {b = a} inh mv
 
       inhTakeMalloc :
-        {mid : Nat} -> {args : List Expr} ->
+        {mid : Nat} -> {margs : List Expr} ->
         {envA : HEnv} -> {hA : Heap} ->
         InHand env0 h0 sc0 a ->
         OverApprox env0 h0 sc0 ->
-        HEvalExprs {funs} env0 h0 args (HROk HVNone envA hA) ->
-        takeOwner ctx sc0 (EMalloc mid args) = Right (scY, fl0) ->
+        HEvalExprs {funs} env0 h0 margs (HROk HVNone envA hA) ->
+        takeOwner ctx sc0 (EMalloc mid margs) = Right (scY, fl0) ->
         InHand envA (snd (alloc hA)) scY a
-      inhTakeMalloc inh oa evs pT = mGo (checkArgsBorrow ctx sc0 args) Refl
+      inhTakeMalloc inh oa evs pT = mGo (checkArgsBorrow ctx sc0 margs) Refl
         where
           mGo : (res : Either Diag Scopes) ->
-                checkArgsBorrow ctx sc0 args = res ->
+                checkArgsBorrow ctx sc0 margs = res ->
                 InHand envA (snd (alloc hA)) scY a
           mGo (Left d) pA =
             void (leftNotRight (trans (sym (takeMallocLeft mid pA)) pT))
@@ -1781,11 +1781,11 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
             void (noneNotPtrA veq0)
           noTake HEUnsup {e0 = EUnsupported nid reason} pT0 _ =
             void (takeUnsupContraH nid reason pT0)
-          noTake (HEMalloc envA hA evs) {e0 = EMalloc mid args} pT0 veq0 =
-            mGo (checkArgsBorrow ctx sc0 args) Refl veq0
+          noTake (HEMalloc envA hA evs) {e0 = EMalloc mid margs} pT0 veq0 =
+            mGo (checkArgsBorrow ctx sc0 margs) Refl veq0
             where
               mGo : (res : Either Diag Scopes) ->
-                    checkArgsBorrow ctx sc0 args = res ->
+                    checkArgsBorrow ctx sc0 margs = res ->
                     HVPtr (fst (alloc hA)) = HVPtr a ->
                     Void
               mGo (Left d) pA _ =
@@ -1864,8 +1864,8 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
         noneNotPtrA veq
       inhNotPtrExpr _ _ HEUnsup {e0 = EUnsupported nid reason} eq _ =
         void (unsupExprContraH nid reason eq)
-      inhNotPtrExpr inh oa (HEMalloc envA hA evs) {e0 = EMalloc mid args} eq veq =
-        let pA = trans (sym (checkExprMalloc ctx sc0 mid args)) eq
+      inhNotPtrExpr inh oa (HEMalloc envA hA evs) {e0 = EMalloc mid margs} eq veq =
+        let pA = trans (sym (checkExprMalloc ctx sc0 mid margs)) eq
             inhA = inhBorrow inh oa evs pA
             nf = liveNotFresh hA (exprsWf oa.wf evs) a inhA.inLive
         in eqNatFalse a hA.next nf (hvPtrInj (sym veq))

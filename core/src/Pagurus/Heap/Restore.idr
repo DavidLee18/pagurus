@@ -409,9 +409,8 @@ ownCellLive {a} {c} {frame} wf ev ph live0 with (c == a) proof pca
       cellOn {h = hB} {a = c} (cell hB c) Refl
         (\eq => eq)
         (\eq =>
-           -- Unique-own of a different cell than leftover `a`. Needs
-           -- leftoverSafe of `c` (BindOk unique consume + leftover intern
-           -- of `c` still use-safe). Do not fake `c == a`.
+           -- Unique-own Freed of `c != leftover a`. Needs leftoverSafe of
+           -- `c`; this helper has none. `stmtsStay` is Live vs missing.
            void (stmtsStay {funs} wf ev live0 eq))
         (\eq => void (stmtsStay {funs} wf ev live0 eq))
 
@@ -1814,8 +1813,8 @@ mutual
       cGo (Left d) pE =
         void (leftNotRight (trans (sym (takeAsgCopyLeft id n nm pE)) pT))
       cGo (Right scA) pE =
-        void (ownerNotGhost (cong snd (rightInj
-          (trans (sym (takeAsgCopyRight id n nm pE)) pT))))
+        void (Pagurus.Checker.ownerNotGhost (sym (cong snd (rightInj
+          (trans (sym (takeAsgCopyRight id n nm pE)) pT)))))
   nuoNoTakeLeftover (HEUse env1 h1 evs) pT ln veq =
     void (noneNotPtrA veq)
   nuoNoTakeLeftover (HECall unk env1 h1 evs) pT ln veq =
@@ -1859,11 +1858,11 @@ mutual
           ownerRhs Owner pR0 veq1 =
             nuoNoTakeLeftover {funs} {chk} evR pR0 ln veq1
           ownerRhs Ghost pR0 _ =
-            void (ownerNotGhost (cong snd (rightInj
-              (trans (sym (takeAsgPtrGhost id n nm pR0)) pT))))
+            void (Pagurus.Checker.ownerNotGhost (sym (cong snd (rightInj
+              (trans (sym (takeAsgPtrGhost id n nm pR0)) pT)))))
           ownerRhs Null pR0 _ =
-            void (ownerNotNull (cong snd (rightInj
-              (trans (sym (takeAsgPtrNull id n nm pR0)) pT))))
+            void (Pagurus.Checker.ownerNotNull (sym (cong snd (rightInj
+              (trans (sym (takeAsgPtrNull id n nm pR0)) pT)))))
 
   nestedTakeCallLN :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->

@@ -1038,7 +1038,15 @@ uniqueOwnNuo {funs} {ctx} {callee} {fid} {a} ihs bok evs veq pModes ln0 pno0 =
         ihs.nuoTakeIH evE0 pT lnC0 veqPtr0
       takenNuo pc0 pM0 Ghost pT _ _ _ =
         void (leftNotRight (trans (sym (argsModesMoveGhost es ms0 pc0 pT)) pM0))
-      takenNuo _ _ Null _ _ _ _ impossible
+      takenNuo pc0 pM0 Null pT veqPtr0 evE0 lnC0 =
+        nullPtr (htTaken (ihs.takeIH evE0 sc0 sc1 Null pT lnC0.oaLN)) veqPtr0
+        where
+          nullPtr :
+            {w : HVal} ->
+            HTaken Null w envX hX sc1 ->
+            w = HVPtr a ->
+            Void
+          nullPtr HNull eq = noneNotPtrA eq
 
       extraHit :
         {ps0 : List Param} -> {vs0 : List HVal} ->
@@ -1071,7 +1079,15 @@ uniqueOwnNuo {funs} {ctx} {callee} {fid} {a} ihs bok evs veq pModes ln0 pno0 =
         ihs.nuoTakeIH evE0 pT lnC0 veqPtr0
       takenExtraNuo pM0 Ghost pT _ _ _ =
         void (leftNotRight (trans (sym (argsModesExtraGhost es pT)) pM0))
-      takenExtraNuo _ Null _ _ _ _ impossible
+      takenExtraNuo pM0 Null pT veqPtr0 evE0 lnC0 =
+        nullPtrE (htTaken (ihs.takeIH evE0 sc0 sc1 Null pT lnC0.oaLN)) veqPtr0
+        where
+          nullPtrE :
+            {w : HVal} ->
+            HTaken Null w envX hX sc1 ->
+            w = HVPtr a ->
+            Void
+          nullPtrE HNull eq = noneNotPtrA eq
 
       skipMove :
         {m : Consume} -> {ms0 : List Consume} ->

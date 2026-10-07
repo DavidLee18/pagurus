@@ -1123,7 +1123,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
             in inhModesRest inh1 (htFromOk ht) pEs2 evEs
       inhModes inh oa eq evE evEs {modes = m :: ms} with (doesConsume m) proof pc
         inhModes inh oa eq evE evEs {modes = m :: ms} | False =
-          let (sc2 ** (pE, pEs2)) = argsBorrowSplitWait pc eq
+          let (sc2 ** (pE, pEs2)) = argsModesBorrowSplit pc eq
               inh1 = inhExpr inh oa evE pE
               oa1 = hrFromOk (ihs.exprIH evE sc0 sc2 pE oa)
           in inhModesRest inh1 oa1 pEs2 evEs
@@ -1160,14 +1160,6 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
       inhModesRest inh oa eq (HEArgsCons w envA hA evE evEs) {esC = eR :: esR} =
         inhModes inh oa eq evE evEs
 
-      argsBorrowSplitWait :
-        {m : Consume} -> {ms : List Consume} ->
-        doesConsume m = False ->
-        checkArgsModes ctx sc0 calleeC (eC :: esC) (m :: ms) = Right scY ->
-        (sc2 ** (checkExpr ctx sc0 eC = Right sc2,
-                 checkArgsModes ctx sc2 calleeC esC ms = Right scY))
-      argsBorrowSplitWait pc eq = argsModesBorrowSplit pc eq
-
       inhTake :
         {env0, envY : HEnv} -> {h0, hY : Heap} -> {sc0, scY : Scopes} ->
         {e0 : Expr} -> {v0 : HVal} -> {fl0 : Flag} ->
@@ -1177,53 +1169,48 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
         takeOwner ctx sc0 e0 = Right (scY, fl0) ->
         OverApprox envY hY scY ->
         InHand envY hY scY a
-      inhTake inh oa ev pT oaY = inhTakeGo ev pT
-        where
-          inhTakeGo :
-            HEvalExpr {funs} env0 h0 e0 (HROk v0 envY hY) ->
-            takeOwner ctx sc0 e0 = Right (scY, fl0) ->
-            InHand envY hY scY a
-          inhTakeGo HELit {e0 = ELit id} pT0 =
-            let scEq = cong fst (rightInj (trans (sym (takeLit ctx sc0 id)) pT0))
-            in replace {p = \s => InHand env0 h0 s a} scEq inh
-          inhTakeGo HENull {e0 = ENull id} pT0 =
-            let scEq = cong fst (rightInj (trans (sym (takeNull ctx sc0 id)) pT0))
-            in replace {p = \s => InHand env0 h0 s a} scEq inh
-          inhTakeGo (HEVarLive c lookN cl) {e0 = EVar nid n nm} pT0 =
-            inhTakeVar inh pT0 lookN
-          inhTakeGo (HEVarNone lookN) {e0 = EVar nid n nm} pT0 =
-            inhTakeVar inh pT0 lookN
-          inhTakeGo (HEVarCopy lookN) {e0 = EVar nid n nm} pT0 =
-            inhTakeVar inh pT0 lookN
-          inhTakeGo (HEVarMiss lookN) {e0 = EVar nid n nm} pT0 =
-            inhTakeVarMiss inh pT0
-          inhTakeGo HEUnsup {e0 = EUnsupported nid reason} pT0 =
-            void (takeUnsupContraH nid reason pT0)
-          inhTakeGo (HEMalloc envA hA evs) {e0 = EMalloc mid margs} pT0 =
-            inhTakeMalloc inh oa evs pT0
-          inhTakeGo (HEAsgCopy w envA hA ev) {e0 = EAssign id n nm Copy rhs} pT0 =
-            inhTakeAsgCopy inh oa ev pT0
-          inhTakeGo (HEUse envA hA evs) {e0 = EUse uid args} pT0 =
-            inhTakeUse inh oa evs pT0
-          inhTakeGo (HECall unk envA hA evs) {e0 = ECall id calleeC args} pT0 =
-            inhTakeCall inh oa evs pT0
-          inhTakeGo (HECallUser pB f look pDef envA hA evs envB hB evBody)
-              {e0 = ECall id calleeC args} pT0 =
-            inhTakeCallUser inh oa pB f look pDef evs evBody pT0
-          inhTakeGo (HECallUserRet pB f look pDef envA hA evs envB hB evBody)
-              {e0 = ECall id calleeC args} pT0 =
-            inhTakeCallUserRet inh oa pB f look pDef evs evBody pT0
-          inhTakeGo (HERealloc pName pMiss envA hA evs)
-              {e0 = ECall id calleeC args} pT0 =
-            inhTakeRealloc inh oa pName evs pT0
-          inhTakeGo (HEAsgPtr w envA hA ev) {e0 = EAssign id n nm Ptr rhs} pT0 =
-            inhTakeAsgPtr inh oa ev pT0
+      inhTake inh oa HELit {e0 = ELit id} pT _ =
+        let scEq = cong fst (rightInj (trans (sym (takeLit ctx sc0 id)) pT))
+        in replace {p = \s => InHand env0 h0 s a} scEq inh
+      inhTake inh oa HENull {e0 = ENull id} pT _ =
+        let scEq = cong fst (rightInj (trans (sym (takeNull ctx sc0 id)) pT))
+        in replace {p = \s => InHand env0 h0 s a} scEq inh
+      inhTake inh oa (HEVarLive c lookN cl) {e0 = EVar nid n nm} pT _ =
+        inhTakeVar inh pT lookN
+      inhTake inh oa (HEVarNone lookN) {e0 = EVar nid n nm} pT _ =
+        inhTakeVar inh pT lookN
+      inhTake inh oa (HEVarCopy lookN) {e0 = EVar nid n nm} pT _ =
+        inhTakeVar inh pT lookN
+      inhTake inh oa (HEVarMiss lookN) {e0 = EVar nid n nm} pT _ =
+        inhTakeVarMiss inh pT
+      inhTake inh oa HEUnsup {e0 = EUnsupported nid reason} pT _ =
+        void (takeUnsupContraH nid reason pT)
+      inhTake inh oa (HEMalloc envA hA evs) {e0 = EMalloc mid margs} pT _ =
+        inhTakeMalloc inh oa evs pT
+      inhTake inh oa (HEAsgCopy w envA hA ev) {e0 = EAssign id n nm Copy rhs} pT _ =
+        inhTakeAsgCopy inh oa ev pT
+      inhTake inh oa (HEUse envA hA evs) {e0 = EUse uid args} pT _ =
+        inhTakeUse inh oa evs pT
+      inhTake inh oa (HECall unk envA hA evs) {e0 = ECall id calleeC args} pT _ =
+        inhTakeCall inh oa evs pT
+      inhTake inh oa (HECallUser pB f look pDef envA hA evs envB hB evBody)
+          {e0 = ECall id calleeC args} pT _ =
+        inhTakeCallUser inh oa pB f look pDef evs evBody pT
+      inhTake inh oa (HECallUserRet pB f look pDef envA hA evs envB hB evBody)
+          {e0 = ECall id calleeC args} pT _ =
+        inhTakeCallUserRet inh oa pB f look pDef evs evBody pT
+      inhTake inh oa (HERealloc pName pMiss envA hA evs)
+          {e0 = ECall id calleeC args} pT _ =
+        inhTakeRealloc inh oa pName evs pT
+      inhTake inh oa (HEAsgPtr w envA hA ev) {e0 = EAssign id n nm Ptr rhs} pT _ =
+        inhTakeAsgPtr inh oa ev pT
 
       inhTakeVar :
-        {nid : Nat} -> {n : Place} -> {nm : String} -> {c : HVal} ->
+        {nid : Nat} -> {n : Place} -> {nm : String} -> {cv : HVal} ->
+        {env0 : HEnv} -> {h0 : Heap} -> {sc0, scY : Scopes} -> {fl0 : Flag} ->
         InHand env0 h0 sc0 a ->
         takeOwner ctx sc0 (EVar nid n nm) = Right (scY, fl0) ->
-        lookupH n env0 = Just c ->
+        lookupH n env0 = Just cv ->
         InHand env0 h0 scY a
       inhTakeVar inh pT lookN = tv (lookupPlace n sc0) Refl
         where
@@ -1238,6 +1225,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
 
       inhTakeVarMiss :
         {nid : Nat} -> {n : Place} -> {nm : String} ->
+        {env0 : HEnv} -> {h0 : Heap} -> {sc0, scY : Scopes} -> {fl0 : Flag} ->
         InHand env0 h0 sc0 a ->
         takeOwner ctx sc0 (EVar nid n nm) = Right (scY, fl0) ->
         InHand env0 h0 scY a
@@ -1254,6 +1242,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
 
       inhTakeMalloc :
         {mid : Nat} -> {margs : List Expr} ->
+        {env0 : HEnv} -> {h0 : Heap} -> {sc0, scY : Scopes} -> {fl0 : Flag} ->
         {envA : HEnv} -> {hA : Heap} ->
         InHand env0 h0 sc0 a ->
         OverApprox env0 h0 sc0 ->
@@ -1276,6 +1265,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
 
       inhTakeAsgCopy :
         {id : Nat} -> {n : Place} -> {nm : String} -> {rhs : Expr} ->
+        {env0 : HEnv} -> {h0 : Heap} -> {sc0, scY : Scopes} -> {fl0 : Flag} ->
         {w : HVal} -> {envA : HEnv} -> {hA : Heap} ->
         InHand env0 h0 sc0 a ->
         OverApprox env0 h0 sc0 ->
@@ -1296,6 +1286,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
 
       inhTakeUse :
         {uid : Nat} -> {args : List Expr} ->
+        {env0 : HEnv} -> {h0 : Heap} -> {sc0, scY : Scopes} -> {fl0 : Flag} ->
         {envA : HEnv} -> {hA : Heap} ->
         InHand env0 h0 sc0 a ->
         OverApprox env0 h0 sc0 ->
@@ -1317,6 +1308,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
       inhTakeCall :
         {id : Nat} -> {calleeC : String} -> {args : List Expr} ->
         {unk : Either (isBuiltinName calleeC = True) (findFun funs calleeC = Nothing)} ->
+        {env0 : HEnv} -> {h0 : Heap} -> {sc0, scY : Scopes} -> {fl0 : Flag} ->
         {envA : HEnv} -> {hA : Heap} ->
         InHand env0 h0 sc0 a ->
         OverApprox env0 h0 sc0 ->
@@ -1325,6 +1317,19 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
         InHand envA hA scY a
       inhTakeCall inh oa evs pT = tGo (checkCall ctx sc0 id calleeC args) Refl
         where
+          tFl : (scA : Scopes) -> (fresh : Bool) ->
+                isRealloc calleeC && not (isDefined ctx calleeC) = fresh ->
+                InHand envA hA scA a ->
+                checkCall ctx sc0 id calleeC args = Right scA ->
+                InHand envA hA scY a
+          tFl scA False pF inhA pC =
+            let scEq = cong fst (rightInj (trans (sym (takeCallRight pF
+                  (trans (checkExprCall ctx sc0 id calleeC args) pC))) pT))
+            in replace {p = \s => InHand envA hA s a} scEq inhA
+          tFl scA True pF inhA pC =
+            let scEq = cong fst (rightInj (trans (sym (takeReallocRight pF pC)) pT))
+            in replace {p = \s => InHand envA hA s a} scEq inhA
+
           tGo : (res : Either Diag Scopes) ->
                 checkCall ctx sc0 id calleeC args = res ->
                 InHand envA hA scY a
@@ -1334,23 +1339,11 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
           tGo (Right scA) pC =
             let inhA = inhCallArgs inh oa evs pC
                 pF = isRealloc calleeC && not (isDefined ctx calleeC)
-            in tFl pF Refl inhA pC
-
-          tFl : (fresh : Bool) ->
-                isRealloc calleeC && not (isDefined ctx calleeC) = fresh ->
-                InHand envA hA scA a ->
-                checkCall ctx sc0 id calleeC args = Right scA ->
-                InHand envA hA scY a
-          tFl False pF inhA pC =
-            let scEq = cong fst (rightInj (trans (sym (takeCallRight pF
-                  (trans (checkExprCall ctx sc0 id calleeC args) pC))) pT))
-            in replace {p = \s => InHand envA hA s a} scEq inhA
-          tFl True pF inhA pC =
-            let scEq = cong fst (rightInj (trans (sym (takeReallocRight pF pC)) pT))
-            in replace {p = \s => InHand envA hA s a} scEq inhA
+            in tFl scA pF Refl inhA pC
 
       inhTakeCallUser :
         {id : Nat} -> {calleeC : String} -> {args : List Expr} ->
+        {env0 : HEnv} -> {h0 : Heap} -> {sc0, scY : Scopes} -> {fl0 : Flag} ->
         {envA, envB : HEnv} -> {hA, hB : Heap} ->
         InHand env0 h0 sc0 a ->
         OverApprox env0 h0 sc0 ->
@@ -1366,6 +1359,19 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
       inhTakeCallUser inh oa pB f look pDef evs evBody pT =
         tGo (checkCall ctx sc0 id calleeC args) Refl
         where
+          tFl : (scA : Scopes) -> (fresh : Bool) ->
+                isRealloc calleeC && not (isDefined ctx calleeC) = fresh ->
+                InHand envA hB scA a ->
+                checkCall ctx sc0 id calleeC args = Right scA ->
+                InHand envA hB scY a
+          tFl scA False pF inhB pC =
+            let scEq = cong fst (rightInj (trans (sym (takeCallRight pF
+                  (trans (checkExprCall ctx sc0 id calleeC args) pC))) pT))
+            in replace {p = \s => InHand envA hB s a} scEq inhB
+          tFl scA True pF inhB pC =
+            let scEq = cong fst (rightInj (trans (sym (takeReallocRight pF pC)) pT))
+            in replace {p = \s => InHand envA hB s a} scEq inhB
+
           tGo : (res : Either Diag Scopes) ->
                 checkCall ctx sc0 id calleeC args = res ->
                 InHand envA hB scY a
@@ -1375,23 +1381,11 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
           tGo (Right scA) pC =
             let inhB = inhCallUser inh oa pB f look pDef evs evBody pC
                 pF = isRealloc calleeC && not (isDefined ctx calleeC)
-            in tFl pF Refl inhB pC
-
-          tFl : (fresh : Bool) ->
-                isRealloc calleeC && not (isDefined ctx calleeC) = fresh ->
-                InHand envA hB scA a ->
-                checkCall ctx sc0 id calleeC args = Right scA ->
-                InHand envA hB scY a
-          tFl False pF inhB pC =
-            let scEq = cong fst (rightInj (trans (sym (takeCallRight pF
-                  (trans (checkExprCall ctx sc0 id calleeC args) pC))) pT))
-            in replace {p = \s => InHand envA hB s a} scEq inhB
-          tFl True pF inhB pC =
-            let scEq = cong fst (rightInj (trans (sym (takeReallocRight pF pC)) pT))
-            in replace {p = \s => InHand envA hB s a} scEq inhB
+            in tFl scA pF Refl inhB pC
 
       inhTakeCallUserRet :
         {id : Nat} -> {calleeC : String} -> {args : List Expr} ->
+        {env0 : HEnv} -> {h0 : Heap} -> {sc0, scY : Scopes} -> {fl0 : Flag} ->
         {envA, envB : HEnv} -> {hA, hB : Heap} ->
         InHand env0 h0 sc0 a ->
         OverApprox env0 h0 sc0 ->
@@ -1407,6 +1401,19 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
       inhTakeCallUserRet inh oa pB f look pDef evs evBody pT =
         tGo (checkCall ctx sc0 id calleeC args) Refl
         where
+          tFlR : (scA : Scopes) -> (fresh : Bool) ->
+                 isRealloc calleeC && not (isDefined ctx calleeC) = fresh ->
+                 InHand envA hB scA a ->
+                 checkCall ctx sc0 id calleeC args = Right scA ->
+                 InHand envA hB scY a
+          tFlR scA False pF inhB pC =
+            let scEq = cong fst (rightInj (trans (sym (takeCallRight pF
+                  (trans (checkExprCall ctx sc0 id calleeC args) pC))) pT))
+            in replace {p = \s => InHand envA hB s a} scEq inhB
+          tFlR scA True pF inhB pC =
+            let scEq = cong fst (rightInj (trans (sym (takeReallocRight pF pC)) pT))
+            in replace {p = \s => InHand envA hB s a} scEq inhB
+
           tGo : (res : Either Diag Scopes) ->
                 checkCall ctx sc0 id calleeC args = res ->
                 InHand envA hB scY a
@@ -1416,23 +1423,11 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
           tGo (Right scA) pC =
             let inhB = inhCallUserRet inh oa pB f look pDef evs evBody pC
                 pF = isRealloc calleeC && not (isDefined ctx calleeC)
-            in tFlR pF Refl inhB pC
-
-          tFlR : (fresh : Bool) ->
-                 isRealloc calleeC && not (isDefined ctx calleeC) = fresh ->
-                 InHand envA hB scA a ->
-                 checkCall ctx sc0 id calleeC args = Right scA ->
-                 InHand envA hB scY a
-          tFlR False pF inhB pC =
-            let scEq = cong fst (rightInj (trans (sym (takeCallRight pF
-                  (trans (checkExprCall ctx sc0 id calleeC args) pC))) pT))
-            in replace {p = \s => InHand envA hB s a} scEq inhB
-          tFlR True pF inhB pC =
-            let scEq = cong fst (rightInj (trans (sym (takeReallocRight pF pC)) pT))
-            in replace {p = \s => InHand envA hB s a} scEq inhB
+            in tFlR scA pF Refl inhB pC
 
       inhTakeRealloc :
         {id : Nat} -> {calleeC : String} -> {args : List Expr} ->
+        {env0 : HEnv} -> {h0 : Heap} -> {sc0, scY : Scopes} -> {fl0 : Flag} ->
         {envA : HEnv} -> {hA : Heap} ->
         InHand env0 h0 sc0 a ->
         OverApprox env0 h0 sc0 ->
@@ -1443,6 +1438,19 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
       inhTakeRealloc inh oa pName evs pT =
         tGo (checkCall ctx sc0 id calleeC args) Refl
         where
+          tFlA : (scA : Scopes) -> (fresh : Bool) ->
+                 isRealloc calleeC && not (isDefined ctx calleeC) = fresh ->
+                 InHand envA (snd (alloc hA)) scA a ->
+                 checkCall ctx sc0 id calleeC args = Right scA ->
+                 InHand envA (snd (alloc hA)) scY a
+          tFlA scA False pF inhA pC =
+            let scEq = cong fst (rightInj (trans (sym (takeCallRight pF
+                  (trans (checkExprCall ctx sc0 id calleeC args) pC))) pT))
+            in replace {p = \s => InHand envA (snd (alloc hA)) s a} scEq inhA
+          tFlA scA True pF inhA pC =
+            let scEq = cong fst (rightInj (trans (sym (takeReallocRight pF pC)) pT))
+            in replace {p = \s => InHand envA (snd (alloc hA)) s a} scEq inhA
+
           tGo : (res : Either Diag Scopes) ->
                 checkCall ctx sc0 id calleeC args = res ->
                 InHand envA (snd (alloc hA)) scY a
@@ -1454,23 +1462,11 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
                 pF = trans (cong (\r => r && Delay (not (isDefined ctx calleeC)))
                                (reallocNameEq calleeC))
                        (rewrite pName in Refl)
-            in tFlA pF Refl inhA pC
-
-          tFlA : (fresh : Bool) ->
-                 isRealloc calleeC && not (isDefined ctx calleeC) = fresh ->
-                 InHand envA (snd (alloc hA)) scA a ->
-                 checkCall ctx sc0 id calleeC args = Right scA ->
-                 InHand envA (snd (alloc hA)) scY a
-          tFlA False pF inhA pC =
-            let scEq = cong fst (rightInj (trans (sym (takeCallRight pF
-                  (trans (checkExprCall ctx sc0 id calleeC args) pC))) pT))
-            in replace {p = \s => InHand envA (snd (alloc hA)) s a} scEq inhA
-          tFlA True pF inhA pC =
-            let scEq = cong fst (rightInj (trans (sym (takeReallocRight pF pC)) pT))
-            in replace {p = \s => InHand envA (snd (alloc hA)) s a} scEq inhA
+            in tFlA scA pF Refl inhA pC
 
       inhTakeAsgPtr :
         {id : Nat} -> {n : Place} -> {nm : String} -> {rhs : Expr} ->
+        {env0 : HEnv} -> {h0 : Heap} -> {sc0, scY : Scopes} -> {fl0 : Flag} ->
         {w : HVal} -> {envA : HEnv} -> {hA : Heap} ->
         InHand env0 h0 sc0 a ->
         OverApprox env0 h0 sc0 ->
@@ -2012,7 +2008,7 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
             in notPtrVal nv (inhValsModesRest inh1 (htFromOk ht) pEs2 evEs)
       inhValsModes inh oa eq evE evEs {modes = m :: ms} with (doesConsume m) proof pc
         inhValsModes inh oa eq evE evEs {modes = m :: ms} | False =
-          let (sc2 ** (pE, pEs2)) = argsBorrowSplitWait pc eq
+          let (sc2 ** (pE, pEs2)) = argsModesBorrowSplit pc eq
               nv = inhNotPtrExpr inh oa evE pE
               inh1 = inhExpr inh oa evE pE
               oa1 = hrFromOk (ihs.exprIH evE sc0 sc2 pE oa)

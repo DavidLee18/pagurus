@@ -581,8 +581,12 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
               (takeOwner ctx sc1 (ELit id) = Right (sc2, fl),
                checkArgsModes ctx sc2 callee es [] = Right sc'))) ->
             Void
-          ghostExtraLit (_ ** (Owner ** (pT, _))) impossible
-          ghostExtraLit (_ ** (Null ** (pT, _))) impossible
+          ghostExtraLit (_ ** (Owner ** (pT, _))) =
+            void (ownerNotGhost (sym (cong snd (rightInj
+              (trans (sym (takeLit ctx sc1 id)) pT)))))
+          ghostExtraLit (_ ** (Null ** (pT, _))) =
+            void (nullNotGhost (sym (cong snd (rightInj
+              (trans (sym (takeLit ctx sc1 id)) pT)))))
           ghostExtraLit (_ ** (Ghost ** (pT, _))) =
             void (leftNotRight (trans (sym (argsModesExtraGhost es pT)) pEs))
       ownRestLit inh evEs pEs oa1 {ms0 = m :: msR} with (doesConsume m) proof pc
@@ -594,8 +598,12 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
                 (takeOwner ctx sc1 (ELit id) = Right (sc2, fl),
                  checkArgsModes ctx sc2 callee es msR = Right sc'))) ->
               Void
-            ghostMoveLit (_ ** (Owner ** (pT, _))) impossible
-            ghostMoveLit (_ ** (Null ** (pT, _))) impossible
+            ghostMoveLit (_ ** (Owner ** (pT, _))) =
+              void (ownerNotGhost (sym (cong snd (rightInj
+                (trans (sym (takeLit ctx sc1 id)) pT)))))
+            ghostMoveLit (_ ** (Null ** (pT, _))) =
+              void (nullNotGhost (sym (cong snd (rightInj
+                (trans (sym (takeLit ctx sc1 id)) pT)))))
             ghostMoveLit (_ ** (Ghost ** (pT, _))) =
               void (leftNotRight (trans (sym (argsModesMoveGhost es msR pc pT)) pEs))
         ownRestLit inh evEs pEs oa1 {ms0 = m :: msR} | False =
@@ -833,8 +841,12 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
               (takeOwner ctx sc1 (EUse uid []) = Right (sc2, fl),
                checkArgsModes ctx sc2 callee es [] = Right sc'))) ->
             Void
-          ghostExtraUse (_ ** (Owner ** (pT, _))) impossible
-          ghostExtraUse (_ ** (Null ** (pT, _))) impossible
+          ghostExtraUse (_ ** (Owner ** (pT, _))) =
+            void (ownerNotGhost (sym (cong snd (rightInj
+              (trans (sym (takeUseRight uid (checkArgsBorrowNil ctx sc1))) pT)))))
+          ghostExtraUse (_ ** (Null ** (pT, _))) =
+            void (nullNotGhost (sym (cong snd (rightInj
+              (trans (sym (takeUseRight uid (checkArgsBorrowNil ctx sc1))) pT)))))
           ghostExtraUse (_ ** (Ghost ** (pT, _))) =
             void (leftNotRight (trans (sym (argsModesExtraGhost es pT)) pEs))
       ownRestUseNil inh evEs pEs oa1 {ms0 = m :: msR} with
@@ -847,8 +859,12 @@ uniqueOwnGo {funs} {ctx} {callee} {env1} {h1} {sc'} {fid} {hB} ihs bok evs veq p
                 (takeOwner ctx sc1 (EUse uid []) = Right (sc2, fl),
                  checkArgsModes ctx sc2 callee es msR = Right sc'))) ->
               Void
-            ghostMoveUse (_ ** (Owner ** (pT, _))) impossible
-            ghostMoveUse (_ ** (Null ** (pT, _))) impossible
+            ghostMoveUse (_ ** (Owner ** (pT, _))) =
+              void (ownerNotGhost (sym (cong snd (rightInj
+                (trans (sym (takeUseRight uid (checkArgsBorrowNil ctx sc1))) pT)))))
+            ghostMoveUse (_ ** (Null ** (pT, _))) =
+              void (nullNotGhost (sym (cong snd (rightInj
+                (trans (sym (takeUseRight uid (checkArgsBorrowNil ctx sc1))) pT)))))
             ghostMoveUse (_ ** (Ghost ** (pT, _))) =
               void (leftNotRight (trans (sym (argsModesMoveGhost es msR pc pT)) pEs))
         ownRestUseNil inh evEs pEs oa1 {ms0 = m :: msR} | False =

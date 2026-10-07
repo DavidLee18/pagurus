@@ -1295,20 +1295,25 @@ mutual
     LiveNuo env1 h1 sc' a ->
     HEvalStmts {funs} frame h1 ss (HOk envB hB) ->
     LiveNuo env1 hB sc' a
-  restoreOwnLN ln1 ev with (cell hB a) proof ph
-    restoreOwnLN ln1 ev | Just Live =
+  restoreOwnLN {frame} ln1 ev with (cell hB a) proof ph
+    restoreOwnLN {frame} ln1 ev | Just Live =
       MkLN (oaKeepEnv ln1.oaLN (stmtsWf {funs} ln1.oaLN.wf ev)
               (\p, st, c, lp, look, safe, live0 =>
                  ownCellLive {funs} {c} ln1.oaLN.wf ev ph live0))
         ln1.nuoLN ph
-    restoreOwnLN {frame} ln1 ev | Just Freed with (heldPtr frame a) proof phd
-      restoreOwnLN {frame} ln1 ev | Just Freed | False =
-        void (ownFreedUnheld {funs} ln1.oaLN.wf ev phd ln1.liveLN ph)
-      restoreOwnLN {frame} ln1 ev | Just Freed | True =
-        -- Unique-own free of leftover `a`. Needs leftoverSafe of a leftover
-        -- intern of `a` that is still use-safe. This fallback has no intern.
-        void (ownFreedUnheld {funs} ln1.oaLN.wf ev phd ln1.liveLN ph)
-    restoreOwnLN ln1 ev | Nothing =
+    restoreOwnLN {frame} ln1 ev | Just Freed =
+      freedGo (heldPtr frame a) Refl
+      where
+        freedGo :
+          (hd : Bool) -> heldPtr frame a = hd ->
+          LiveNuo env1 hB sc' a
+        freedGo False phd =
+          void (ownFreedUnheld {funs} ln1.oaLN.wf ev phd ln1.liveLN ph)
+        freedGo True phd =
+          -- Held unique-own free. leftoverSafe needs a leftover intern of
+          -- `a` that is still use-safe; this fallback has none.
+          void (ownFreedUnheld {funs} ln1.oaLN.wf ev phd ln1.liveLN ph)
+    restoreOwnLN {frame} ln1 ev | Nothing =
       void (stmtsStay {funs} ln1.oaLN.wf ev ln1.liveLN ph)
 
   restoreOwnLNRet :
@@ -1318,18 +1323,23 @@ mutual
     LiveNuo env1 h1 sc' a ->
     HEvalStmts {funs} frame h1 ss (HReturned envB hB) ->
     LiveNuo env1 hB sc' a
-  restoreOwnLNRet ln1 ev with (cell hB a) proof ph
-    restoreOwnLNRet ln1 ev | Just Live =
+  restoreOwnLNRet {frame} ln1 ev with (cell hB a) proof ph
+    restoreOwnLNRet {frame} ln1 ev | Just Live =
       MkLN (oaKeepEnv ln1.oaLN (stmtsWfRet {funs} ln1.oaLN.wf ev)
               (\p, st, c, lp, look, safe, live0 =>
                  ownCellLiveRet {funs} {c} ln1.oaLN.wf ev ph live0))
         ln1.nuoLN ph
-    restoreOwnLNRet {frame} ln1 ev | Just Freed with (heldPtr frame a) proof phd
-      restoreOwnLNRet {frame} ln1 ev | Just Freed | False =
-        void (ownFreedUnheldRet {funs} ln1.oaLN.wf ev phd ln1.liveLN ph)
-      restoreOwnLNRet {frame} ln1 ev | Just Freed | True =
-        void (ownFreedUnheldRet {funs} ln1.oaLN.wf ev phd ln1.liveLN ph)
-    restoreOwnLNRet ln1 ev | Nothing =
+    restoreOwnLNRet {frame} ln1 ev | Just Freed =
+      freedGoR (heldPtr frame a) Refl
+      where
+        freedGoR :
+          (hd : Bool) -> heldPtr frame a = hd ->
+          LiveNuo env1 hB sc' a
+        freedGoR False phd =
+          void (ownFreedUnheldRet {funs} ln1.oaLN.wf ev phd ln1.liveLN ph)
+        freedGoR True phd =
+          void (ownFreedUnheldRet {funs} ln1.oaLN.wf ev phd ln1.liveLN ph)
+    restoreOwnLNRet {frame} ln1 ev | Nothing =
       void (stmtsStayRet {funs} ln1.oaLN.wf ev ln1.liveLN ph)
 
   noneFrameLN :
@@ -1719,38 +1729,61 @@ mutual
                 ptrNotCopy : {b : Addr} -> HVPtr b = HVCopy -> Void
                 ptrNotCopy Refl impossible
 
-        ||| Match the eval constructor first so `HERealloc` refines `v` /
-        ||| `h'` to the alloc result instead of unifying against a rigid
-        ||| leftover `HVPtr b`.
+        ||| Inspect `v` first so `HECall` refines to `HVNone`. `HERealloc`
+        ||| is matched in `ptrGo` with a fresh result so `h'` is not rigid.
         ownerCase :
           {sc1 : Scopes} ->
           HEvalExpr {funs} env h (ECall id callee args) (HROk v env' h') ->
           sc1 = sc' -> Owner = fl ->
           LiveNuo env' h' sc1 a ->
           TakeLN fl v env' h' sc' a
-        ownerCase (HECall _ _ _ _) scEq flEq ln1 =
-          MkTLN (MkLN (oaRewrite {xs = sc1} {ys = sc'} scEq ln1.oaLN)
-                   (nuoRewrite {sc1 = sc1} {sc2 = sc'} scEq ln1.nuoLN) ln1.liveLN)
-            (replace {p = \f => HTaken f HVNone env' h' sc'} flEq
-               (replace {p = \s => HTaken Owner HVNone env' h' s} scEq HOwnNone))
-        ownerCase (HECallUser _ _ _ _ _ _ _ _ _ _) scEq flEq ln1 =
-          MkTLN (MkLN (oaRewrite {xs = sc1} {ys = sc'} scEq ln1.oaLN)
-                   (nuoRewrite {sc1 = sc1} {sc2 = sc'} scEq ln1.nuoLN) ln1.liveLN)
-            (replace {p = \f => HTaken f HVNone env' h' sc'} flEq
-               (replace {p = \s => HTaken Owner HVNone env' h' s} scEq HOwnNone))
-        ownerCase (HECallUserRet _ _ _ _ _ _ _ _ _ _) scEq flEq ln1 =
-          MkTLN (MkLN (oaRewrite {xs = sc1} {ys = sc'} scEq ln1.oaLN)
-                   (nuoRewrite {sc1 = sc1} {sc2 = sc'} scEq ln1.nuoLN) ln1.liveLN)
-            (replace {p = \f => HTaken f HVNone env' h' sc'} flEq
-               (replace {p = \s => HTaken Owner HVNone env' h' s} scEq HOwnNone))
-        ownerCase (HERealloc pName pMiss env1 h1 evs) scEq flEq ln1 =
-          MkTLN (MkLN (oaRewrite {xs = sc1} {ys = sc'} scEq ln1.oaLN)
-                   (nuoRewrite {sc1 = sc1} {sc2 = sc'} scEq ln1.nuoLN) ln1.liveLN)
-            (replace {p = \f => HTaken f (HVPtr (fst (alloc h1))) env1
-                                  (snd (alloc h1)) sc'} flEq
-               (replace {p = \s => HTaken Owner (HVPtr (fst (alloc h1))) env1
-                                     (snd (alloc h1)) s} scEq
-                  (HOwnLive (allocCell h1) (inHandAlloc ln1.oaLN))))
+        ownerCase {sc1} ev0 scEq flEq ln1 with (v)
+          ownerCase {sc1} ev0 scEq flEq ln1 | HVNone = noneGo ev0
+            where
+              noneGo :
+                HEvalExpr {funs} env h (ECall id callee args)
+                  (HROk HVNone env' h') ->
+                TakeLN fl HVNone env' h' sc' a
+              noneGo (HECall _ _ _ _) =
+                MkTLN (MkLN (oaRewrite {xs = sc1} {ys = sc'} scEq ln1.oaLN)
+                         (nuoRewrite {sc1 = sc1} {sc2 = sc'} scEq ln1.nuoLN) ln1.liveLN)
+                  (replace {p = \f => HTaken f HVNone env' h' sc'} flEq
+                     (replace {p = \s => HTaken Owner HVNone env' h' s} scEq HOwnNone))
+              noneGo (HECallUser _ _ _ _ _ _ _ _ _ _) =
+                MkTLN (MkLN (oaRewrite {xs = sc1} {ys = sc'} scEq ln1.oaLN)
+                         (nuoRewrite {sc1 = sc1} {sc2 = sc'} scEq ln1.nuoLN) ln1.liveLN)
+                  (replace {p = \f => HTaken f HVNone env' h' sc'} flEq
+                     (replace {p = \s => HTaken Owner HVNone env' h' s} scEq HOwnNone))
+              noneGo (HECallUserRet _ _ _ _ _ _ _ _ _ _) =
+                MkTLN (MkLN (oaRewrite {xs = sc1} {ys = sc'} scEq ln1.oaLN)
+                         (nuoRewrite {sc1 = sc1} {sc2 = sc'} scEq ln1.nuoLN) ln1.liveLN)
+                  (replace {p = \f => HTaken f HVNone env' h' sc'} flEq
+                     (replace {p = \s => HTaken Owner HVNone env' h' s} scEq HOwnNone))
+          ownerCase {sc1} ev0 scEq flEq ln1 | HVPtr b = ptrGo ev0 Refl
+            where
+              ptrGo :
+                {v0 : HVal} -> {envX : HEnv} -> {hX : Heap} ->
+                HEvalExpr {funs} env h (ECall id callee args)
+                  (HROk v0 envX hX) ->
+                v0 = HVPtr b ->
+                TakeLN fl (HVPtr b) env' h' sc' a
+              ptrGo (HERealloc pName pMiss env1 h1 evs) veq =
+                let bEq = hvPtrInj veq
+                    envEq = the (env1 = env') Refl
+                    hEq = the (snd (alloc h1) = h') Refl
+                in MkTLN (MkLN (oaRewrite {xs = sc1} {ys = sc'} scEq ln1.oaLN)
+                           (nuoRewrite {sc1 = sc1} {sc2 = sc'} scEq ln1.nuoLN) ln1.liveLN)
+                     (replace {p = \f => HTaken f (HVPtr b) env' h' sc'} flEq
+                        (replace {p = \s => HTaken Owner (HVPtr b) env' h' s} scEq
+                           (replace {p = \x => HTaken Owner (HVPtr x) env' h' sc1}
+                              (sym bEq)
+                              (replace {p = \e => HTaken Owner (HVPtr (fst (alloc h1))) e h' sc1}
+                                 envEq
+                                 (replace {p = \hh => HTaken Owner (HVPtr (fst (alloc h1))) env1 hh sc1}
+                                    hEq
+                                    (HOwnLive (allocCell h1) (inHandAlloc ln1.oaLN)))))))
+          ownerCase ev0 scEq flEq ln1 | HVCopy =
+            void (callNotCopyV ev0)
 
   reallocTakeLN :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->

@@ -20,9 +20,10 @@ import Pagurus.Heap.Stmt
 
 export
 checkFunNoHeapCrash : CheckFunNoHeapCrash
-checkFunNoHeapCrash fuel ctx f ok pDef chk env h oa o ev =
+checkFunNoHeapCrash fuel ctx f ok pDef chk defEq env h oa o ev =
   let (sc' ** pB) = checkFunOkBody pDef ok
-  in hFromOut (stmtsHSafe {chk} ev fuel (paramScopes ctx f) sc' pB oa)
+  in hFromOut (stmtsHSafe {chk} {defNs = definedNamesEqOf defEq}
+                 ev fuel (paramScopes ctx f) sc' pB oa)
 
 mutual
   export
@@ -60,4 +61,4 @@ checkProgramNoHeapCrash (MkProgram funs) ok f look env h oa o ev =
   let checked = programFunsChecked ok
       funOk = checkedLookup checked look
       pDef = findFunDefined look
-  in checkFunNoHeapCrash 2048 (mkProgCtx funs) f funOk pDef checked env h oa o ev
+  in checkFunNoHeapCrash 2048 (mkProgCtx funs) f funOk pDef checked Refl env h oa o ev

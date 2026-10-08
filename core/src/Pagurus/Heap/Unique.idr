@@ -126,6 +126,8 @@ record CallIHs (funs : List Fun) (ctx : Ctx) where
     LiveNuo env h sc0 a ->
     v = HVPtr a ->
     Void
+  ||| Intra is `()`. Nonempty units: `ctx.defined = definedNames funs`.
+  defNs : DefinedNamesEq ctx funs
 
 ||| Callback: leftover use-safe intern of `a` after a uniquely-owning
 ||| callee freed `a`. The inhabitant is the BindOk zip plus checker

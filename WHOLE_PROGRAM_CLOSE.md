@@ -43,3 +43,13 @@ plus eval `HECallUser` when `ctx.defined` disagrees with `funs`, or for
 `CheckProgramNoHeapCrash` already has the invariant via `mkProgCtx`.
 Narrowing `CheckFunNoHeapCrash` to consistent units is a smaller theorem,
 not a weaker checker.
+
+`DefinedNamesEq ctx []` is `()`. Intra `stmtsHSafe` takes `{defNs}`
+so Dispatch covering can fill `CallIHs.defNs`; Restore reads it from
+`ihs` (`nestedJust*` already has `{auto ihs}`). `CheckAcceptedNoHeapCrash`
+is unchanged and passes `{defNs = ()}`. Nonempty units use
+`ctx.defined = definedNames funs`. `definedNamesEqOf` converts the
+`CheckFunNoHeapCrash` premise. `definedNamesFromLook` recovers the
+equality from a `findFun` hit (empty unit is `emptyFunsNoUser`).
+Do not add `{auto defNs : DefinedNamesEq ctx funs}` to Restore: auto
+search for that type leaves `funs` unsolved at `varUseH`.

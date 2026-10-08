@@ -65,9 +65,9 @@ mutual
   ||| (nested `HECallUser` covering) and Restore LiveNuo threading.
   dispatchIhs :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
-    {auto chk : FunsChecked cfuel ctx funs} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} ->
     CallIHs funs ctx
-  dispatchIhs {funs} {chk} {ctx} = MkCallIHs
+  dispatchIhs {funs} {chk} {ctx} {defNs} = MkCallIHs
     (\ev, sc0, sc1, p, oa => exprHSafe {funs} {chk} ev sc0 sc1 p oa)
     (\ev, sc0, sc1, fl, p, oa => takeHSafe {funs} {chk} ev sc0 sc1 fl p oa)
     (\ev, pE, inh, oa => inhExprH {funs} dispatchExprs inh oa ev pE)
@@ -75,11 +75,12 @@ mutual
     (\ev, pE, ln => exprLN {funs} {chk} ln pE ev)
     (\ev, pT, ln => (takeLN {funs} {chk} ln pT ev).lnTLN)
     (\ev, pT, ln, veq => nuoNoTakeLeftover {funs} {chk} ev pT ln veq)
+    defNs
 
   ||| `exprHSafe` / `takeHSafe` only, so `Inh` does not close over `inhIH`.
   dispatchExprs :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
-    {auto chk : FunsChecked cfuel ctx funs} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} ->
     ExprIHs funs ctx
   dispatchExprs {funs} {chk} {ctx} = MkExprIHs
     (\ev, sc0, sc1, p, oa => exprHSafe {funs} {chk} ev sc0 sc1 p oa)
@@ -88,7 +89,7 @@ mutual
   export
   exprHSafe :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
-    {auto chk : FunsChecked cfuel ctx funs} -> {e : Expr} -> {env : HEnv} -> {h : Heap} -> {o : HResult} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} -> {e : Expr} -> {env : HEnv} -> {h : Heap} -> {o : HResult} ->
     HEvalExpr {funs} env h e o ->
     (sc, sc' : Scopes) ->
     checkExpr ctx sc e = Right sc' ->
@@ -140,7 +141,7 @@ mutual
   export
   takeHSafe :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
-    {auto chk : FunsChecked cfuel ctx funs} -> {e : Expr} -> {env : HEnv} -> {h : Heap} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} -> {e : Expr} -> {env : HEnv} -> {h : Heap} ->
     {o : HResult} ->
     HEvalExpr {funs} env h e o ->
     (sc, sc' : Scopes) -> (flChk : Flag) ->
@@ -205,7 +206,7 @@ mutual
   export
   argsBorrowH :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
-    {auto chk : FunsChecked cfuel ctx funs} -> {es : List Expr} -> {env : HEnv} -> {h : Heap} -> {o : HResult} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} -> {es : List Expr} -> {env : HEnv} -> {h : Heap} -> {o : HResult} ->
     HEvalExprs {funs} env h es o ->
     (sc, sc' : Scopes) ->
     checkArgsBorrow ctx sc es = Right sc' ->
@@ -225,7 +226,7 @@ mutual
   export
   argsMoveH :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
-    {auto chk : FunsChecked cfuel ctx funs} -> {es : List Expr} -> {env : HEnv} -> {h : Heap} -> {o : HResult} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} -> {es : List Expr} -> {env : HEnv} -> {h : Heap} -> {o : HResult} ->
     HEvalExprs {funs} env h es o ->
     (sc, sc' : Scopes) ->
     checkArgsMove ctx sc es = Right sc' ->
@@ -244,7 +245,7 @@ mutual
 
   argsModesH :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
-    {auto chk : FunsChecked cfuel ctx funs} -> {callee : String} -> {es : List Expr} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} -> {callee : String} -> {es : List Expr} ->
     {modes : List Consume} -> {env : HEnv} -> {h : Heap} -> {o : HResult} ->
     HEvalExprs {funs} env h es o ->
     (sc, sc' : Scopes) ->
@@ -287,7 +288,7 @@ mutual
   export
   callHSafe :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
-    {auto chk : FunsChecked cfuel ctx funs} -> {id : Nat} -> {callee : String} -> {args : List Expr} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} -> {id : Nat} -> {callee : String} -> {args : List Expr} ->
     {env : HEnv} -> {h : Heap} -> {o : HResult} ->
     HEvalExprs {funs} env h args o ->
     (sc, sc' : Scopes) ->
@@ -308,7 +309,7 @@ mutual
 
   reallocExprsH :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
-    {auto chk : FunsChecked cfuel ctx funs} -> {es : List Expr} -> {env : HEnv} -> {h : Heap} -> {o : HResult} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} -> {es : List Expr} -> {env : HEnv} -> {h : Heap} -> {o : HResult} ->
     HEvalExprs {funs} env h es o ->
     (sc, sc' : Scopes) ->
     checkRealloc ctx sc es = Right sc' ->
@@ -327,7 +328,7 @@ mutual
 
   reallocArgsH :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
-    {auto chk : FunsChecked cfuel ctx funs} -> {es : List Expr} -> {env : HEnv} -> {h : Heap} -> {o : HResult} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} -> {es : List Expr} -> {env : HEnv} -> {h : Heap} -> {o : HResult} ->
     HEvalReallocArgs {funs} env h es o ->
     (sc, sc' : Scopes) ->
     checkRealloc ctx sc es = Right sc' ->
@@ -346,7 +347,7 @@ mutual
 
   reallocCallH :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
-    {auto chk : FunsChecked cfuel ctx funs} -> {id : Nat} -> {callee : String} -> {args : List Expr} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} -> {id : Nat} -> {callee : String} -> {args : List Expr} ->
     {env : HEnv} -> {h : Heap} -> {o : HResult} ->
     isReallocName callee = True ->
     HEvalReallocArgs {funs} env h args o ->
@@ -373,7 +374,7 @@ mutual
 
   reallocAllocH :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
-    {auto chk : FunsChecked cfuel ctx funs} -> {id : Nat} -> {callee : String} -> {args : List Expr} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} -> {id : Nat} -> {callee : String} -> {args : List Expr} ->
     {env : HEnv} -> {h : Heap} -> {env1 : HEnv} -> {h1 : Heap} ->
     isReallocName callee = True ->
     HEvalReallocArgs {funs} env h args (HROk HVNone env1 h1) ->
@@ -386,7 +387,7 @@ mutual
 
   takeReallocAllocH :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
-    {auto chk : FunsChecked cfuel ctx funs} -> {callee : String} -> {args : List Expr} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} -> {callee : String} -> {args : List Expr} ->
     {env : HEnv} -> {h : Heap} -> {env1 : HEnv} -> {h1 : Heap} ->
     {flChk : Flag} -> {id : Nat} ->
     isReallocName callee = True ->
@@ -422,7 +423,7 @@ mutual
   stmtHSafe :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} -> {s : Stmt} ->
     {env : HEnv} -> {h : Heap} -> {o : HOutcome} ->
-    {auto chk : FunsChecked cfuel ctx funs} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} ->
     HEvalStmt {funs} env h s o ->
     (fuel : Nat) ->
     (sc, sc' : Scopes) ->
@@ -538,7 +539,7 @@ mutual
   loopGoH :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} -> {env : HEnv} -> {h : Heap} ->
     {lid : Nat} -> {bod : List Stmt} -> {o : HOutcome} ->
-    {auto chk : FunsChecked cfuel ctx funs} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} ->
     (k : Nat) ->
     HEvalStmt {funs} env h (SLoop lid bod) o ->
     (sc, sc' : Scopes) ->
@@ -581,7 +582,7 @@ mutual
   stmtsHSafe :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} -> {ss : List Stmt} ->
     {env : HEnv} -> {h : Heap} -> {o : HOutcome} ->
-    {auto chk : FunsChecked cfuel ctx funs} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} ->
     HEvalStmts {funs} env h ss o ->
     (fuel : Nat) ->
     (sc, sc' : Scopes) ->
@@ -609,7 +610,7 @@ mutual
 
   userCallBound :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
-    {auto chk : FunsChecked cfuel ctx funs} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} ->
     {id : Nat} -> {callee : String} -> {args : List Expr} ->
     {env, env1, envB : HEnv} -> {h, h1, hB : Heap} ->
     {sc, sc' : Scopes} ->
@@ -698,7 +699,7 @@ mutual
 
   userCallGo :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
-    {auto chk : FunsChecked cfuel ctx funs} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} ->
     {id : Nat} -> {callee : String} -> {args : List Expr} ->
     {env, env1, envB : HEnv} -> {h, h1, hB : Heap} ->
     {sc, sc' : Scopes} ->
@@ -721,7 +722,7 @@ mutual
 
   userCallRun :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
-    {auto chk : FunsChecked cfuel ctx funs} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} ->
     {id : Nat} -> {callee : String} -> {args : List Expr} ->
     {env, env1, envB : HEnv} -> {h, h1, hB : Heap} ->
     {sc, sc' : Scopes} ->
@@ -740,7 +741,7 @@ mutual
 
   userCallRunCrash :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
-    {auto chk : FunsChecked cfuel ctx funs} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} ->
     {id : Nat} -> {callee : String} -> {args : List Expr} ->
     {env, env1 : HEnv} -> {h, h1 : Heap} -> {c : HCrash} ->
     {sc, sc' : Scopes} ->
@@ -761,7 +762,7 @@ mutual
 
   crashBound :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
-    {auto chk : FunsChecked cfuel ctx funs} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} ->
     {id : Nat} -> {callee : String} -> {args : List Expr} ->
     {env, env1 : HEnv} -> {h, h1 : Heap} -> {c : HCrash} ->
     {sc, sc' : Scopes} ->
@@ -793,7 +794,7 @@ mutual
 
   userCallRunRet :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
-    {auto chk : FunsChecked cfuel ctx funs} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} ->
     {id : Nat} -> {callee : String} -> {args : List Expr} ->
     {env, env1, envB : HEnv} -> {h, h1, hB : Heap} ->
     {sc, sc' : Scopes} ->
@@ -814,7 +815,7 @@ mutual
 
   retBound :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
-    {auto chk : FunsChecked cfuel ctx funs} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} ->
     {id : Nat} -> {callee : String} -> {args : List Expr} ->
     {env, env1, envB : HEnv} -> {h, h1, hB : Heap} ->
     {sc, sc' : Scopes} ->
@@ -862,7 +863,7 @@ mutual
 
   userCallExprOk :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
-    {auto chk : FunsChecked cfuel ctx funs} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} ->
     {env, env1, envB : HEnv} -> {h, h1, hB : Heap} ->
     (id : Nat) -> (callee : String) -> (args : List Expr) ->
     isBuiltinName callee = False ->
@@ -881,7 +882,7 @@ mutual
 
   userCallExprCrash :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
-    {auto chk : FunsChecked cfuel ctx funs} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} ->
     {env, env1 : HEnv} -> {h, h1 : Heap} -> {c : HCrash} ->
     (id : Nat) -> (callee : String) -> (args : List Expr) ->
     isBuiltinName callee = False ->
@@ -900,7 +901,7 @@ mutual
 
   userCallTakeOk :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
-    {auto chk : FunsChecked cfuel ctx funs} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} ->
     {env, env1, envB : HEnv} -> {h, h1, hB : Heap} ->
     (id : Nat) -> (callee : String) -> (args : List Expr) ->
     isBuiltinName callee = False ->
@@ -920,7 +921,7 @@ mutual
 
   userCallTakeCrash :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
-    {auto chk : FunsChecked cfuel ctx funs} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} ->
     {env, env1 : HEnv} -> {h, h1 : Heap} -> {c : HCrash} ->
     (id : Nat) -> (callee : String) -> (args : List Expr) ->
     isBuiltinName callee = False ->
@@ -940,7 +941,7 @@ mutual
 
   userCallStmtOk :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
-    {auto chk : FunsChecked cfuel ctx funs} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} ->
     {env, env1, envB : HEnv} -> {h, h1, hB : Heap} ->
     (k : Nat) -> (id : Nat) -> (callee : String) -> (args : List Expr) ->
     isBuiltinName callee = False ->
@@ -959,7 +960,7 @@ mutual
 
   userCallStmtCrash :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
-    {auto chk : FunsChecked cfuel ctx funs} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} ->
     {env, env1 : HEnv} -> {h, h1 : Heap} -> {c : HCrash} ->
     (k : Nat) -> (id : Nat) -> (callee : String) -> (args : List Expr) ->
     isBuiltinName callee = False ->
@@ -978,7 +979,7 @@ mutual
 
   userCallExprRet :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
-    {auto chk : FunsChecked cfuel ctx funs} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} ->
     {env, env1, envB : HEnv} -> {h, h1, hB : Heap} ->
     (id : Nat) -> (callee : String) -> (args : List Expr) ->
     isBuiltinName callee = False ->
@@ -997,7 +998,7 @@ mutual
 
   userCallTakeRet :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
-    {auto chk : FunsChecked cfuel ctx funs} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} ->
     {env, env1, envB : HEnv} -> {h, h1, hB : Heap} ->
     (id : Nat) -> (callee : String) -> (args : List Expr) ->
     isBuiltinName callee = False ->
@@ -1017,7 +1018,7 @@ mutual
 
   userCallStmtRet :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
-    {auto chk : FunsChecked cfuel ctx funs} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {defNs : DefinedNamesEq ctx funs} ->
     {env, env1, envB : HEnv} -> {h, h1, hB : Heap} ->
     (k : Nat) -> (id : Nat) -> (callee : String) -> (args : List Expr) ->
     isBuiltinName callee = False ->
@@ -1037,4 +1038,5 @@ mutual
 export
 checkAcceptedNoHeapCrash : CheckAcceptedNoHeapCrash
 checkAcceptedNoHeapCrash fuel ctx sc ss sc' eq env h oa o ev =
-  hFromOut (stmtsHSafe {funs = []} {cfuel = fuel} {chk = FNil} ev fuel sc sc' eq oa)
+  hFromOut (stmtsHSafe {funs = []} {cfuel = fuel} {chk = FNil} {defNs = ()}
+              ev fuel sc sc' eq oa)

@@ -180,6 +180,34 @@ data FunsChecked : Nat -> Ctx -> List Fun -> Type where
     FunsChecked fuel ctx fs ->
     FunsChecked fuel ctx (f :: fs)
 
+||| Intra (`funs = []`) is `()`. A nonempty unit carries
+||| `ctx.defined = definedNames funs` so user-call covering can rewrite
+||| `isDefined` from a `findFun` hit. Not required by
+||| `CheckAcceptedNoHeapCrash`.
+public export
+DefinedNamesEq : Ctx -> List Fun -> Type
+DefinedNamesEq _ [] = ()
+DefinedNamesEq ctx (f :: fs) = ctx.defined = definedNames (f :: fs)
+
+export
+definedNamesEqOf :
+  {ctx : Ctx} -> {funs : List Fun} ->
+  ctx.defined = definedNames funs ->
+  DefinedNamesEq ctx funs
+definedNamesEqOf {funs = []} _ = ()
+definedNamesEqOf {funs = _ :: _} eq = eq
+
+||| A `findFun` hit means the unit is nonempty, so `DefinedNamesEq`
+||| is the equality.
+export
+definedNamesFromLook :
+  {ctx : Ctx} -> {funs : List Fun} -> {n : String} -> {f : Fun} ->
+  DefinedNamesEq ctx funs ->
+  findFun funs n = Just f ->
+  ctx.defined = definedNames funs
+definedNamesFromLook {funs = []} _ look = void (emptyFunsNoUser n look)
+definedNamesFromLook {funs = _ :: _} eq _ = eq
+
 export
 checkedLookup :
   {fuel : Nat} -> {ctx : Ctx} -> {funs : List Fun} -> {n : String} -> {f : Fun} ->
@@ -294,8 +322,9 @@ findFunInDefined {funs = g :: gs} look with (decEq g.name n) proof pd
 
 ||| If `checkFun` accepts a defined function, its body is heap-crash-free
 ||| from an over-approximation of `paramScopes` (per-argument `funModes`),
-||| under any translation unit whose defined functions were accepted at
-||| the same fuel (`FunsChecked`). `HEvalStmts` uses that unit, so
+||| under a translation unit whose defined functions were accepted at
+||| the same fuel (`FunsChecked`) and whose `ctx.defined` is
+||| `definedNames funs`. `HEvalStmts` uses that unit, so
 ||| `HECallUser` / `HSCallUser` (callee bodies) are covered.
 public export
 CheckFunNoHeapCrash : Type
@@ -305,6 +334,7 @@ CheckFunNoHeapCrash =
   checkFun fuel ctx f = Right () ->
   f.defined = True ->
   FunsChecked fuel ctx funs ->
+  ctx.defined = definedNames funs ->
   (env : HEnv) -> (h : Heap) ->
   OverApprox env h (paramScopes ctx f) ->
   (o : HOutcome) -> HEvalStmts {funs} env h f.body o ->

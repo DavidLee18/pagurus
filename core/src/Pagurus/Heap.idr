@@ -8,6 +8,7 @@ module Pagurus.Heap
 
 import Pagurus.IR
 import Pagurus.Lattice
+import Decidable.Equality
 
 %default total
 
@@ -67,14 +68,15 @@ isBuiltinName : String -> Bool
 isBuiltinName n = n == "malloc" || n == "calloc"
 
 ||| First *defined* function of this name. Prototypes (`defined = False`) are skipped.
+||| Lookup uses `decEq` so a hit yields `f.name = n` (`findFunName`).
 public export
 findFun : List Fun -> String -> Maybe Fun
 findFun [] _ = Nothing
-findFun (f :: fs) n with (f.name == n)
-  findFun (f :: fs) n | True with (f.defined)
-    findFun (f :: fs) n | True | True = Just f
-    findFun (f :: fs) n | True | False = findFun fs n
-  findFun (f :: fs) n | False = findFun fs n
+findFun (f :: fs) n with (decEq f.name n)
+  findFun (f :: fs) n | Yes _ with (f.defined)
+    findFun (f :: fs) n | Yes _ | True = Just f
+    findFun (f :: fs) n | Yes _ | False = findFun fs n
+  findFun (f :: fs) n | No _ = findFun fs n
 
 export
 findFunNil : (n : String) -> findFun [] n = Nothing
@@ -248,14 +250,30 @@ findFunDefined :
   findFun funs n = Just f ->
   f.defined = True
 findFunDefined {funs = []} look = void (nothingNotJustH (trans (sym (findFunNil n)) look))
-findFunDefined {funs = g :: gs} look with (g.name == n)
-  findFunDefined {funs = g :: gs} look | True with (g.defined) proof pd
-    findFunDefined {funs = g :: gs} look | True | True =
+findFunDefined {funs = g :: gs} look with (decEq g.name n)
+  findFunDefined {funs = g :: gs} look | Yes _ with (g.defined) proof pd
+    findFunDefined {funs = g :: gs} look | Yes _ | True =
       trans (sym (cong (.defined) (justInjH look))) pd
-    findFunDefined {funs = g :: gs} look | True | False =
+    findFunDefined {funs = g :: gs} look | Yes _ | False =
       findFunDefined {funs = gs} look
-  findFunDefined {funs = g :: gs} look | False =
+  findFunDefined {funs = g :: gs} look | No _ =
     findFunDefined {funs = gs} look
+
+||| A `findFun` hit is a defined function whose name is the lookup key.
+export
+findFunName :
+  {funs : List Fun} -> {n : String} -> {f : Fun} ->
+  findFun funs n = Just f ->
+  f.name = n
+findFunName {funs = []} look = void (nothingNotJustH (trans (sym (findFunNil n)) look))
+findFunName {funs = g :: gs} look with (decEq g.name n)
+  findFunName {funs = g :: gs} look | Yes prf with (g.defined)
+    findFunName {funs = g :: gs} look | Yes prf | True =
+      trans (sym (cong (.name) (justInjH look))) prf
+    findFunName {funs = g :: gs} look | Yes prf | False =
+      findFunName {funs = gs} look
+  findFunName {funs = g :: gs} look | No _ =
+    findFunName {funs = gs} look
 
 export
 ltIrrefl : (n : Nat) -> Not (n < n = True)

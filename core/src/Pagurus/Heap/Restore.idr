@@ -1165,14 +1165,9 @@ mutual
       leftoverSafe : LeftoverSafeFreed env1 h1 hB sc' f.id f.params
                        (funModes ctx f.name) (collectArgVals evs)
       leftoverSafe =
-        replace {p = \ms => LeftoverSafeFreed env1 h1 hB sc' f.id f.params ms
-                              (collectArgVals evs)}
-          (sym meq)
-          (uniqueOwnCall {funs} {hPost = hB} ihs ln0.oaLN eq
-             (replace {p = \b => b = False} (builtinEq callee) pB) pd
-             (replace {p = \ms => BindOk f.id h1 f.params ms (collectArgVals evs)}
-                meq bok)
-             evs Refl)
+        uniqueOwnCallFun {funs} {hPost = hB} ihs ln0.oaLN eq
+          (replace {p = \b => b = False} (builtinEq callee) pB) pd look
+          evs bok
 
       heldGo :
         (hd : Bool) ->
@@ -1213,16 +1208,9 @@ mutual
             in MkLN (oaKeepEnv ln1.oaLN (stmtsWf {funs} ln1.oaLN.wf evBody) pres)
                  ln1.nuoLN phB
           heldGo True phd ls | Right pnoF | Just Freed =
-            void (uniqueOwnNuo ihs
-                    (replace {p = \ms => BindOk f.id h1 f.params ms (collectArgVals evs)}
-                       meq bok)
-                    evs Refl
-                    (callArgsModes
-                       (replace {p = \b => b = False} (builtinEq callee) pB) pd eq)
-                    ln0
-                    (replace {p = \ms => noOwnerHere (bindFrame f.params (collectArgVals evs))
-                                           (bindParams f.id f.params ms) a = False}
-                       meq pnoF))
+            void (uniqueOwnNuoFun ihs ln0 eq
+                    (replace {p = \b => b = False} (builtinEq callee) pB) pd look
+                    evs bok pnoF)
           heldGo True phd ls | Right pnoF | Nothing =
             void (stmtsStay {funs} ln1.oaLN.wf evBody ln1.liveLN phB)
 
@@ -1246,15 +1234,9 @@ mutual
     LiveNuo env1 hB sc' a
   nestedJustLN {funs} {chk} {ctx} ln0 ln1 eq pB f look pDef evs evBody bok with
       (definedFromCall eq (replace {p = \b => b = False} (builtinEq callee) pB))
-    nestedJustLN {funs} {chk} {ctx} ln0 ln1 eq pB f look pDef evs evBody bok | Left pd with
-        (consumeListEq (funModes ctx f.name) (funModes ctx callee))
-      nestedJustLN {funs} {chk} {ctx} ln0 ln1 eq pB f look pDef evs evBody bok
-          | Left pd | Left meq =
-        nestedJustEq {funs} {chk} ln0 ln1 eq pB f look pDef evs evBody bok pd meq
-      nestedJustLN {funs} {chk} {ctx} ln0 ln1 eq pB f look pDef evs evBody bok
-          | Left pd | Right _ =
-        restoreOwnLN {funs} {frame = bindFrame f.params (collectArgVals evs)}
-          ln1 evBody
+    nestedJustLN {funs} {chk} {ctx} ln0 ln1 eq pB f look pDef evs evBody bok | Left pd =
+      nestedJustEq {funs} {chk} ln0 ln1 eq pB f look pDef evs evBody bok pd
+        (funModesFound {ctx} look)
     nestedJustLN {funs} {chk} {ctx} ln0 ln1 eq pB f look pDef evs evBody bok | Right _ =
       restoreOwnLN {funs} {frame = bindFrame f.params (collectArgVals evs)}
         ln1 evBody
@@ -1285,14 +1267,9 @@ mutual
       leftoverSafe : LeftoverSafeFreed env1 h1 hB sc' f.id f.params
                        (funModes ctx f.name) (collectArgVals evs)
       leftoverSafe =
-        replace {p = \ms => LeftoverSafeFreed env1 h1 hB sc' f.id f.params ms
-                              (collectArgVals evs)}
-          (sym meq)
-          (uniqueOwnCall {funs} {hPost = hB} ihs ln0.oaLN eq
-             (replace {p = \b => b = False} (builtinEq callee) pB) pd
-             (replace {p = \ms => BindOk f.id h1 f.params ms (collectArgVals evs)}
-                meq bok)
-             evs Refl)
+        uniqueOwnCallFun {funs} {hPost = hB} ihs ln0.oaLN eq
+          (replace {p = \b => b = False} (builtinEq callee) pB) pd look
+          evs bok
 
       heldGoR :
         (hd : Bool) ->
@@ -1333,16 +1310,9 @@ mutual
             in MkLN (oaKeepEnv ln1.oaLN (stmtsWfRet {funs} ln1.oaLN.wf evBody) pres)
                  ln1.nuoLN phB
           heldGoR True phd ls | Right pnoF | Just Freed =
-            void (uniqueOwnNuo ihs
-                    (replace {p = \ms => BindOk f.id h1 f.params ms (collectArgVals evs)}
-                       meq bok)
-                    evs Refl
-                    (callArgsModes
-                       (replace {p = \b => b = False} (builtinEq callee) pB) pd eq)
-                    ln0
-                    (replace {p = \ms => noOwnerHere (bindFrame f.params (collectArgVals evs))
-                                           (bindParams f.id f.params ms) a = False}
-                       meq pnoF))
+            void (uniqueOwnNuoFun ihs ln0 eq
+                    (replace {p = \b => b = False} (builtinEq callee) pB) pd look
+                    evs bok pnoF)
           heldGoR True phd ls | Right pnoF | Nothing =
             void (stmtsStayRet {funs} ln1.oaLN.wf evBody ln1.liveLN phB)
 
@@ -1366,15 +1336,9 @@ mutual
     LiveNuo env1 hB sc' a
   nestedJustRetLN {funs} {chk} {ctx} ln0 ln1 eq pB f look pDef evs evBody bok with
       (definedFromCall eq (replace {p = \b => b = False} (builtinEq callee) pB))
-    nestedJustRetLN {funs} {chk} {ctx} ln0 ln1 eq pB f look pDef evs evBody bok | Left pd with
-        (consumeListEq (funModes ctx f.name) (funModes ctx callee))
-      nestedJustRetLN {funs} {chk} {ctx} ln0 ln1 eq pB f look pDef evs evBody bok
-          | Left pd | Left meq =
-        nestedJustEqRet {funs} {chk} ln0 ln1 eq pB f look pDef evs evBody bok pd meq
-      nestedJustRetLN {funs} {chk} {ctx} ln0 ln1 eq pB f look pDef evs evBody bok
-          | Left pd | Right _ =
-        restoreOwnLNRet {funs} {frame = bindFrame f.params (collectArgVals evs)}
-          ln1 evBody
+    nestedJustRetLN {funs} {chk} {ctx} ln0 ln1 eq pB f look pDef evs evBody bok | Left pd =
+      nestedJustEqRet {funs} {chk} ln0 ln1 eq pB f look pDef evs evBody bok pd
+        (funModesFound {ctx} look)
     nestedJustRetLN {funs} {chk} {ctx} ln0 ln1 eq pB f look pDef evs evBody bok | Right _ =
       restoreOwnLNRet {funs} {frame = bindFrame f.params (collectArgVals evs)}
         ln1 evBody

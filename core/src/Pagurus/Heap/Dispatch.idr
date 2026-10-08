@@ -647,18 +647,10 @@ mutual
         LeftoverSafeFreed env1 h1 hB sc' f.id f.params (funModes ctx f.name)
           (collectArgVals evs0)
       uniqueOwnFrom pB0 eq0 oa0 bok0 evs0 with (isDefined ctx callee) proof pd
-        uniqueOwnFrom pB0 eq0 oa0 bok0 evs0 | True with
-            (consumeListEq (funModes ctx f.name) (funModes ctx callee))
-          uniqueOwnFrom pB0 eq0 oa0 bok0 evs0 | True | Left meq =
-            replace {p = \ms => LeftoverSafeFreed env1 h1 hB sc' f.id f.params ms
-                                  (collectArgVals evs0)}
-              (sym meq)
-              (uniqueOwnCall {funs} {hB} dispatchIhs oa0 eq0
-                (replace {p = \b => b = False} (builtinEq callee) pB0) pd
-                (replace {p = \ms => BindOk f.id h1 f.params ms
-                                       (collectArgVals evs0)}
-                   meq bok0)
-                evs0 Refl)
+        uniqueOwnFrom pB0 eq0 oa0 bok0 evs0 | True =
+          uniqueOwnCallFun {funs} {hPost = hB} dispatchIhs oa0 eq0
+            (replace {p = \b => b = False} (builtinEq callee) pB0) pd look
+            evs0 bok0
         uniqueOwnFrom pB0 eq0 oa0 bok0 evs0 | False with (isRealloc callee) proof pr
           uniqueOwnFrom pB0 eq0 oa0 bok0 evs0 | False | False =
             void (callOpaqueContraH
@@ -857,18 +849,10 @@ mutual
         LeftoverSafeFreed env1 h1 hB sc' f.id f.params (funModes ctx f.name)
           (collectArgVals evs0)
       uniqueOwnRet pB0 eq0 oa0 bok0 evs0 with (isDefined ctx callee) proof pd
-        uniqueOwnRet pB0 eq0 oa0 bok0 evs0 | True with
-            (consumeListEq (funModes ctx f.name) (funModes ctx callee))
-          uniqueOwnRet pB0 eq0 oa0 bok0 evs0 | True | Left meq =
-            replace {p = \ms => LeftoverSafeFreed env1 h1 hB sc' f.id f.params ms
-                                  (collectArgVals evs0)}
-              (sym meq)
-              (uniqueOwnCall {funs} {hB} dispatchIhs oa0 eq0
-                (replace {p = \b => b = False} (builtinEq callee) pB0) pd
-                (replace {p = \ms => BindOk f.id h1 f.params ms
-                                       (collectArgVals evs0)}
-                   meq bok0)
-                evs0 Refl)
+        uniqueOwnRet pB0 eq0 oa0 bok0 evs0 | True =
+          uniqueOwnCallFun {funs} {hPost = hB} dispatchIhs oa0 eq0
+            (replace {p = \b => b = False} (builtinEq callee) pB0) pd look
+            evs0 bok0
         uniqueOwnRet pB0 eq0 oa0 bok0 evs0 | False with (isRealloc callee) proof pr
           uniqueOwnRet pB0 eq0 oa0 bok0 evs0 | False | False =
             void (callOpaqueContraH

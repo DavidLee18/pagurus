@@ -8,6 +8,7 @@ import Pagurus.Checker
 import Pagurus.Heap
 import Pagurus.Heap.Eval
 import Pagurus.Heap.Fits
+import Decidable.Equality
 
 %default total
 
@@ -187,13 +188,13 @@ checkedLookup :
   checkFun fuel ctx f = Right ()
 checkedLookup {funs = []} FNil look =
   void (emptyFunsNoUser n look)
-checkedLookup {funs = g :: gs} (FCons ok rest) look with (g.name == n)
-  checkedLookup {funs = g :: gs} (FCons ok rest) look | True with (g.defined)
-    checkedLookup {funs = g :: gs} (FCons ok rest) look | True | True =
+checkedLookup {funs = g :: gs} (FCons ok rest) look with (decEq g.name n)
+  checkedLookup {funs = g :: gs} (FCons ok rest) look | Yes _ with (g.defined)
+    checkedLookup {funs = g :: gs} (FCons ok rest) look | Yes _ | True =
       replace {p = \x => checkFun fuel ctx x = Right ()} (justInjH look) ok
-    checkedLookup {funs = g :: gs} (FCons ok rest) look | True | False =
+    checkedLookup {funs = g :: gs} (FCons ok rest) look | Yes _ | False =
       checkedLookup rest look
-  checkedLookup {funs = g :: gs} (FCons ok rest) look | False =
+  checkedLookup {funs = g :: gs} (FCons ok rest) look | No _ =
     checkedLookup rest look
 
 ||| If `checkFun` accepts a defined function, its body is heap-crash-free

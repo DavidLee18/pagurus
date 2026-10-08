@@ -2,6 +2,7 @@
 module Pagurus.Checker
 
 import Data.String
+import Decidable.Equality
 import Pagurus.IR
 import Pagurus.Status
 import Pagurus.Step
@@ -207,7 +208,9 @@ isDefined ctx n = elem n ctx.defined
 
 lookupNamed : List (String, List Consume) -> String -> Maybe (List Consume)
 lookupNamed [] _ = Nothing
-lookupNamed ((n, ms) :: xs) k = if n == k then Just ms else lookupNamed xs k
+lookupNamed ((n, ms) :: xs) k with (decEq n k)
+  lookupNamed ((n, ms) :: xs) k | Yes _ = Just ms
+  lookupNamed ((n, ms) :: xs) k | No _ = lookupNamed xs k
 
 lookupNamedList : List (String, List Consume) -> String -> List Consume
 lookupNamedList acc n = case lookupNamed acc n of

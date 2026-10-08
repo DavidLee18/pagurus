@@ -1166,9 +1166,15 @@ uniqueOwnCall :
 uniqueOwnCall ihs oa0 eq pb pd bok evs veq =
   uniqueOwnGo ihs bok evs veq (callArgsModes pb pd eq) oa0
 
-||| `findFun` matches `callee` by `==` which is not propositional, so
-||| `funModes ctx f.name` may not unify with `funModes ctx callee`.
-||| `consumeListEq` rewrites BindOk when the mode lists are equal.
+||| `findFunName` rewrites `funModes ctx f.name` to `funModes ctx callee`.
+export
+funModesFound :
+  {ctx : Ctx} -> {funs : List Fun} -> {callee : String} -> {f : Fun} ->
+  findFun funs callee = Just f ->
+  funModes ctx f.name = funModes ctx callee
+funModesFound look = cong (funModes ctx) (findFunName look)
+
+||| Defined call + BindOk zip via `uniqueOwnGo`, using `findFunName`.
 export
 uniqueOwnCallFun :
   {funs : List Fun} -> {ctx : Ctx} -> {callee : String} ->
@@ -1179,31 +1185,23 @@ uniqueOwnCallFun :
   checkCall ctx sc id callee args = Right sc' ->
   isBuiltin callee = False ->
   isDefined ctx callee = True ->
+  findFun funs callee = Just f ->
   (evs : HEvalExprs {funs} env h args (HROk HVNone env1 h1)) ->
   BindOk f.id h1 f.params (funModes ctx f.name) (collectArgVals evs) ->
-  Maybe (LeftoverSafeFreed env1 h1 hPost sc' f.id f.params (funModes ctx f.name)
-           (collectArgVals evs))
-uniqueOwnCallFun {f} ihs oa0 eq pb pd evs bok =
-  modesGo (consumeListEq (funModes ctx f.name) (funModes ctx callee)) Refl
-  where
-    modesGo :
-      (res : Either (funModes ctx f.name = funModes ctx callee)
-                    (Not (funModes ctx f.name = funModes ctx callee))) ->
-      consumeListEq (funModes ctx f.name) (funModes ctx callee) = res ->
-      Maybe (LeftoverSafeFreed env1 h1 hPost sc' f.id f.params (funModes ctx f.name)
-               (collectArgVals evs))
-    modesGo (Left meq) _ =
-      Just (replace {p = \ms => LeftoverSafeFreed env1 h1 hPost sc' f.id f.params ms
-                                  (collectArgVals evs)}
-              (sym meq)
-              (uniqueOwnCall ihs oa0 eq pb pd
-                 (replace {p = \ms => BindOk f.id h1 f.params ms (collectArgVals evs)}
-                    meq bok)
-                 evs Refl))
-    modesGo (Right _) _ = Nothing
+  LeftoverSafeFreed env1 h1 hPost sc' f.id f.params (funModes ctx f.name)
+    (collectArgVals evs)
+uniqueOwnCallFun {f} ihs oa0 eq pb pd look evs bok =
+  let meq = funModesFound {ctx} look
+  in replace {p = \ms => LeftoverSafeFreed env1 h1 hPost sc' f.id f.params ms
+                           (collectArgVals evs)}
+       (sym meq)
+       (uniqueOwnCall ihs oa0 eq pb pd
+          (replace {p = \ms => BindOk f.id h1 f.params ms (collectArgVals evs)}
+             meq bok)
+          evs Refl)
 
 ||| Defined call + BindOk unique-own of leftover `a` vs leftover `LiveNuo`
-||| before the args. `Nothing` when `funModes` of `f.name` and `callee` differ.
+||| before the args. Modes match by `findFunName`.
 export
 uniqueOwnNuoFun :
   {funs : List Fun} -> {ctx : Ctx} -> {callee : String} ->
@@ -1214,25 +1212,18 @@ uniqueOwnNuoFun :
   checkCall ctx sc id callee args = Right sc' ->
   isBuiltin callee = False ->
   isDefined ctx callee = True ->
+  findFun funs callee = Just f ->
   (evs : HEvalExprs {funs} env h args (HROk HVNone env1 h1)) ->
   BindOk f.id h1 f.params (funModes ctx f.name) (collectArgVals evs) ->
   noOwnerHere (bindFrame f.params (collectArgVals evs))
     (bindParams f.id f.params (funModes ctx f.name)) a = False ->
-  Maybe Void
-uniqueOwnNuoFun {f} {a} ihs ln0 eq pb pd evs bok pnoF =
-  modesGo (consumeListEq (funModes ctx f.name) (funModes ctx callee)) Refl
-  where
-    modesGo :
-      (res : Either (funModes ctx f.name = funModes ctx callee)
-                    (Not (funModes ctx f.name = funModes ctx callee))) ->
-      consumeListEq (funModes ctx f.name) (funModes ctx callee) = res ->
-      Maybe Void
-    modesGo (Left meq) _ =
-      Just (uniqueOwnNuo ihs
-              (replace {p = \ms => BindOk f.id h1 f.params ms (collectArgVals evs)}
-                 meq bok)
-              evs Refl (callArgsModes pb pd eq) ln0
-              (replace {p = \ms => noOwnerHere (bindFrame f.params (collectArgVals evs))
-                                     (bindParams f.id f.params ms) a = False}
-                 meq pnoF))
-    modesGo (Right _) _ = Nothing
+  Void
+uniqueOwnNuoFun {f} {a} ihs ln0 eq pb pd look evs bok pnoF =
+  let meq = funModesFound {ctx} look
+  in uniqueOwnNuo ihs
+       (replace {p = \ms => BindOk f.id h1 f.params ms (collectArgVals evs)}
+          meq bok)
+       evs Refl (callArgsModes pb pd eq) ln0
+       (replace {p = \ms => noOwnerHere (bindFrame f.params (collectArgVals evs))
+                              (bindParams f.id f.params ms) a = False}
+          meq pnoF)

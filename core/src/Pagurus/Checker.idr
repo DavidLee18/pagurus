@@ -845,6 +845,20 @@ definedNames : List Fun -> List String
 definedNames funs = map (\f => f.name) (filter (\f => f.defined) funs)
 
 export
+definedNamesConsTrue :
+  (g : Fun) -> (gs : List Fun) ->
+  g.defined = True ->
+  definedNames (g :: gs) = g.name :: definedNames gs
+definedNamesConsTrue g gs pd = rewrite pd in Refl
+
+export
+definedNamesConsFalse :
+  (g : Fun) -> (gs : List Fun) ->
+  g.defined = False ->
+  definedNames (g :: gs) = definedNames gs
+definedNamesConsFalse g gs pd = rewrite pd in Refl
+
+export
 mkProgCtx : List Fun -> Ctx
 mkProgCtx funs = MkCtx (summarise 32 funs []) (definedNames funs)
 

@@ -197,6 +197,101 @@ checkedLookup {funs = g :: gs} (FCons ok rest) look with (decEq g.name n)
   checkedLookup {funs = g :: gs} (FCons ok rest) look | No _ =
     checkedLookup rest look
 
+yesNotNoH : {0 p : a = b} -> {0 q : Not (a = b)} -> Not (Yes p = No q)
+yesNotNoH Refl impossible
+
+||| `DecEq String` is `FromEq`: `Yes` means the boolean test was `True`.
+stringDecYesEq :
+  {x, y : String} -> {prf : x = y} ->
+  decEq x y = Yes prf ->
+  x == y = True
+stringDecYesEq {x} {y} eqd with (x == y)
+  stringDecYesEq {x} {y} eqd | True = Refl
+  stringDecYesEq {x} {y} eqd | False with (decEq x y)
+    stringDecYesEq {x} {y} eqd | False | No _ =
+      void (yesNotNoH (trans (sym eqd) Refl))
+
+stringDecNoNeq :
+  {x, y : String} -> {contra : Not (x = y)} ->
+  decEq x y = No contra ->
+  x == y = False
+stringDecNoNeq {x} {y} eqd with (x == y)
+  stringDecNoNeq {x} {y} eqd | False = Refl
+  stringDecNoNeq {x} {y} eqd | True with (decEq x y)
+    stringDecNoNeq {x} {y} eqd | True | Yes _ =
+      void (yesNotNoH (trans Refl eqd))
+
+stringEqRefl : (s : String) -> s == s = True
+stringEqRefl s with (decEq s s) proof pd
+  stringEqRefl s | Yes prf = stringDecYesEq pd
+  stringEqRefl s | No contra = void (contra Refl)
+
+stringEqFalseFlip :
+  {x, y : String} ->
+  x == y = False ->
+  y == x = False
+stringEqFalseFlip {x} {y} pxy with (y == x) proof pyx
+  stringEqFalseFlip {x} {y} pxy | False = Refl
+  stringEqFalseFlip {x} {y} pxy | True with (decEq y x) proof pdec
+    stringEqFalseFlip {x} {y} pxy | True | Yes prf =
+      void (trueNotFalse (trans (sym (replace {p = \s => x == s = True} (sym prf)
+                                        (stringEqRefl x))) pxy))
+    stringEqFalseFlip {x} {y} pxy | True | No _ =
+      void (trueNotFalse (trans (sym pyx) (stringDecNoNeq pdec)))
+
+foldlOrTrue :
+  (p : String -> Bool) -> (xs : List String) ->
+  foldl (\acc, e => acc || p e) True xs = True
+foldlOrTrue _ [] = Refl
+foldlOrTrue p (x :: xs) = foldlOrTrue p xs
+
+elemConsStr :
+  (n, x : String) -> (xs : List String) ->
+  elem n (x :: xs) = n == x || elem n xs
+elemConsStr n x xs with (n == x)
+  elemConsStr n x xs | True = foldlOrTrue (n ==) xs
+  elemConsStr n x xs | False = Refl
+
+elemHereStr :
+  {n, x : String} -> {xs : List String} ->
+  n == x = True ->
+  elem n (x :: xs) = True
+elemHereStr {n} {x} {xs} peq =
+  rewrite elemConsStr n x xs in rewrite peq in Refl
+
+elemThereStr :
+  {n, x : String} -> {xs : List String} ->
+  n == x = False ->
+  elem n xs = True ->
+  elem n (x :: xs) = True
+elemThereStr {n} {x} {xs} peq rec =
+  rewrite elemConsStr n x xs in rewrite peq in rec
+
+||| A `findFun` hit is a defined name in `definedNames`.
+export
+findFunInDefined :
+  {funs : List Fun} -> {n : String} -> {f : Fun} ->
+  findFun funs n = Just f ->
+  elem n (definedNames funs) = True
+findFunInDefined {funs = []} look =
+  void (emptyFunsNoUser n look)
+findFunInDefined {funs = g :: gs} look with (decEq g.name n) proof pd
+  findFunInDefined {funs = g :: gs} look | Yes prf with (g.defined) proof pdef
+    findFunInDefined {funs = g :: gs} look | Yes prf | True =
+      rewrite definedNamesConsTrue g gs pdef in
+        elemHereStr (replace {p = \s => n == s = True} (sym prf) (stringEqRefl n))
+    findFunInDefined {funs = g :: gs} look | Yes prf | False =
+      rewrite definedNamesConsFalse g gs pdef in
+        findFunInDefined {funs = gs} look
+  findFunInDefined {funs = g :: gs} look | No contra with (g.defined) proof pdef
+    findFunInDefined {funs = g :: gs} look | No contra | True =
+      rewrite definedNamesConsTrue g gs pdef in
+        elemThereStr (stringEqFalseFlip (stringDecNoNeq pd))
+          (findFunInDefined {funs = gs} look)
+    findFunInDefined {funs = g :: gs} look | No contra | False =
+      rewrite definedNamesConsFalse g gs pdef in
+        findFunInDefined {funs = gs} look
+
 ||| If `checkFun` accepts a defined function, its body is heap-crash-free
 ||| from an over-approximation of `paramScopes` (per-argument `funModes`),
 ||| under any translation unit whose defined functions were accepted at

@@ -23,8 +23,13 @@ may change; the same programmes must still be accepted and rejected.
    `CheckFunNoHeapCrash` and thread it through user-call covering only
    (Restore `nestedJust*` / Dispatch `userCall*`). Do not put it on
    `stmtsHSafe` or the intra crash theorem.
-3. **Void realloc + `findFun`:** with (1) and (2), `definedFromCall` Right
-   is `Void` at a user-call site. `nestedJustLN` always goes to `nestedJustEq`.
+3. **Void realloc + `findFun`:** done. `isDefinedFromLook` rewrites
+   `isDefined` from `definedNamesFromLook` and `findFunInDefined`.
+   Restore `nestedJust*` / `nestedBound*` Right and Dispatch
+   `userCallBound` Right, `uniqueOwnFrom` / `uniqueOwnRet` False+True,
+   and `crashBound` / `retBound` Right are `void`. `nestedJustLN` Left
+   is `nestedJustEq`. The four Restore fallback errors remain: they are
+   only reached from `noneFrameLN` (`aliasBad = False`, BindOk Nothing).
 4. **`bindOkJust`:** on a defined call with `aliasBad = False` and post-arg
    `OverApprox`, `bindOkFrom = Just`. Then `noneFrameLN` is unused on the
    defined path; fill Dispatch `userCallNone` for nonempty `aliasBad = False`.

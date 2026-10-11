@@ -320,6 +320,19 @@ findFunInDefined {funs = g :: gs} look with (decEq g.name n) proof pd
       rewrite definedNamesConsFalse g gs pdef in
         findFunInDefined {funs = gs} look
 
+||| A `findFun` hit under `DefinedNamesEq` is `isDefined`. Right of
+||| `definedFromCall` (`isDefined` False, prototype `realloc`) is then
+||| `Void` at that call.
+export
+isDefinedFromLook :
+  {ctx : Ctx} -> {funs : List Fun} -> {n : String} -> {f : Fun} ->
+  DefinedNamesEq ctx funs ->
+  findFun funs n = Just f ->
+  isDefined ctx n = True
+isDefinedFromLook defNs look =
+  trans (cong (elem n) (definedNamesFromLook defNs look))
+        (findFunInDefined look)
+
 ||| If `checkFun` accepts a defined function, its body is heap-crash-free
 ||| from an over-approximation of `paramScopes` (per-argument `funModes`),
 ||| under a translation unit whose defined functions were accepted at

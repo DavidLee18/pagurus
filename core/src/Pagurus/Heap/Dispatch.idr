@@ -656,10 +656,12 @@ mutual
           uniqueOwnFrom pB0 eq0 oa0 bok0 evs0 | False | False =
             void (callOpaqueContraH
               (replace {p = \b => b = False} (builtinEq callee) pB0) pr pd eq0)
+          uniqueOwnFrom pB0 eq0 oa0 bok0 evs0 | False | True =
+            void (trueNotFalse (trans (sym (isDefinedFromLook defNs look)) pd))
   userCallBound {funs} {chk} {ctx} (Left pd) pB f look pDef evs evBody eq oa oa1 Nothing =
     userCallNone {funs} (replace {p = \b => b = False} (builtinEq callee) pB) pd eq evBody oa1
-  userCallBound {funs} {chk} {ctx} (Right (pr, pd)) pB f look pDef evs evBody eq oa oa1 Nothing =
-    userCallNoneIdBody evBody oa1
+  userCallBound {funs} {chk} {ctx} (Right (_, pd)) pB f look pDef evs evBody eq oa oa1 Nothing =
+    void (trueNotFalse (trans (sym (isDefinedFromLook defNs look)) pd))
 
   ||| BindOk missing: empty body leaves the leftover heap unchanged.
   userCallNone :
@@ -790,6 +792,8 @@ mutual
       crashBound {funs} {chk} {ctx} pB f look pDef evs evBody eq oa oa1 Nothing | Left pd | True =
         void (leftNotRight (trans (sym (checkCallMixedAlias
           (replace {p = \b => b = False} (builtinEq callee) pB) pd pbad)) eq))
+    crashBound {funs} {chk} {ctx} pB f look pDef evs evBody eq oa oa1 Nothing | Right (_, pd) =
+      void (trueNotFalse (trans (sym (isDefinedFromLook defNs look)) pd))
 
 
   userCallRunRet :
@@ -858,8 +862,14 @@ mutual
           uniqueOwnRet pB0 eq0 oa0 bok0 evs0 | False | False =
             void (callOpaqueContraH
               (replace {p = \b => b = False} (builtinEq callee) pB0) pr pd eq0)
-  retBound {funs} {chk} {ctx} pB f look pDef evs evBody eq oa oa1 Nothing =
-    retNoneId evBody oa1
+          uniqueOwnRet pB0 eq0 oa0 bok0 evs0 | False | True =
+            void (trueNotFalse (trans (sym (isDefinedFromLook defNs look)) pd))
+  retBound {funs} {chk} {ctx} pB f look pDef evs evBody eq oa oa1 Nothing with
+      (definedFromCall eq (replace {p = \b => b = False} (builtinEq callee) pB))
+    retBound {funs} {chk} {ctx} pB f look pDef evs evBody eq oa oa1 Nothing | Right (_, pd) =
+      void (trueNotFalse (trans (sym (isDefinedFromLook defNs look)) pd))
+    retBound {funs} {chk} {ctx} pB f look pDef evs evBody eq oa oa1 Nothing | Left _ =
+      retNoneId evBody oa1
 
   userCallExprOk :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->

@@ -1100,8 +1100,8 @@ mutual
       nestedBoundLN ln0 ln1 eq pB f look pDef evs evBody Nothing | True | Left pd =
         void (leftNotRight (trans (sym (checkCallMixedAlias
           (replace {p = \b => b = False} (builtinEq callee) pB) pd pbad)) eq))
-      nestedBoundLN ln0 ln1 eq pB f look pDef evs evBody Nothing | True | Right _ =
-        noneFrameLN {funs} ln1 evBody
+      nestedBoundLN ln0 ln1 eq pB f look pDef evs evBody Nothing | True | Right (_, pd) =
+        void (trueNotFalse (trans (sym (isDefinedFromLook ihs.defNs look)) pd))
     nestedBoundLN ln0 ln1 eq pB f look pDef evs evBody Nothing | False =
       noneFrameLN {funs} ln1 evBody
 
@@ -1132,8 +1132,8 @@ mutual
       nestedBoundRetLN ln0 ln1 eq pB f look pDef evs evBody Nothing | True | Left pd =
         void (leftNotRight (trans (sym (checkCallMixedAlias
           (replace {p = \b => b = False} (builtinEq callee) pB) pd pbad)) eq))
-      nestedBoundRetLN ln0 ln1 eq pB f look pDef evs evBody Nothing | True | Right _ =
-        noneFrameLNRet {funs} ln1 evBody
+      nestedBoundRetLN ln0 ln1 eq pB f look pDef evs evBody Nothing | True | Right (_, pd) =
+        void (trueNotFalse (trans (sym (isDefinedFromLook ihs.defNs look)) pd))
     nestedBoundRetLN ln0 ln1 eq pB f look pDef evs evBody Nothing | False =
       noneFrameLNRet {funs} ln1 evBody
 
@@ -1237,9 +1237,8 @@ mutual
     nestedJustLN {funs} {chk} {ctx} ln0 ln1 eq pB f look pDef evs evBody bok | Left pd =
       nestedJustEq {funs} {chk} ln0 ln1 eq pB f look pDef evs evBody bok pd
         (funModesFound {ctx} look)
-    nestedJustLN {funs} {chk} {ctx} ln0 ln1 eq pB f look pDef evs evBody bok | Right _ =
-      restoreOwnLN {funs} {frame = bindFrame f.params (collectArgVals evs)}
-        ln1 evBody
+    nestedJustLN {funs} {chk} {ctx} ln0 ln1 eq pB f look pDef evs evBody bok | Right (_, pd) =
+      void (trueNotFalse (trans (sym (isDefinedFromLook ihs.defNs look)) pd))
 
   nestedJustEqRet :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
@@ -1339,9 +1338,8 @@ mutual
     nestedJustRetLN {funs} {chk} {ctx} ln0 ln1 eq pB f look pDef evs evBody bok | Left pd =
       nestedJustEqRet {funs} {chk} ln0 ln1 eq pB f look pDef evs evBody bok pd
         (funModesFound {ctx} look)
-    nestedJustRetLN {funs} {chk} {ctx} ln0 ln1 eq pB f look pDef evs evBody bok | Right _ =
-      restoreOwnLNRet {funs} {frame = bindFrame f.params (collectArgVals evs)}
-        ln1 evBody
+    nestedJustRetLN {funs} {chk} {ctx} ln0 ln1 eq pB f look pDef evs evBody bok | Right (_, pd) =
+      void (trueNotFalse (trans (sym (isDefinedFromLook ihs.defNs look)) pd))
 
   restoreOwnLN :
     {funs : List Fun} ->

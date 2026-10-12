@@ -173,6 +173,7 @@ mutual
               pModes = trans (sym (checkCallDefined pb pd pbad)) eq
           in inhModes ihs inh oa pModes evE evEs
 
+  export
   inhModes :
       {funs : List Fun} -> {ctx : Ctx} -> {a : Addr} ->
       ExprIHs funs ctx ->
@@ -229,6 +230,7 @@ mutual
                 inh1 = inhTakeH ihs inh oa evE pT (htFromOk ht)
             in inhModesRest ihs inh1 (htFromOk ht) pEs2 evEs
 
+  export
   inhModesRest :
       {funs : List Fun} -> {ctx : Ctx} -> {a : Addr} ->
       ExprIHs funs ctx ->
@@ -993,6 +995,7 @@ mutual
         aGo (Right (scR, flR)) pR veq1 =
           inhNoTakeLeftover ihs inh oa evR pR veq1
 
+  export
   inhNotPtrExpr :
       {funs : List Fun} -> {ctx : Ctx} -> {a : Addr} ->
       ExprIHs funs ctx ->
@@ -1148,6 +1151,7 @@ mutual
           oaA = hrFromOk (ihs.exprIH evE sc0 scA pE oa)
       in notPtrVal nv (inhValsBorrow ihs inhA oaA evEs pEs)
 
+  export
   inhValsModes :
       {funs : List Fun} -> {ctx : Ctx} -> {a : Addr} ->
       ExprIHs funs ctx ->
@@ -1209,6 +1213,7 @@ mutual
                 inh1 = inhTakeH ihs inh oa evE pT (htFromOk ht)
             in notPtrVal nv (inhValsModesRest ihs inh1 (htFromOk ht) pEs2 evEs)
 
+  export
   inhValsModesRest :
       {funs : List Fun} -> {ctx : Ctx} -> {a : Addr} ->
       ExprIHs funs ctx ->

@@ -1831,6 +1831,23 @@ bindOkPtrBoth :
 bindOkPtrBoth Nothing = Nothing
 bindOkPtrBoth (Just rec) = Just (BOPtrBothMiss rec)
 
+||| Borrow, tail holds `a`, dispatched on `noOwnerHere` so a `True` proof
+||| reduces to `BOPtrLiveBorrow` without casing `cell` again.
+bindOkLiveBorrowHeld :
+  {fid : Nat} -> {h : Heap} -> {id, pl : Nat} -> {nm : String} ->
+  {ps : List Param} -> {m : Consume} -> {ms : List Consume} ->
+  {a : Addr} -> {vs : List HVal} ->
+  (b : Bool) ->
+  noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = b ->
+  cell h a = Just Live ->
+  doesConsume m = False ->
+  BindOk fid h ps ms vs ->
+  Maybe (BindOk fid h (MkParam id pl nm Ptr :: ps) (m :: ms) (HVPtr a :: vs))
+bindOkLiveBorrowHeld True pn eqLive eqNever rec0 =
+  Just (BOPtrLiveBorrow eqLive
+    (noOwnerSound (bindFrame ps vs) (bindParams fid ps ms) a pn) eqNever rec0)
+bindOkLiveBorrowHeld False _ _ _ _ = Nothing
+
 bindOkPtrLive :
   {fid : Nat} -> {h : Heap} -> {id, pl : Nat} -> {nm : String} ->
   {ps : List Param} -> {m : Consume} -> {ms : List Consume} ->
@@ -1840,35 +1857,46 @@ bindOkPtrLive :
   (hd : Bool) -> heldPtr (bindFrame ps vs) a = hd ->
   BindOk fid h ps ms vs ->
   Maybe (BindOk fid h (MkParam id pl nm Ptr :: ps) (m :: ms) (HVPtr a :: vs))
-bindOkPtrLive {fid} {h} {ps} {m} {ms} {a} {vs} cl eqc dc eqd hd eqh rec =
-  liveGo cl dc hd eqc eqd eqh rec
-  where
-    nuoGo :
-      (b : Bool) ->
-      noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = b ->
-      cell h a = Just Live ->
-      doesConsume m = False ->
-      BindOk fid h ps ms vs ->
-      Maybe (BindOk fid h (MkParam id pl nm Ptr :: ps) (m :: ms) (HVPtr a :: vs))
-    nuoGo True pn eqLive eqNever rec0 =
-      Just (BOPtrLiveBorrow eqLive (noOwnerSound (bindFrame ps vs) (bindParams fid ps ms) a pn) eqNever rec0)
-    nuoGo False _ _ _ _ = Nothing
+bindOkPtrLive (Just Live) eqLive True eqC False eqH rec0 =
+  Just (BOPtrLiveOwn eqLive eqH eqC rec0)
+bindOkPtrLive (Just Live) _ True _ True _ _ = Nothing
+bindOkPtrLive (Just Live) eqLive False eqC False eqH rec0 =
+  Just (BOPtrLiveBorrow eqLive
+    (noUniqueNotHeld {env = bindFrame ps vs} {sc = bindParams fid ps ms} eqH)
+    eqC rec0)
+bindOkPtrLive (Just Live) eqLive False eqC True _ rec0 =
+  bindOkLiveBorrowHeld
+    (noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a)
+    Refl eqLive eqC rec0
+bindOkPtrLive _ _ _ _ _ _ _ = Nothing
 
-    liveGo :
-      (cl0 : Maybe Cell) -> (dc0 : Bool) -> (hd0 : Bool) ->
-      cell h a = cl0 ->
-      doesConsume m = dc0 ->
-      heldPtr (bindFrame ps vs) a = hd0 ->
-      BindOk fid h ps ms vs ->
-      Maybe (BindOk fid h (MkParam id pl nm Ptr :: ps) (m :: ms) (HVPtr a :: vs))
-    liveGo (Just Live) True False eqLive eqC eqH rec0 =
-      Just (BOPtrLiveOwn eqLive eqH eqC rec0)
-    liveGo (Just Live) True True _ _ _ _ = Nothing
-    liveGo (Just Live) False False eqLive eqC eqH rec0 =
-      Just (BOPtrLiveBorrow eqLive (noUniqueNotHeld eqH) eqC rec0)
-    liveGo (Just Live) False True eqLive eqC _ rec0 =
-      nuoGo (noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a) Refl eqLive eqC rec0
-    liveGo _ _ _ _ _ _ _ = Nothing
+||| Tail `Maybe` kept as an argument so a `Just` proof rewrites the call.
+bindOkPtrCase :
+  {fid : Nat} -> {h : Heap} -> {id, pl : Nat} -> {nm : String} ->
+  {ps : List Param} -> {m : Consume} -> {ms : List Consume} ->
+  {a : Addr} -> {vs : List HVal} ->
+  (tail : Maybe (BindOk fid h ps ms vs)) ->
+  (cl : Maybe Cell) -> cell h a = cl ->
+  (dc : Bool) -> doesConsume m = dc ->
+  (hd : Bool) -> heldPtr (bindFrame ps vs) a = hd ->
+  Maybe (BindOk fid h (MkParam id pl nm Ptr :: ps) (m :: ms) (HVPtr a :: vs))
+bindOkPtrCase Nothing _ _ _ _ _ _ = Nothing
+bindOkPtrCase (Just rec) cl eqc dc eqd hd eqh =
+  bindOkPtrLive {fid} {h} {id} {pl} {nm} {ps} {m} {ms} {a} {vs} cl eqc dc eqd hd eqh rec
+
+||| Extra pointer parameter, dispatched on `noOwnerHere`.
+bindOkExtraLiveGo :
+  {fid : Nat} -> {h : Heap} -> {id, pl : Nat} -> {nm : String} ->
+  {ps : List Param} -> {a : Addr} -> {vs : List HVal} ->
+  (b : Bool) ->
+  noOwnerHere (bindFrame ps vs) (bindParams fid ps []) a = b ->
+  cell h a = Just Live ->
+  BindOk fid h ps [] vs ->
+  Maybe (BindOk fid h (MkParam id pl nm Ptr :: ps) [] (HVPtr a :: vs))
+bindOkExtraLiveGo True pn eqLive rec0 =
+  Just (BOPtrExtraLive eqLive
+    (noOwnerSound (bindFrame ps vs) (bindParams fid ps []) a pn) rec0)
+bindOkExtraLiveGo False _ _ _ = Nothing
 
 bindOkPtrExtraLive :
   {fid : Nat} -> {h : Heap} -> {id, pl : Nat} -> {nm : String} ->
@@ -1876,27 +1904,21 @@ bindOkPtrExtraLive :
   (cl : Maybe Cell) -> cell h a = cl ->
   BindOk fid h ps [] vs ->
   Maybe (BindOk fid h (MkParam id pl nm Ptr :: ps) [] (HVPtr a :: vs))
-bindOkPtrExtraLive {fid} {h} {ps} {a} {vs} cl eqc rec =
-  extraGo cl eqc rec
-  where
-    extraNuo :
-      (b : Bool) ->
-      noOwnerHere (bindFrame ps vs) (bindParams fid ps []) a = b ->
-      cell h a = Just Live ->
-      BindOk fid h ps [] vs ->
-      Maybe (BindOk fid h (MkParam id pl nm Ptr :: ps) [] (HVPtr a :: vs))
-    extraNuo True pn eqLive rec0 =
-      Just (BOPtrExtraLive eqLive (noOwnerSound (bindFrame ps vs) (bindParams fid ps []) a pn) rec0)
-    extraNuo False _ _ _ = Nothing
+bindOkPtrExtraLive (Just Live) eqLive rec0 =
+  bindOkExtraLiveGo
+    (noOwnerHere (bindFrame ps vs) (bindParams fid ps []) a) Refl eqLive rec0
+bindOkPtrExtraLive _ _ _ = Nothing
 
-    extraGo :
-      (cl0 : Maybe Cell) ->
-      cell h a = cl0 ->
-      BindOk fid h ps [] vs ->
-      Maybe (BindOk fid h (MkParam id pl nm Ptr :: ps) [] (HVPtr a :: vs))
-    extraGo (Just Live) eqLive rec0 =
-      extraNuo (noOwnerHere (bindFrame ps vs) (bindParams fid ps []) a) Refl eqLive rec0
-    extraGo _ _ _ = Nothing
+||| Tail `Maybe` kept as an argument so a `Just` proof rewrites the call.
+bindOkPtrExtraCase :
+  {fid : Nat} -> {h : Heap} -> {id, pl : Nat} -> {nm : String} ->
+  {ps : List Param} -> {a : Addr} -> {vs : List HVal} ->
+  (tail : Maybe (BindOk fid h ps [] vs)) ->
+  (cl : Maybe Cell) -> cell h a = cl ->
+  Maybe (BindOk fid h (MkParam id pl nm Ptr :: ps) [] (HVPtr a :: vs))
+bindOkPtrExtraCase Nothing _ _ = Nothing
+bindOkPtrExtraCase (Just rec) cl eqc =
+  bindOkPtrExtraLive {fid} {h} {id} {pl} {nm} {ps} {a} {vs} cl eqc rec
 
 ||| Try to zip parameters / modes / values as `BindOk`. `Nothing` is the
 ||| mixed-mode or dead-pointer case, voided from an accepted call site.
@@ -1918,17 +1940,16 @@ bindOkFrom (MkParam id pl nm Ptr :: ps) (m :: ms) (HVNone :: vs) =
   bindOkPtrNone (bindOkFrom ps ms vs)
 bindOkFrom (MkParam id pl nm Ptr :: ps) (m :: ms) (HVCopy :: vs) =
   bindOkPtrCopy (bindOkFrom ps ms vs)
-bindOkFrom {h} (MkParam id pl nm Ptr :: ps) (m :: ms) (HVPtr a :: vs) with (bindOkFrom {fid} {h} ps ms vs)
-  bindOkFrom {h} (MkParam id pl nm Ptr :: ps) (m :: ms) (HVPtr a :: vs) | Nothing = Nothing
-  bindOkFrom {h} (MkParam id pl nm Ptr :: ps) (m :: ms) (HVPtr a :: vs) | Just rec =
-    bindOkPtrLive {id} {pl} {nm} (cell h a) Refl (doesConsume m) Refl
-      (heldPtr (bindFrame ps vs) a) Refl rec
+bindOkFrom {h} (MkParam id pl nm Ptr :: ps) (m :: ms) (HVPtr a :: vs) =
+  bindOkPtrCase {id} {pl} {nm}
+    (bindOkFrom {fid} {h} ps ms vs)
+    (cell h a) Refl (doesConsume m) Refl
+    (heldPtr (bindFrame ps vs) a) Refl
 bindOkFrom (MkParam id pl nm Ptr :: ps) (m :: ms) [] =
   bindOkPtrMiss (bindOkFrom ps ms [])
-bindOkFrom {h} (MkParam id pl nm Ptr :: ps) [] (HVPtr a :: vs) with (bindOkFrom {fid} {h} ps [] vs)
-  bindOkFrom {h} (MkParam id pl nm Ptr :: ps) [] (HVPtr a :: vs) | Nothing = Nothing
-  bindOkFrom {h} (MkParam id pl nm Ptr :: ps) [] (HVPtr a :: vs) | Just rec =
-    bindOkPtrExtraLive {id} {pl} {nm} (cell h a) Refl rec
+bindOkFrom {h} (MkParam id pl nm Ptr :: ps) [] (HVPtr a :: vs) =
+  bindOkPtrExtraCase {id} {pl} {nm}
+    (bindOkFrom {fid} {h} ps [] vs) (cell h a) Refl
 bindOkFrom (MkParam id pl nm Ptr :: ps) [] (HVNone :: vs) =
   bindOkPtrExtraNone (bindOkFrom ps [] vs)
 bindOkFrom (MkParam id pl nm Ptr :: ps) [] (HVCopy :: vs) =
@@ -1954,6 +1975,361 @@ bindOkFromNilJust :
   (ms : List Consume) -> (vs : List HVal) ->
   bindOkFrom {fid} {h} [] ms vs = Just BONil
 bindOkFromNilJust _ _ = Refl
+
+||| No argument values: `bindOkFrom` is `Just` (`bindOkMiss`).
+export
+bindOkFromValsNil :
+  {fid : Nat} -> {h : Heap} ->
+  (ps : List Param) -> (ms : List Consume) ->
+  (bok : BindOk fid h ps ms [] ** bindOkFrom {fid} {h} ps ms [] = Just bok)
+bindOkFromValsNil [] _ = (BONil ** Refl)
+bindOkFromValsNil (MkParam id pl nm Copy :: ps) (m :: ms) =
+  let (rec ** eq) = bindOkFromValsNil ps ms in
+    (BOCopyV rec ** rewrite eq in Refl)
+bindOkFromValsNil (MkParam id pl nm Copy :: ps) [] =
+  let (rec ** eq) = bindOkFromValsNil ps [] in
+    (BOCopyZ rec ** rewrite eq in Refl)
+bindOkFromValsNil (MkParam id pl nm Ptr :: ps) (m :: ms) =
+  let (rec ** eq) = bindOkFromValsNil ps ms in
+    (BOPtrMissCV rec ** rewrite eq in Refl)
+bindOkFromValsNil (MkParam id pl nm Ptr :: ps) [] =
+  let (rec ** eq) = bindOkFromValsNil ps [] in
+    (BOPtrBothMiss rec ** rewrite eq in Refl)
+
+export
+bindOkFromCopyCVJust :
+  {fid : Nat} -> {h : Heap} -> {id, pl : Nat} -> {nm : String} ->
+  {ps : List Param} -> {m : Consume} -> {ms : List Consume} ->
+  {v : HVal} -> {vs : List HVal} ->
+  {rec : BindOk fid h ps ms vs} ->
+  bindOkFrom {fid} {h} ps ms vs = Just rec ->
+  bindOkFrom {fid} {h} (MkParam id pl nm Copy :: ps) (m :: ms) (v :: vs)
+    = Just (BOCopyCV rec)
+bindOkFromCopyCVJust eq = rewrite eq in Refl
+
+export
+bindOkFromCopyCJust :
+  {fid : Nat} -> {h : Heap} -> {id, pl : Nat} -> {nm : String} ->
+  {ps : List Param} -> {v : HVal} -> {vs : List HVal} ->
+  {rec : BindOk fid h ps [] vs} ->
+  bindOkFrom {fid} {h} ps [] vs = Just rec ->
+  bindOkFrom {fid} {h} (MkParam id pl nm Copy :: ps) [] (v :: vs)
+    = Just (BOCopyC rec)
+bindOkFromCopyCJust eq = rewrite eq in Refl
+
+export
+bindOkFromPtrNoneJust :
+  {fid : Nat} -> {h : Heap} -> {id, pl : Nat} -> {nm : String} ->
+  {ps : List Param} -> {m : Consume} -> {ms : List Consume} ->
+  {vs : List HVal} ->
+  {rec : BindOk fid h ps ms vs} ->
+  bindOkFrom {fid} {h} ps ms vs = Just rec ->
+  bindOkFrom {fid} {h} (MkParam id pl nm Ptr :: ps) (m :: ms) (HVNone :: vs)
+    = Just (BOPtrNoneCV rec)
+bindOkFromPtrNoneJust eq = rewrite eq in Refl
+
+export
+bindOkFromPtrCopyJust :
+  {fid : Nat} -> {h : Heap} -> {id, pl : Nat} -> {nm : String} ->
+  {ps : List Param} -> {m : Consume} -> {ms : List Consume} ->
+  {vs : List HVal} ->
+  {rec : BindOk fid h ps ms vs} ->
+  bindOkFrom {fid} {h} ps ms vs = Just rec ->
+  bindOkFrom {fid} {h} (MkParam id pl nm Ptr :: ps) (m :: ms) (HVCopy :: vs)
+    = Just (BOPtrCopyCV rec)
+bindOkFromPtrCopyJust eq = rewrite eq in Refl
+
+export
+bindOkFromPtrExtraNoneJust :
+  {fid : Nat} -> {h : Heap} -> {id, pl : Nat} -> {nm : String} ->
+  {ps : List Param} -> {vs : List HVal} ->
+  {rec : BindOk fid h ps [] vs} ->
+  bindOkFrom {fid} {h} ps [] vs = Just rec ->
+  bindOkFrom {fid} {h} (MkParam id pl nm Ptr :: ps) [] (HVNone :: vs)
+    = Just (BOPtrExtraNone rec)
+bindOkFromPtrExtraNoneJust eq = rewrite eq in Refl
+
+export
+bindOkFromPtrExtraCopyJust :
+  {fid : Nat} -> {h : Heap} -> {id, pl : Nat} -> {nm : String} ->
+  {ps : List Param} -> {vs : List HVal} ->
+  {rec : BindOk fid h ps [] vs} ->
+  bindOkFrom {fid} {h} ps [] vs = Just rec ->
+  bindOkFrom {fid} {h} (MkParam id pl nm Ptr :: ps) [] (HVCopy :: vs)
+    = Just (BOPtrExtraCopy rec)
+bindOkFromPtrExtraCopyJust eq = rewrite eq in Refl
+
+||| `trans` matches both proofs, so `trans p (sym p)` does not reduce to `Refl`.
+||| `eqRhs p Refl` does.
+eqRhs : {x, y, z : ty} -> (p : x = y) -> (q : y = z) -> x = z
+eqRhs p Refl = p
+
+eqRhsSymRefl : {x, y : ty} -> (p : x = y) -> eqRhs p (sym p) = Refl
+eqRhsSymRefl Refl = Refl
+
+bindOkPtrLiveShift :
+  {fid : Nat} -> {h : Heap} -> {id, pl : Nat} -> {nm : String} ->
+  {ps : List Param} -> {m : Consume} -> {ms : List Consume} ->
+  {a : Addr} -> {vs : List HVal} ->
+  {cl1, cl2 : Maybe Cell} -> {dc1, dc2 : Bool} -> {hd1, hd2 : Bool} ->
+  (cEq : cl1 = cl2) -> (dEq : dc1 = dc2) -> (hEq : hd1 = hd2) ->
+  (eqc : cell h a = cl1) ->
+  (eqd : doesConsume m = dc1) ->
+  (eqh : heldPtr (bindFrame ps vs) a = hd1) ->
+  (rec : BindOk fid h ps ms vs) ->
+  bindOkPtrLive {fid} {h} {id} {pl} {nm} {ps} {m} {ms} {a} {vs} cl1 eqc dc1 eqd hd1 eqh rec
+    = bindOkPtrLive {fid} {h} {id} {pl} {nm} {ps} {m} {ms} {a} {vs} cl2 (eqRhs eqc cEq) dc2 (eqRhs eqd dEq)
+        hd2 (eqRhs eqh hEq) rec
+bindOkPtrLiveShift Refl Refl Refl eqc eqd eqh rec = Refl
+
+bindOkPtrLiveArgs :
+  {fid : Nat} -> {h : Heap} -> {id, pl : Nat} -> {nm : String} ->
+  {ps : List Param} -> {m : Consume} -> {ms : List Consume} ->
+  {a : Addr} -> {vs : List HVal} ->
+  {cl : Maybe Cell} -> {dc, hd : Bool} ->
+  {e1, e2 : cell h a = cl} ->
+  {d1, d2 : doesConsume m = dc} ->
+  {h1, h2 : heldPtr (bindFrame ps vs) a = hd} ->
+  (ec : e1 = e2) -> (ed : d1 = d2) -> (eh : h1 = h2) ->
+  (rec : BindOk fid h ps ms vs) ->
+  bindOkPtrLive {fid} {h} {id} {pl} {nm} {ps} {m} {ms} {a} {vs} cl e1 dc d1 hd h1 rec
+    = bindOkPtrLive {fid} {h} {id} {pl} {nm} {ps} {m} {ms} {a} {vs} cl e2 dc d2 hd h2 rec
+bindOkPtrLiveArgs Refl Refl Refl rec = Refl
+
+||| Constructor scrutinees reduce. Carry that `Just` across to the
+||| expressions `bindOkFrom` matches on: `cell`, `doesConsume`, `heldPtr`.
+bindOkPtrHeadJust :
+  {fid : Nat} -> {h : Heap} -> {id, pl : Nat} -> {nm : String} ->
+  {ps : List Param} -> {m : Consume} -> {ms : List Consume} ->
+  {a : Addr} -> {vs : List HVal} ->
+  {dc0, hd0 : Bool} ->
+  (rec0 : BindOk fid h ps ms vs) ->
+  (live : cell h a = Just Live) ->
+  (pc : doesConsume m = dc0) ->
+  (nh : heldPtr (bindFrame ps vs) a = hd0) ->
+  (bok : BindOk fid h (MkParam id pl nm Ptr :: ps) (m :: ms) (HVPtr a :: vs)) ->
+  bindOkPtrLive {fid} {h} {id} {pl} {nm} {ps} {m} {ms} {a} {vs} (Just Live) live dc0 pc hd0 nh rec0 = Just bok ->
+  bindOkPtrLive {fid} {h} {id} {pl} {nm} {ps} {m} {ms} {a} {vs} (cell h a) Refl (doesConsume m) Refl
+    (heldPtr (bindFrame ps vs) a) Refl rec0 = Just bok
+bindOkPtrHeadJust {id} {pl} {nm} rec0 live pc nh bok justPrf =
+  let shift = bindOkPtrLiveShift {fid} {h} {id} {pl} {nm} {ps} {m} {ms} {a} {vs}
+                (sym live) (sym pc) (sym nh) live pc nh rec0
+      args = bindOkPtrLiveArgs {fid} {h} {id} {pl} {nm} {ps} {m} {ms} {a} {vs}
+               (eqRhsSymRefl live) (eqRhsSymRefl pc) (eqRhsSymRefl nh) rec0
+  in trans (sym args) (trans (sym shift) justPrf)
+
+ptrCaseFrom :
+  {fid : Nat} -> {h : Heap} -> {id, pl : Nat} -> {nm : String} ->
+  {ps : List Param} -> {m : Consume} -> {ms : List Consume} ->
+  {a : Addr} -> {vs : List HVal} ->
+  {rec : BindOk fid h ps ms vs} ->
+  bindOkFrom {fid} {h} ps ms vs = Just rec ->
+  (bok : BindOk fid h (MkParam id pl nm Ptr :: ps) (m :: ms) (HVPtr a :: vs) **
+    bindOkPtrCase {id} {pl} {nm} (Just rec) (cell h a) Refl (doesConsume m) Refl
+      (heldPtr (bindFrame ps vs) a) Refl = Just bok) ->
+  (bok : BindOk fid h (MkParam id pl nm Ptr :: ps) (m :: ms) (HVPtr a :: vs) **
+    bindOkFrom {fid} {h} (MkParam id pl nm Ptr :: ps) (m :: ms) (HVPtr a :: vs)
+      = Just bok)
+ptrCaseFrom {id} {pl} {nm} eq packed =
+  replace {p = \tail =>
+    (bok : BindOk fid h (MkParam id pl nm Ptr :: ps) (m :: ms) (HVPtr a :: vs) **
+      bindOkPtrCase {id} {pl} {nm} tail (cell h a) Refl (doesConsume m) Refl
+        (heldPtr (bindFrame ps vs) a) Refl = Just bok)}
+    (sym eq) packed
+
+shiftBool :
+  {n : Bool} -> {t : Type} -> {b1, b2 : Bool} -> {p1 : n = b1} ->
+  (bEq : b1 = b2) ->
+  (f : (b : Bool) -> n = b -> t) ->
+  f b1 p1 = f b2 (eqRhs p1 bEq)
+shiftBool Refl _ = Refl
+
+argBool :
+  {n : Bool} -> {t : Type} -> {b0 : Bool} -> {p1, p2 : n = b0} ->
+  (eq : p1 = p2) ->
+  (f : (b : Bool) -> n = b -> t) ->
+  f b0 p1 = f b0 p2
+argBool Refl _ = Refl
+
+||| Consume-mode live pointer, unheld in the tail frame.
+export
+bindOkFromPtrOwnJust :
+  {fid : Nat} -> {h : Heap} -> {id, pl : Nat} -> {nm : String} ->
+  {ps : List Param} -> {m : Consume} -> {ms : List Consume} ->
+  {a : Addr} -> {vs : List HVal} ->
+  {rec : BindOk fid h ps ms vs} ->
+  bindOkFrom {fid} {h} ps ms vs = Just rec ->
+  cell h a = Just Live ->
+  heldPtr (bindFrame ps vs) a = False ->
+  doesConsume m = True ->
+  (bok : BindOk fid h (MkParam id pl nm Ptr :: ps) (m :: ms) (HVPtr a :: vs) **
+    bindOkFrom {fid} {h} (MkParam id pl nm Ptr :: ps) (m :: ms) (HVPtr a :: vs)
+      = Just bok)
+bindOkFromPtrOwnJust {id} {pl} {nm} {rec} eq live nh pc =
+  ptrCaseFrom eq
+    (BOPtrLiveOwn live nh pc rec **
+      bindOkPtrHeadJust {dc0 = True} {hd0 = False} rec live pc nh
+        (BOPtrLiveOwn live nh pc rec) Refl)
+
+||| Borrow-mode live pointer, unheld in the tail (`noUniqueNotHeld`).
+export
+bindOkFromPtrBorrowUnheld :
+  {fid : Nat} -> {h : Heap} -> {id, pl : Nat} -> {nm : String} ->
+  {ps : List Param} -> {m : Consume} -> {ms : List Consume} ->
+  {a : Addr} -> {vs : List HVal} ->
+  {rec : BindOk fid h ps ms vs} ->
+  bindOkFrom {fid} {h} ps ms vs = Just rec ->
+  cell h a = Just Live ->
+  heldPtr (bindFrame ps vs) a = False ->
+  doesConsume m = False ->
+  (bok : BindOk fid h (MkParam id pl nm Ptr :: ps) (m :: ms) (HVPtr a :: vs) **
+    bindOkFrom {fid} {h} (MkParam id pl nm Ptr :: ps) (m :: ms) (HVPtr a :: vs)
+      = Just bok)
+bindOkFromPtrBorrowUnheld {id} {pl} {nm} {rec} eq live nh pc =
+  ptrCaseFrom eq
+    (BOPtrLiveBorrow live
+       (noUniqueNotHeld {env = bindFrame ps vs} {sc = bindParams fid ps ms} nh)
+       pc rec **
+      bindOkPtrHeadJust {dc0 = False} {hd0 = False} rec live pc nh
+        (BOPtrLiveBorrow live
+           (noUniqueNotHeld {env = bindFrame ps vs} {sc = bindParams fid ps ms} nh)
+           pc rec) Refl)
+
+||| Borrow-mode live pointer held by the tail, but the tail has no unique owner.
+export
+bindOkFromPtrBorrowHeld :
+  {fid : Nat} -> {h : Heap} -> {id, pl : Nat} -> {nm : String} ->
+  {ps : List Param} -> {m : Consume} -> {ms : List Consume} ->
+  {a : Addr} -> {vs : List HVal} ->
+  {rec : BindOk fid h ps ms vs} ->
+  bindOkFrom {fid} {h} ps ms vs = Just rec ->
+  cell h a = Just Live ->
+  heldPtr (bindFrame ps vs) a = True ->
+  noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = True ->
+  doesConsume m = False ->
+  (bok : BindOk fid h (MkParam id pl nm Ptr :: ps) (m :: ms) (HVPtr a :: vs) **
+    bindOkFrom {fid} {h} (MkParam id pl nm Ptr :: ps) (m :: ms) (HVPtr a :: vs)
+      = Just bok)
+bindOkFromPtrBorrowHeld {id} {pl} {nm} {fid} {ps} {ms} {a} {rec} eq live hd pn pc =
+  let f : (b : Bool) ->
+          noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a = b ->
+          Maybe (BindOk fid h (MkParam id pl nm Ptr :: ps) (m :: ms) (HVPtr a :: vs))
+      f b pn1 = bindOkLiveBorrowHeld {fid} {h} {id} {pl} {nm} {ps} {m} {ms} {a} {vs}
+                  b pn1 live pc rec
+      shiftB = shiftBool
+                 {n = noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a}
+                 {p1 = pn} (sym pn) f
+      argB = argBool (eqRhsSymRefl pn) f
+      goEq : bindOkPtrLive {fid} {h} {id} {pl} {nm} {ps} {m} {ms} {a} {vs}
+               (Just Live) live False pc True hd rec
+             = bindOkLiveBorrowHeld {fid} {h} {id} {pl} {nm} {ps} {m} {ms} {a} {vs}
+                 (noOwnerHere (bindFrame ps vs) (bindParams fid ps ms) a)
+                 Refl live pc rec
+      goEq = Refl
+      trueEq : bindOkLiveBorrowHeld {fid} {h} {id} {pl} {nm} {ps} {m} {ms} {a} {vs}
+                 True pn live pc rec
+               = Just (BOPtrLiveBorrow live
+                   (noOwnerSound (bindFrame ps vs) (bindParams fid ps ms) a pn)
+                   pc rec)
+      trueEq = Refl
+      justPrf = trans goEq (trans (sym argB) (trans (sym shiftB) trueEq))
+  in ptrCaseFrom eq
+       (BOPtrLiveBorrow live
+          (noOwnerSound (bindFrame ps vs) (bindParams fid ps ms) a pn) pc rec **
+        bindOkPtrHeadJust {dc0 = False} {hd0 = True} rec live pc hd
+          (BOPtrLiveBorrow live
+             (noOwnerSound (bindFrame ps vs) (bindParams fid ps ms) a pn) pc rec)
+          justPrf)
+
+bindOkPtrExtraShift :
+  {fid : Nat} -> {h : Heap} -> {id, pl : Nat} -> {nm : String} ->
+  {ps : List Param} -> {a : Addr} -> {vs : List HVal} ->
+  {cl1, cl2 : Maybe Cell} ->
+  (cEq : cl1 = cl2) ->
+  (eqc : cell h a = cl1) ->
+  (rec : BindOk fid h ps [] vs) ->
+  bindOkPtrExtraLive {fid} {h} {id} {pl} {nm} {ps} {a} {vs} cl1 eqc rec
+    = bindOkPtrExtraLive {fid} {h} {id} {pl} {nm} {ps} {a} {vs} cl2 (eqRhs eqc cEq) rec
+bindOkPtrExtraShift Refl eqc rec = Refl
+
+bindOkPtrExtraArg :
+  {fid : Nat} -> {h : Heap} -> {id, pl : Nat} -> {nm : String} ->
+  {ps : List Param} -> {a : Addr} -> {vs : List HVal} ->
+  {cl : Maybe Cell} -> {e1, e2 : cell h a = cl} ->
+  (ec : e1 = e2) ->
+  (rec : BindOk fid h ps [] vs) ->
+  bindOkPtrExtraLive {fid} {h} {id} {pl} {nm} {ps} {a} {vs} cl e1 rec
+    = bindOkPtrExtraLive {fid} {h} {id} {pl} {nm} {ps} {a} {vs} cl e2 rec
+bindOkPtrExtraArg Refl rec = Refl
+
+bindOkExtraHeadJust :
+  {fid : Nat} -> {h : Heap} -> {id, pl : Nat} -> {nm : String} ->
+  {ps : List Param} -> {a : Addr} -> {vs : List HVal} ->
+  (rec0 : BindOk fid h ps [] vs) ->
+  (live : cell h a = Just Live) ->
+  (bok : BindOk fid h (MkParam id pl nm Ptr :: ps) [] (HVPtr a :: vs)) ->
+  bindOkPtrExtraLive {fid} {h} {id} {pl} {nm} {ps} {a} {vs} (Just Live) live rec0 = Just bok ->
+  bindOkPtrExtraLive {fid} {h} {id} {pl} {nm} {ps} {a} {vs} (cell h a) Refl rec0 = Just bok
+bindOkExtraHeadJust {id} {pl} {nm} rec0 live bok justPrf =
+  let shift = bindOkPtrExtraShift {fid} {h} {id} {pl} {nm} {ps} {a} {vs} (sym live) live rec0
+      arg = bindOkPtrExtraArg {fid} {h} {id} {pl} {nm} {ps} {a} {vs} (eqRhsSymRefl live) rec0
+  in trans (sym arg) (trans (sym shift) justPrf)
+
+ptrExtraCaseFrom :
+  {fid : Nat} -> {h : Heap} -> {id, pl : Nat} -> {nm : String} ->
+  {ps : List Param} -> {a : Addr} -> {vs : List HVal} ->
+  {rec : BindOk fid h ps [] vs} ->
+  bindOkFrom {fid} {h} ps [] vs = Just rec ->
+  (bok : BindOk fid h (MkParam id pl nm Ptr :: ps) [] (HVPtr a :: vs) **
+    bindOkPtrExtraCase {id} {pl} {nm} (Just rec) (cell h a) Refl = Just bok) ->
+  (bok : BindOk fid h (MkParam id pl nm Ptr :: ps) [] (HVPtr a :: vs) **
+    bindOkFrom {fid} {h} (MkParam id pl nm Ptr :: ps) [] (HVPtr a :: vs) = Just bok)
+ptrExtraCaseFrom {id} {pl} {nm} eq packed =
+  replace {p = \tail =>
+    (bok : BindOk fid h (MkParam id pl nm Ptr :: ps) [] (HVPtr a :: vs) **
+      bindOkPtrExtraCase {id} {pl} {nm} tail (cell h a) Refl = Just bok)}
+    (sym eq) packed
+
+||| Extra pointer parameter (modes exhausted): live, no unique owner in the tail.
+export
+bindOkFromPtrExtraLiveJust :
+  {fid : Nat} -> {h : Heap} -> {id, pl : Nat} -> {nm : String} ->
+  {ps : List Param} -> {a : Addr} -> {vs : List HVal} ->
+  {rec : BindOk fid h ps [] vs} ->
+  bindOkFrom {fid} {h} ps [] vs = Just rec ->
+  cell h a = Just Live ->
+  noOwnerHere (bindFrame ps vs) (bindParams fid ps []) a = True ->
+  (bok : BindOk fid h (MkParam id pl nm Ptr :: ps) [] (HVPtr a :: vs) **
+    bindOkFrom {fid} {h} (MkParam id pl nm Ptr :: ps) [] (HVPtr a :: vs) = Just bok)
+bindOkFromPtrExtraLiveJust {id} {pl} {nm} {fid} {ps} {a} {rec} eq live pn =
+  let f : (b : Bool) ->
+          noOwnerHere (bindFrame ps vs) (bindParams fid ps []) a = b ->
+          Maybe (BindOk fid h (MkParam id pl nm Ptr :: ps) [] (HVPtr a :: vs))
+      f b pn1 = bindOkExtraLiveGo {fid} {h} {id} {pl} {nm} {ps} {a} {vs}
+                  b pn1 live rec
+      shiftB = shiftBool
+                 {n = noOwnerHere (bindFrame ps vs) (bindParams fid ps []) a}
+                 {p1 = pn} (sym pn) f
+      argB = argBool (eqRhsSymRefl pn) f
+      goEq : bindOkPtrExtraLive {fid} {h} {id} {pl} {nm} {ps} {a} {vs}
+               (Just Live) live rec
+             = bindOkExtraLiveGo {fid} {h} {id} {pl} {nm} {ps} {a} {vs}
+                 (noOwnerHere (bindFrame ps vs) (bindParams fid ps []) a)
+                 Refl live rec
+      goEq = Refl
+      trueEq : bindOkExtraLiveGo {fid} {h} {id} {pl} {nm} {ps} {a} {vs}
+                 True pn live rec
+               = Just (BOPtrExtraLive live
+                   (noOwnerSound (bindFrame ps vs) (bindParams fid ps []) a pn) rec)
+      trueEq = Refl
+      justPrf = trans goEq (trans (sym argB) (trans (sym shiftB) trueEq))
+  in ptrExtraCaseFrom eq
+       (BOPtrExtraLive live
+          (noOwnerSound (bindFrame ps vs) (bindParams fid ps []) a pn) rec **
+        bindOkExtraHeadJust rec live
+          (BOPtrExtraLive live
+             (noOwnerSound (bindFrame ps vs) (bindParams fid ps []) a pn) rec)
+          justPrf)
 
 --------------------------------------------------------------------------------
 -- `NoUniqueOwner` is independent of the heap; it follows env / scopes.

@@ -58,3 +58,48 @@ is unchanged and passes `{defNs = ()}`. Nonempty units use
 equality from a `findFun` hit (empty unit is `emptyFunsNoUser`).
 Do not add `{auto defNs : DefinedNamesEq ctx funs}` to Restore: auto
 search for that type leaves `funs` unsolved at `varUseH`.
+
+## Blocked on task 4
+
+`bindOkJust` is false for the checker as it stands, and so is
+`CheckProgramNoHeapCrash`. Do not void the `Nothing` arms. Do not
+change what `checkProgram` accepts in order to make the lemma true.
+
+`aliasBad` only sees an `EVar` place (`borrowPlaces` / `consumePlaces`
+/ `nestedMixed`). An assignment argument is invisible to it. This unit
+is accepted (`checkProgram` returns `Right`):
+
+```
+void f(int *a, int *b) { free(b); use(a); }   /* modes Never, Always */
+int main(void) {
+  int *q = malloc(4);
+  f(q = malloc(4), q);
+}
+```
+
+`f(q, q)` is still rejected. `f(q = malloc(), q)` is not: the first
+argument is `EAssign`, so `borrowPlaces` is empty, `aliasBad` is false,
+and `checkArgsModes` is `Right` (`usePlace` on the assignment, then
+`takeOwner` of `q`).
+
+Argument values are both `HVPtr` of that fresh address. `bindOkFrom` on
+`[Never, Always]` is `Nothing`: the head is a borrow, the tail holds the
+address, and the tail status is `AOwned`, so `noOwnerHere` is false.
+The cell is still live at the post-argument heap; the free is the callee
+body. The `Nothing` branch is inhabited.
+
+The body then `HSDropLive`s `b` and reads `a`. Those are the same
+address, so eval is `HEVarFreed` and `HSCallUserCrash` reports that crash
+from `main`, whose entry state is a valid `OverApprox`. Proved by running
+`checkProgram` on this IR (`assign ACCEPT`, `f(p, p)` `dup REJECT`).
+
+Frame's `Just` lemmas and Inh's new `export`s are in the WIP commit that
+records this note. Restore's four fallback errors are unchanged.
+Do not commit `.DS_Store`.
+
+A proof cannot clear this. The theorem is false for the current checker.
+Clearing it means rejecting this alias in the checker, then proving
+`bindOkJust` for that stricter checker. No passing fixture passes an
+assignment as a call argument, so the existing suite can stay put.
+The rule above still forbids that accept/reject change. Parked here
+on 2026-10-12.

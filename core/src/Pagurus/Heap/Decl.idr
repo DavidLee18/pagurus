@@ -57,7 +57,7 @@ declPtrCrashH :
   takeOwner ctx sc e = res ->
   HSafeOut (HCrashOut c) sc'
 declPtrCrashH fuel id n nm ih eq (Left _) pT =
-  void (leftNotRight (trans (sym (declPtrLeft fuel id n nm pT)) eq))
+  void (leftNotRight (trans (sym (declPtrLeft fuel id n nm (ghostCopyLeakFalseDecl eq) pT)) eq))
 declPtrCrashH fuel id n nm ih eq (Right (sc1, fl1)) pT =
   void (htCrashNotOk (ih sc1 fl1 pT))
 
@@ -74,15 +74,15 @@ declPtrOwnH :
   takeOwner ctx sc e = res ->
   HSafeOut (HOk (setH n v env1) h1) sc'
 declPtrOwnH fuel id n nm ih eq (Left _) pT =
-  void (leftNotRight (trans (sym (declPtrLeft fuel id n nm pT)) eq))
+  void (leftNotRight (trans (sym (declPtrLeft fuel id n nm (ghostCopyLeakFalseDecl eq) pT)) eq))
 declPtrOwnH fuel id n nm ih eq (Right (sc1, Ghost)) pT =
-  HOutOk (oaRewrite (rightInj (trans (sym (declPtrGhostEq fuel id n nm pT)) eq))
+  HOutOk (oaRewrite (rightInj (trans (sym (declPtrGhostEq fuel id n nm (ghostCopyLeakFalseDecl eq) pT)) eq))
     (oaBindDead (htFromOk (ih sc1 Ghost pT))))
 declPtrOwnH fuel id n nm ih eq (Right (sc1, Null)) pT =
   case htTaken (ih sc1 Null pT) of
     HNull =>
-      HOutOk (oaRewrite (rightInj (trans (sym (declPtrNullEq fuel id n nm pT)) eq))
+      HOutOk (oaRewrite (rightInj (trans (sym (declPtrNullEq fuel id n nm (ghostCopyLeakFalseDecl eq) pT)) eq))
         (oaBindNull (htFromOk (ih sc1 Null pT))))
 declPtrOwnH fuel id n nm ih eq (Right (sc1, Owner)) pT =
-  HOutOk (oaRewrite (rightInj (trans (sym (declPtrOwner fuel id n nm pT)) eq))
+  HOutOk (oaRewrite (rightInj (trans (sym (declPtrOwner fuel id n nm (ghostCopyLeakFalseDecl eq) pT)) eq))
     (bindOwner (htFromOk (ih sc1 Owner pT)) (htTaken (ih sc1 Owner pT))))

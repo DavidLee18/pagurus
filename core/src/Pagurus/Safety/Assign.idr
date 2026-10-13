@@ -45,7 +45,7 @@ asgPtrCrash :
   takeOwner ctx sc rhs = res ->
   SafeOut (Crash d) sc'
 asgPtrCrash id n nm ih eq r (Left _) pT =
-  void (leftNotRight (trans (sym (checkExprAsgPtrLeft id n nm pT)) eq))
+  void (leftNotRight (trans (sym (checkExprAsgPtrLeft id n nm (ghostCopyLeakFalseChk eq) pT)) eq))
 asgPtrCrash id n nm ih eq r (Right (sc1, fl1)) pT =
   crashScope (ih sc1 fl1 pT)
 
@@ -66,7 +66,7 @@ mutual
     takeOwner ctx sc rhs = res ->
     SafeOut o sc'
   asgPtrOwn id n nm ih eq r take act (Left _) pT =
-    void (leftNotRight (trans (sym (checkExprAsgPtrLeft id n nm pT)) eq))
+    void (leftNotRight (trans (sym (checkExprAsgPtrLeft id n nm (ghostCopyLeakFalseChk eq) pT)) eq))
   asgPtrOwn id n nm ih eq r take act (Right (sc1, Ghost)) pT =
     void (ghostNotOwner (ownerFlagTrue pT r take))
   asgPtrOwn id n nm ih eq r take act (Right (sc1, Null)) pT =
@@ -87,9 +87,9 @@ mutual
     usePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n id nm = resU ->
     SafeOut o sc'
   asgPtrOwnGo id n nm eq r1 act pT (Left _) pU =
-    void (leftNotRight (trans (sym (checkExprAsgPtrUseFail pT pU)) eq))
+    void (leftNotRight (trans (sym (checkExprAsgPtrUseFail (ghostCopyLeakFalseChk eq) pT pU)) eq))
   asgPtrOwnGo id n nm eq r1 act pT (Right sc2) pU =
-    outRewrite (rightInj (trans (sym (checkExprAsgPtrOwner pT pU)) eq))
+    outRewrite (rightInj (trans (sym (checkExprAsgPtrOwner (ghostCopyLeakFalseChk eq) pT pU)) eq))
       (outUse pU (reprSetOwned r1) act)
 
 mutual
@@ -106,12 +106,12 @@ mutual
     takeOwner ctx sc rhs = res ->
     SafeOut (Ok (setC n AEmpty c1)) sc'
   asgPtrEmpty id n nm ih eq r (Left _) pT =
-    void (leftNotRight (trans (sym (checkExprAsgPtrLeft id n nm pT)) eq))
+    void (leftNotRight (trans (sym (checkExprAsgPtrLeft id n nm (ghostCopyLeakFalseChk eq) pT)) eq))
   asgPtrEmpty id n nm ih eq r (Right (sc1, Ghost)) pT =
-    outRewrite (rightInj (trans (sym (checkExprAsgPtrGhost id n nm pT)) eq))
+    outRewrite (rightInj (trans (sym (checkExprAsgPtrGhost id n nm (ghostCopyLeakFalseChk eq) pT)) eq))
       (OutOk (reprSetEmpty (fromOk (ih sc1 Ghost pT))))
   asgPtrEmpty id n nm ih eq r (Right (sc1, Null)) pT =
-    outRewrite (rightInj (trans (sym (checkExprAsgPtrNull id n nm pT)) eq))
+    outRewrite (rightInj (trans (sym (checkExprAsgPtrNull id n nm (ghostCopyLeakFalseChk eq) pT)) eq))
       (OutOk (reprSetFitEmpty (fromOk (ih sc1 Null pT))))
   asgPtrEmpty id n nm ih eq r (Right (sc1, Owner)) pT =
     asgPtrEmptyOwn id n nm eq (fromOk (ih sc1 Owner pT)) pT
@@ -127,9 +127,9 @@ mutual
     usePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n id nm = resU ->
     SafeOut (Ok (setC n AEmpty c1)) sc'
   asgPtrEmptyOwn id n nm eq r1 pT (Left _) pU =
-    void (leftNotRight (trans (sym (checkExprAsgPtrUseFail pT pU)) eq))
+    void (leftNotRight (trans (sym (checkExprAsgPtrUseFail (ghostCopyLeakFalseChk eq) pT pU)) eq))
   asgPtrEmptyOwn id n nm eq r1 pT (Right sc2) pU =
-    outRewrite (rightInj (trans (sym (checkExprAsgPtrOwner pT pU)) eq))
+    outRewrite (rightInj (trans (sym (checkExprAsgPtrOwner (ghostCopyLeakFalseChk eq) pT pU)) eq))
       (OutOk (usePlaceEmptyPres pU r1))
 
 mutual
@@ -146,12 +146,12 @@ mutual
     takeOwner ctx sc rhs = res ->
     SafeOut (Ok (setC n ANull c1)) sc'
   asgPtrNull id n nm ih eq r (Left _) pT =
-    void (leftNotRight (trans (sym (checkExprAsgPtrLeft id n nm pT)) eq))
+    void (leftNotRight (trans (sym (checkExprAsgPtrLeft id n nm (ghostCopyLeakFalseChk eq) pT)) eq))
   asgPtrNull id n nm ih eq r (Right (sc1, Ghost)) pT =
-    outRewrite (rightInj (trans (sym (checkExprAsgPtrGhost id n nm pT)) eq))
+    outRewrite (rightInj (trans (sym (checkExprAsgPtrGhost id n nm (ghostCopyLeakFalseChk eq) pT)) eq))
       (OutOk (reprSetFitNull (fromOk (ih sc1 Ghost pT))))
   asgPtrNull id n nm ih eq r (Right (sc1, Null)) pT =
-    outRewrite (rightInj (trans (sym (checkExprAsgPtrNull id n nm pT)) eq))
+    outRewrite (rightInj (trans (sym (checkExprAsgPtrNull id n nm (ghostCopyLeakFalseChk eq) pT)) eq))
       (OutOk (reprSetNull (fromOk (ih sc1 Null pT))))
   asgPtrNull id n nm ih eq r (Right (sc1, Owner)) pT =
     asgPtrNullOwn id n nm eq (fromOk (ih sc1 Owner pT)) pT
@@ -167,9 +167,9 @@ mutual
     usePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n id nm = resU ->
     SafeOut (Ok (setC n ANull c1)) sc'
   asgPtrNullOwn id n nm eq r1 pT (Left _) pU =
-    void (leftNotRight (trans (sym (checkExprAsgPtrUseFail pT pU)) eq))
+    void (leftNotRight (trans (sym (checkExprAsgPtrUseFail (ghostCopyLeakFalseChk eq) pT pU)) eq))
   asgPtrNullOwn id n nm eq r1 pT (Right sc2) pU =
-    outRewrite (rightInj (trans (sym (checkExprAsgPtrOwner pT pU)) eq))
+    outRewrite (rightInj (trans (sym (checkExprAsgPtrOwner (ghostCopyLeakFalseChk eq) pT pU)) eq))
       (OutOk (usePlaceNullPres pU r1))
 
 --------------------------------------------------------------------------------
@@ -212,7 +212,7 @@ takeAsgPtrCrash :
   takeOwner ctx sc rhs = res ->
   SafeOut (Crash d) sc'
 takeAsgPtrCrash id n nm ih eq r (Left _) pT =
-  void (leftNotRight (trans (sym (takeAsgPtrLeft id n nm pT)) eq))
+  void (leftNotRight (trans (sym (takeAsgPtrLeft id n nm (ghostCopyLeakFalseTake eq) pT)) eq))
 takeAsgPtrCrash id n nm ih eq r (Right (sc1, fl1)) pT =
   crashScope (ih sc1 fl1 pT)
 
@@ -233,7 +233,7 @@ mutual
     takeOwner ctx sc rhs = res ->
     SafeOut o sc'
   takeAsgPtrOwn id n nm ih eq r take act (Left _) pT =
-    void (leftNotRight (trans (sym (takeAsgPtrLeft id n nm pT)) eq))
+    void (leftNotRight (trans (sym (takeAsgPtrLeft id n nm (ghostCopyLeakFalseTake eq) pT)) eq))
   takeAsgPtrOwn id n nm ih eq r take act (Right (sc1, Ghost)) pT =
     void (ghostNotOwner (ownerFlagTrue pT r take))
   takeAsgPtrOwn id n nm ih eq r take act (Right (sc1, Null)) pT =
@@ -254,9 +254,9 @@ mutual
     movePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n id nm = resM ->
     SafeOut o sc'
   takeAsgPtrOwnGo id n nm eq r1 act pT (Left _) pM =
-    void (leftNotRight (trans (sym (takeAsgPtrFail pT pM)) eq))
+    void (leftNotRight (trans (sym (takeAsgPtrFail (ghostCopyLeakFalseTake eq) pT pM)) eq))
   takeAsgPtrOwnGo id n nm eq r1 act pT (Right sc2) pM =
-    outRewrite (cong fst (rightInj (trans (sym (takeAsgPtrOwner pT pM)) eq)))
+    outRewrite (cong fst (rightInj (trans (sym (takeAsgPtrOwner (ghostCopyLeakFalseTake eq) pT pM)) eq)))
       (outMove pM (reprSetOwned r1) act)
 
 mutual
@@ -274,12 +274,12 @@ mutual
     takeOwner ctx sc rhs = res ->
     SafeOut (Ok (setC n AEmpty c1)) sc'
   takeAsgPtrEmpty id n nm ih eq r (Left _) pT =
-    void (leftNotRight (trans (sym (takeAsgPtrLeft id n nm pT)) eq))
+    void (leftNotRight (trans (sym (takeAsgPtrLeft id n nm (ghostCopyLeakFalseTake eq) pT)) eq))
   takeAsgPtrEmpty id n nm ih eq r (Right (sc1, Ghost)) pT =
-    outRewrite (cong fst (rightInj (trans (sym (takeAsgPtrGhost id n nm pT)) eq)))
+    outRewrite (cong fst (rightInj (trans (sym (takeAsgPtrGhost id n nm (ghostCopyLeakFalseTake eq) pT)) eq)))
       (OutOk (reprSetEmpty (fromOk (ih sc1 Ghost pT))))
   takeAsgPtrEmpty id n nm ih eq r (Right (sc1, Null)) pT =
-    outRewrite (cong fst (rightInj (trans (sym (takeAsgPtrNull id n nm pT)) eq)))
+    outRewrite (cong fst (rightInj (trans (sym (takeAsgPtrNull id n nm (ghostCopyLeakFalseTake eq) pT)) eq)))
       (OutOk (reprSetFitEmpty (fromOk (ih sc1 Null pT))))
   takeAsgPtrEmpty id n nm ih eq r (Right (sc1, Owner)) pT =
     takeAsgPtrEmptyOwn id n nm eq (fromOk (ih sc1 Owner pT)) pT
@@ -296,9 +296,9 @@ mutual
     movePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n id nm = resM ->
     SafeOut (Ok (setC n AEmpty c1)) sc'
   takeAsgPtrEmptyOwn id n nm eq r1 pT (Left _) pM =
-    void (leftNotRight (trans (sym (takeAsgPtrFail pT pM)) eq))
+    void (leftNotRight (trans (sym (takeAsgPtrFail (ghostCopyLeakFalseTake eq) pT pM)) eq))
   takeAsgPtrEmptyOwn id n nm eq r1 pT (Right sc2) pM =
-    outRewrite (cong fst (rightInj (trans (sym (takeAsgPtrOwner pT pM)) eq)))
+    outRewrite (cong fst (rightInj (trans (sym (takeAsgPtrOwner (ghostCopyLeakFalseTake eq) pT pM)) eq)))
       (OutOk (movePlaceEmptyPres pM r1))
 
 mutual
@@ -316,12 +316,12 @@ mutual
     takeOwner ctx sc rhs = res ->
     SafeOut (Ok (setC n ANull c1)) sc'
   takeAsgPtrNull id n nm ih eq r (Left _) pT =
-    void (leftNotRight (trans (sym (takeAsgPtrLeft id n nm pT)) eq))
+    void (leftNotRight (trans (sym (takeAsgPtrLeft id n nm (ghostCopyLeakFalseTake eq) pT)) eq))
   takeAsgPtrNull id n nm ih eq r (Right (sc1, Ghost)) pT =
-    outRewrite (cong fst (rightInj (trans (sym (takeAsgPtrGhost id n nm pT)) eq)))
+    outRewrite (cong fst (rightInj (trans (sym (takeAsgPtrGhost id n nm (ghostCopyLeakFalseTake eq) pT)) eq)))
       (OutOk (reprSetFitNull (fromOk (ih sc1 Ghost pT))))
   takeAsgPtrNull id n nm ih eq r (Right (sc1, Null)) pT =
-    outRewrite (cong fst (rightInj (trans (sym (takeAsgPtrNull id n nm pT)) eq)))
+    outRewrite (cong fst (rightInj (trans (sym (takeAsgPtrNull id n nm (ghostCopyLeakFalseTake eq) pT)) eq)))
       (OutOk (reprSetNull (fromOk (ih sc1 Null pT))))
   takeAsgPtrNull id n nm ih eq r (Right (sc1, Owner)) pT =
     takeAsgPtrNullOwn id n nm eq (fromOk (ih sc1 Owner pT)) pT
@@ -338,9 +338,9 @@ mutual
     movePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n id nm = resM ->
     SafeOut (Ok (setC n ANull c1)) sc'
   takeAsgPtrNullOwn id n nm eq r1 pT (Left _) pM =
-    void (leftNotRight (trans (sym (takeAsgPtrFail pT pM)) eq))
+    void (leftNotRight (trans (sym (takeAsgPtrFail (ghostCopyLeakFalseTake eq) pT pM)) eq))
   takeAsgPtrNullOwn id n nm eq r1 pT (Right sc2) pM =
-    outRewrite (cong fst (rightInj (trans (sym (takeAsgPtrOwner pT pM)) eq)))
+    outRewrite (cong fst (rightInj (trans (sym (takeAsgPtrOwner (ghostCopyLeakFalseTake eq) pT pM)) eq)))
       (OutOk (movePlaceNullPres pM r1))
 
 --------------------------------------------------------------------------------
@@ -377,7 +377,7 @@ stmtAsgPtrCrash :
   takeOwner ctx sc rhs = res ->
   SafeOut (Crash d) sc'
 stmtAsgPtrCrash fuel id n nm ih eq r (Left _) pT =
-  void (leftNotRight (trans (sym (stmtAsgPtrLeft fuel id n nm pT)) eq))
+  void (leftNotRight (trans (sym (stmtAsgPtrLeft fuel id n nm (ghostCopyLeakFalseStmt eq) pT)) eq))
 stmtAsgPtrCrash fuel id n nm ih eq r (Right (sc1, fl1)) pT =
   crashScope (ih sc1 fl1 pT)
 
@@ -395,13 +395,13 @@ stmtAsgPtrOwn :
   takeOwner ctx sc rhs = res ->
   SafeOut (Ok (setC n AOwned c1)) sc'
 stmtAsgPtrOwn fuel id n nm ih eq r take (Left _) pT =
-  void (leftNotRight (trans (sym (stmtAsgPtrLeft fuel id n nm pT)) eq))
+  void (leftNotRight (trans (sym (stmtAsgPtrLeft fuel id n nm (ghostCopyLeakFalseStmt eq) pT)) eq))
 stmtAsgPtrOwn fuel id n nm ih eq r take (Right (sc1, Ghost)) pT =
   void (ghostNotOwner (ownerFlagTrue pT r take))
 stmtAsgPtrOwn fuel id n nm ih eq r take (Right (sc1, Null)) pT =
   void (nullNotOwner (ownerFlagTrue pT r take))
 stmtAsgPtrOwn fuel id n nm ih eq r take (Right (sc1, Owner)) pT =
-  outRewrite (rightInj (trans (sym (stmtAsgPtrOwner fuel id n nm pT)) eq))
+  outRewrite (rightInj (trans (sym (stmtAsgPtrOwner fuel id n nm (ghostCopyLeakFalseStmt eq) pT)) eq))
     (OutOk (reprSetOwned (fromOk (ih sc1 Owner pT))))
 
 export
@@ -417,15 +417,15 @@ stmtAsgPtrEmpty :
   takeOwner ctx sc rhs = res ->
   SafeOut (Ok (setC n AEmpty c1)) sc'
 stmtAsgPtrEmpty fuel id n nm ih eq r (Left _) pT =
-  void (leftNotRight (trans (sym (stmtAsgPtrLeft fuel id n nm pT)) eq))
+  void (leftNotRight (trans (sym (stmtAsgPtrLeft fuel id n nm (ghostCopyLeakFalseStmt eq) pT)) eq))
 stmtAsgPtrEmpty fuel id n nm ih eq r (Right (sc1, Ghost)) pT =
-  outRewrite (rightInj (trans (sym (stmtAsgPtrGhost fuel id n nm pT)) eq))
+  outRewrite (rightInj (trans (sym (stmtAsgPtrGhost fuel id n nm (ghostCopyLeakFalseStmt eq) pT)) eq))
     (OutOk (reprSetEmpty (fromOk (ih sc1 Ghost pT))))
 stmtAsgPtrEmpty fuel id n nm ih eq r (Right (sc1, Null)) pT =
-  outRewrite (rightInj (trans (sym (stmtAsgPtrNull fuel id n nm pT)) eq))
+  outRewrite (rightInj (trans (sym (stmtAsgPtrNull fuel id n nm (ghostCopyLeakFalseStmt eq) pT)) eq))
     (OutOk (reprSetFitEmpty (fromOk (ih sc1 Null pT))))
 stmtAsgPtrEmpty fuel id n nm ih eq r (Right (sc1, Owner)) pT =
-  outRewrite (rightInj (trans (sym (stmtAsgPtrOwner fuel id n nm pT)) eq))
+  outRewrite (rightInj (trans (sym (stmtAsgPtrOwner fuel id n nm (ghostCopyLeakFalseStmt eq) pT)) eq))
     (OutOk (reprSetFitEmpty (fromOk (ih sc1 Owner pT))))
 
 export
@@ -441,13 +441,13 @@ stmtAsgPtrNull :
   takeOwner ctx sc rhs = res ->
   SafeOut (Ok (setC n ANull c1)) sc'
 stmtAsgPtrNull fuel id n nm ih eq r (Left _) pT =
-  void (leftNotRight (trans (sym (stmtAsgPtrLeft fuel id n nm pT)) eq))
+  void (leftNotRight (trans (sym (stmtAsgPtrLeft fuel id n nm (ghostCopyLeakFalseStmt eq) pT)) eq))
 stmtAsgPtrNull fuel id n nm ih eq r (Right (sc1, Ghost)) pT =
-  outRewrite (rightInj (trans (sym (stmtAsgPtrGhost fuel id n nm pT)) eq))
+  outRewrite (rightInj (trans (sym (stmtAsgPtrGhost fuel id n nm (ghostCopyLeakFalseStmt eq) pT)) eq))
     (OutOk (reprSetFitNull (fromOk (ih sc1 Ghost pT))))
 stmtAsgPtrNull fuel id n nm ih eq r (Right (sc1, Null)) pT =
-  outRewrite (rightInj (trans (sym (stmtAsgPtrNull fuel id n nm pT)) eq))
+  outRewrite (rightInj (trans (sym (stmtAsgPtrNull fuel id n nm (ghostCopyLeakFalseStmt eq) pT)) eq))
     (OutOk (reprSetNull (fromOk (ih sc1 Null pT))))
 stmtAsgPtrNull fuel id n nm ih eq r (Right (sc1, Owner)) pT =
-  outRewrite (rightInj (trans (sym (stmtAsgPtrOwner fuel id n nm pT)) eq))
+  outRewrite (rightInj (trans (sym (stmtAsgPtrOwner fuel id n nm (ghostCopyLeakFalseStmt eq) pT)) eq))
     (OutOk (reprSetFitNull (fromOk (ih sc1 Owner pT))))

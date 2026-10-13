@@ -47,7 +47,7 @@ asgPtrCrashH :
   takeOwner ctx sc rhs = res ->
   HSafeRes (HRCrash c) sc'
 asgPtrCrashH id n nm ih eq (Left _) pT =
-  void (leftNotRight (trans (sym (checkExprAsgPtrLeft id n nm pT)) eq))
+  void (leftNotRight (trans (sym (checkExprAsgPtrLeft id n nm (ghostCopyLeakFalseChk eq) pT)) eq))
 asgPtrCrashH id n nm ih eq (Right (sc1, fl1)) pT =
   void (htCrashNotOk (ih sc1 fl1 pT))
 
@@ -64,25 +64,25 @@ asgPtrOkH :
   takeOwner ctx sc rhs = res ->
   HSafeRes (HROk v (setH n v env1) h1) sc'
 asgPtrOkH id n nm ih eq (Left _) pT =
-  void (leftNotRight (trans (sym (checkExprAsgPtrLeft id n nm pT)) eq))
+  void (leftNotRight (trans (sym (checkExprAsgPtrLeft id n nm (ghostCopyLeakFalseChk eq) pT)) eq))
 asgPtrOkH id n nm ih eq (Right (sc1, Ghost)) pT =
   let oa1 = htFromOk (ih sc1 Ghost pT)
-  in HROutOk (oaRewrite (rightInj (trans (sym (checkExprAsgPtrGhost id n nm pT)) eq))
+  in HROutOk (oaRewrite (rightInj (trans (sym (checkExprAsgPtrGhost id n nm (ghostCopyLeakFalseChk eq) pT)) eq))
        (oaBindDead oa1))
 asgPtrOkH id n nm ih eq (Right (sc1, Null)) pT =
   case htTaken (ih sc1 Null pT) of
     HNull =>
-      HROutOk (oaRewrite (rightInj (trans (sym (checkExprAsgPtrNull id n nm pT)) eq))
+      HROutOk (oaRewrite (rightInj (trans (sym (checkExprAsgPtrNull id n nm (ghostCopyLeakFalseChk eq) pT)) eq))
         (oaBindNull (htFromOk (ih sc1 Null pT))))
 asgPtrOkH id n nm ih eq (Right (sc1, Owner)) pT with
     (usePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n id nm) proof pU
   asgPtrOkH id n nm ih eq (Right (sc1, Owner)) pT | Left d =
-    void (leftNotRight (trans (sym (checkExprAsgPtrUseFail pT pU)) eq))
+    void (leftNotRight (trans (sym (checkExprAsgPtrUseFail (ghostCopyLeakFalseChk eq) pT pU)) eq))
   asgPtrOkH id n nm ih eq (Right (sc1, Owner)) pT | Right sc2 =
     let taken = ih sc1 Owner pT
         oaB = bindOwner (htFromOk taken) (htTaken taken)
         oaU = oaUsePlace oaB pU
-    in HROutOk (oaRewrite (rightInj (trans (sym (checkExprAsgPtrOwner pT pU)) eq)) oaU)
+    in HROutOk (oaRewrite (rightInj (trans (sym (checkExprAsgPtrOwner (ghostCopyLeakFalseChk eq) pT pU)) eq)) oaU)
 
 export
 stmtAsgCopyH :
@@ -105,7 +105,7 @@ stmtAsgPtrCrashH :
   takeOwner ctx sc rhs = res ->
   HSafeOut (HCrashOut c) sc'
 stmtAsgPtrCrashH fuel id n nm ih eq (Left _) pT =
-  void (leftNotRight (trans (sym (stmtAsgPtrLeft fuel id n nm pT)) eq))
+  void (leftNotRight (trans (sym (stmtAsgPtrLeft fuel id n nm (ghostCopyLeakFalseStmt eq) pT)) eq))
 stmtAsgPtrCrashH fuel id n nm ih eq (Right (sc1, fl1)) pT =
   void (htCrashNotOk (ih sc1 fl1 pT))
 
@@ -122,17 +122,17 @@ stmtAsgPtrOkH :
   takeOwner ctx sc rhs = res ->
   HSafeOut (HOk (setH n v env1) h1) sc'
 stmtAsgPtrOkH fuel id n nm ih eq (Left _) pT =
-  void (leftNotRight (trans (sym (stmtAsgPtrLeft fuel id n nm pT)) eq))
+  void (leftNotRight (trans (sym (stmtAsgPtrLeft fuel id n nm (ghostCopyLeakFalseStmt eq) pT)) eq))
 stmtAsgPtrOkH fuel id n nm ih eq (Right (sc1, Ghost)) pT =
-  HOutOk (oaRewrite (rightInj (trans (sym (stmtAsgPtrGhost fuel id n nm pT)) eq))
+  HOutOk (oaRewrite (rightInj (trans (sym (stmtAsgPtrGhost fuel id n nm (ghostCopyLeakFalseStmt eq) pT)) eq))
     (oaBindDead (htFromOk (ih sc1 Ghost pT))))
 stmtAsgPtrOkH fuel id n nm ih eq (Right (sc1, Null)) pT =
   case htTaken (ih sc1 Null pT) of
     HNull =>
-      HOutOk (oaRewrite (rightInj (trans (sym (stmtAsgPtrNull fuel id n nm pT)) eq))
+      HOutOk (oaRewrite (rightInj (trans (sym (stmtAsgPtrNull fuel id n nm (ghostCopyLeakFalseStmt eq) pT)) eq))
         (oaBindNull (htFromOk (ih sc1 Null pT))))
 stmtAsgPtrOkH fuel id n nm ih eq (Right (sc1, Owner)) pT =
-  HOutOk (oaRewrite (rightInj (trans (sym (stmtAsgPtrOwner fuel id n nm pT)) eq))
+  HOutOk (oaRewrite (rightInj (trans (sym (stmtAsgPtrOwner fuel id n nm (ghostCopyLeakFalseStmt eq) pT)) eq))
     (bindOwner (htFromOk (ih sc1 Owner pT)) (htTaken (ih sc1 Owner pT))))
 
 --------------------------------------------------------------------------------
@@ -168,7 +168,7 @@ takeAsgPtrCrashH :
   takeOwner ctx sc rhs = res ->
   HTOut flAsg (HRCrash c) sc'
 takeAsgPtrCrashH id n nm ih eq (Left _) pT =
-  void (leftNotRight (trans (sym (takeAsgPtrLeft id n nm pT)) eq))
+  void (leftNotRight (trans (sym (takeAsgPtrLeft id n nm (ghostCopyLeakFalseTake eq) pT)) eq))
 takeAsgPtrCrashH id n nm ih eq (Right (sc1, fl1)) pT =
   void (htCrashNotOk (ih sc1 fl1 pT))
 
@@ -216,30 +216,30 @@ takeAsgPtrOkH :
   takeOwner ctx sc rhs = res ->
   HTOut fl (HROk v (setH n v env1) h1) sc'
 takeAsgPtrOkH id n nm ih eq (Left _) pT =
-  void (leftNotRight (trans (sym (takeAsgPtrLeft id n nm pT)) eq))
+  void (leftNotRight (trans (sym (takeAsgPtrLeft id n nm (ghostCopyLeakFalseTake eq) pT)) eq))
 takeAsgPtrOkH id n nm ih eq (Right (sc1, Ghost)) pT =
-  let scEq = cong fst (rightInj (trans (sym (takeAsgPtrGhost id n nm pT)) eq))
-      flEq = cong snd (rightInj (trans (sym (takeAsgPtrGhost id n nm pT)) eq))
+  let scEq = cong fst (rightInj (trans (sym (takeAsgPtrGhost id n nm (ghostCopyLeakFalseTake eq) pT)) eq))
+      flEq = cong snd (rightInj (trans (sym (takeAsgPtrGhost id n nm (ghostCopyLeakFalseTake eq) pT)) eq))
   in htRewrite scEq (replace {p = \f => HTOut f (HROk v (setH n v env1) h1)
                                          (setPlace n (Pagurus.Status.singleton AEmpty) sc1)} flEq
        (HTOk (oaBindDead (htFromOk (ih sc1 Ghost pT))) HGh))
 takeAsgPtrOkH id n nm ih eq (Right (sc1, Null)) pT =
   case htTaken (ih sc1 Null pT) of
     HNull =>
-      let scEq = cong fst (rightInj (trans (sym (takeAsgPtrNull id n nm pT)) eq))
-          flEq = cong snd (rightInj (trans (sym (takeAsgPtrNull id n nm pT)) eq))
+      let scEq = cong fst (rightInj (trans (sym (takeAsgPtrNull id n nm (ghostCopyLeakFalseTake eq) pT)) eq))
+          flEq = cong snd (rightInj (trans (sym (takeAsgPtrNull id n nm (ghostCopyLeakFalseTake eq) pT)) eq))
       in htRewrite scEq (replace {p = \f => HTOut f (HROk HVNone (setH n HVNone env1) h1)
                                              (setPlace n (Pagurus.Status.singleton ANull) sc1)} flEq
            (HTOk (oaBindNull (htFromOk (ih sc1 Null pT))) HNull))
 takeAsgPtrOkH id n nm ih eq (Right (sc1, Owner)) pT with
     (movePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n id nm) proof pM
   takeAsgPtrOkH id n nm ih eq (Right (sc1, Owner)) pT | Left d =
-    void (leftNotRight (trans (sym (takeAsgPtrFail pT pM)) eq))
+    void (leftNotRight (trans (sym (takeAsgPtrFail (ghostCopyLeakFalseTake eq) pT pM)) eq))
   takeAsgPtrOkH id n nm ih eq (Right (sc1, Owner)) pT | Right sc2 =
     let taken = ih sc1 Owner pT
         oaB = bindOwner (htFromOk taken) (htTaken taken)
         oaM = oaMovePlace oaB pM
-        scEq = cong fst (rightInj (trans (sym (takeAsgPtrOwner pT pM)) eq))
-        flEq = cong snd (rightInj (trans (sym (takeAsgPtrOwner pT pM)) eq))
+        scEq = cong fst (rightInj (trans (sym (takeAsgPtrOwner (ghostCopyLeakFalseTake eq) pT pM)) eq))
+        flEq = cong snd (rightInj (trans (sym (takeAsgPtrOwner (ghostCopyLeakFalseTake eq) pT pM)) eq))
     in htRewrite scEq (replace {p = \f => HTOut f (HROk v (setH n v env1) h1) sc2} flEq
          (HTOk oaM (takenAfterBindMove (htTaken taken) oaB pM)))

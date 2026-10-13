@@ -1126,7 +1126,7 @@ mutual
       InHand (setH n w envA) hA scY a
   takeAsgNull_b k rec ihs inh oa ev pT pR oaT HNull =
       let inhR = inhTakeH_b {fk = fk} k rec ihs inh oa ev pR oaT
-          scEq = cong fst (rightInj (trans (sym (takeAsgPtrNull id n nm pR)) pT))
+          scEq = cong fst (rightInj (trans (sym (takeAsgPtrNull id n nm (ghostCopyLeakFalseTake pT) pR)) pT))
       in replace {p = \s => InHand (setH n HVNone envA) hA s a} scEq
            (inhSetHPlaceNull inhR noneNotPtrA)
 
@@ -1182,11 +1182,11 @@ mutual
   inhTakeAsgPtr_b k rec ihs inh oa ev pT =
       case eitherEq (takeOwner ctx sc0 rhs) of
         Left (d ** pR) =>
-          void (leftNotRight (trans (sym (takeAsgPtrLeft id n nm pR)) pT))
+          void (leftNotRight (trans (sym (takeAsgPtrLeft id n nm (ghostCopyLeakFalseTake pT) pR)) pT))
         Right ((scT, Ghost) ** pR) =>
           let inhR = inhTakeH_b {fk = fk} k rec ihs inh oa ev pR
                        (htFromOk (ihs.takeIH ev sc0 scT Ghost pR oa))
-              scEq = cong fst (rightInj (trans (sym (takeAsgPtrGhost id n nm pR)) pT))
+              scEq = cong fst (rightInj (trans (sym (takeAsgPtrGhost id n nm (ghostCopyLeakFalseTake pT) pR)) pT))
           in replace {p = \s => InHand (setH n w envA) hA s a} scEq
                (inhSetHPlaceEmpty inhR)
         Right ((scT, Null) ** pR) =>
@@ -1196,10 +1196,10 @@ mutual
           case eitherEq
                  (movePlace (setPlace n (Pagurus.Status.singleton AOwned) scT) n id nm) of
             Left (d ** pM) =>
-              void (leftNotRight (trans (sym (takeAsgPtrFail pR pM)) pT))
+              void (leftNotRight (trans (sym (takeAsgPtrFail (ghostCopyLeakFalseTake pT) pR pM)) pT))
             Right (sc2 ** pM) =>
               let ht = ihs.takeIH ev sc0 scT Owner pR oa
-                  scEq = cong fst (rightInj (trans (sym (takeAsgPtrOwner pR pM)) pT))
+                  scEq = cong fst (rightInj (trans (sym (takeAsgPtrOwner (ghostCopyLeakFalseTake pT) pR pM)) pT))
               in takeAsgMove_b {fk = fk} k rec ihs inh oa ev pT pR scEq (htFromOk ht) (htTaken ht) pM
 
   exprAsgNull_b :
@@ -1221,7 +1221,7 @@ mutual
       InHand (setH n w envA) hA scY a
   exprAsgNull_b k rec ihs inh oa ev eq pT oaT HNull =
       let inhR = inhTakeH_b {fk = fk} k rec ihs inh oa ev pT oaT
-          scEq = rightInj (trans (sym (checkExprAsgPtrNull id n nm pT)) eq)
+          scEq = rightInj (trans (sym (checkExprAsgPtrNull id n nm (ghostCopyLeakFalseChk eq) pT)) eq)
       in replace {p = \s => InHand (setH n HVNone envA) hA s a} scEq
            (inhSetHPlaceNull inhR noneNotPtrA)
 
@@ -1277,11 +1277,11 @@ mutual
   inhAsgPtr_b k rec ihs inh oa ev eq =
       case eitherEq (takeOwner ctx sc0 rhs) of
         Left (d ** pT) =>
-          void (leftNotRight (trans (sym (checkExprAsgPtrLeft id n nm pT)) eq))
+          void (leftNotRight (trans (sym (checkExprAsgPtrLeft id n nm (ghostCopyLeakFalseChk eq) pT)) eq))
         Right ((scT, Ghost) ** pT) =>
           let inhR = inhTakeH_b {fk = fk} k rec ihs inh oa ev pT
                        (htFromOk (ihs.takeIH ev sc0 scT Ghost pT oa))
-              scEq = rightInj (trans (sym (checkExprAsgPtrGhost id n nm pT)) eq)
+              scEq = rightInj (trans (sym (checkExprAsgPtrGhost id n nm (ghostCopyLeakFalseChk eq) pT)) eq)
           in replace {p = \s => InHand (setH n w envA) hA s a} scEq
                (inhSetHPlaceEmpty inhR)
         Right ((scT, Null) ** pT) =>
@@ -1291,10 +1291,10 @@ mutual
           case eitherEq
                  (usePlace (setPlace n (Pagurus.Status.singleton AOwned) scT) n id nm) of
             Left (d ** pU) =>
-              void (leftNotRight (trans (sym (checkExprAsgPtrUseFail pT pU)) eq))
+              void (leftNotRight (trans (sym (checkExprAsgPtrUseFail (ghostCopyLeakFalseChk eq) pT pU)) eq))
             Right (sc2 ** pU) =>
               let ht = ihs.takeIH ev sc0 scT Owner pT oa
-                  scEq = rightInj (trans (sym (checkExprAsgPtrOwner pT pU)) eq)
+                  scEq = rightInj (trans (sym (checkExprAsgPtrOwner (ghostCopyLeakFalseChk eq) pT pU)) eq)
               in exprAsgUse_b {fk = fk} k rec ihs inh oa ev eq pT scEq (htFromOk ht) (htTaken ht) pU
 
   ||| `usePlace` of leftover intern of `a` fails: intern is already unsafe.
@@ -1533,7 +1533,7 @@ mutual
   inhNoTakeLeftover_b (S k) rec ihs inh oa (HEAsgPtr w envA hA evR) {e0 = EAssign id n nm Ptr rhs} pT veq =
       case eitherEq (takeOwner ctx sc0 rhs) of
         Left (d ** pR) =>
-          void (leftNotRight (trans (sym (takeAsgPtrLeft id n nm pR)) pT))
+          void (leftNotRight (trans (sym (takeAsgPtrLeft id n nm (ghostCopyLeakFalseTake pT) pR)) pT))
         Right ((scR, flR) ** pR) =>
           (rec k (ltSucc k)).inhNoTakeLeftover {fk = fromLteSucc fk} ihs inh oa evR pR veq
   inhNoTakeLeftover_b k rec ihs inh oa (HEUse envA hA evs) pT veq =
@@ -1604,7 +1604,7 @@ mutual
   inhNotPtrExpr_b (S k) rec ihs inh oa (HEAsgPtr w envA hA evR) {e0 = EAssign id n nm Ptr rhs} eq veq =
       case eitherEq (takeOwner ctx sc0 rhs) of
         Left (d ** pT) =>
-          void (leftNotRight (trans (sym (checkExprAsgPtrLeft id n nm pT)) eq))
+          void (leftNotRight (trans (sym (checkExprAsgPtrLeft id n nm (ghostCopyLeakFalseChk eq) pT)) eq))
         Right ((scR, fl) ** pT) =>
           (rec k (ltSucc k)).inhNoTakeLeftover {fk = fromLteSucc fk} ihs inh oa evR pT veq
   inhNotPtrExpr_b k rec ihs inh oa (HEUse envA hA evs) eq veq =

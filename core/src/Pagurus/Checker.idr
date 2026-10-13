@@ -220,6 +220,67 @@ valuePlaces (ENull _) = []
 valuePlaces (EUse _ _) = []
 valuePlaces (EUnsupported _ _) = []
 
+||| Non-empty place list. Fresh malloc and realloc name no place.
+public export
+hasPlace : List Place -> Bool
+hasPlace [] = False
+hasPlace (_ :: _) = True
+
+||| A copy that still names a pointer place. Storing it into a pointer
+||| destination leaves that place a use-safe owner outside `nestPlace`.
+||| Fresh malloc and realloc, and null or literals, name no place.
+||| A pointer assignment only propagates a leak already in its rhs.
+||| A direct `q = p`, `q = malloc()`, or `q = (x = malloc())` is not a leak.
+public export
+ghostCopyLeak : Expr -> Bool
+ghostCopyLeak (EAssign _ _ _ Copy rhs) =
+  maybeLivePtr rhs && hasPlace (valuePlaces rhs)
+ghostCopyLeak (EAssign _ _ _ Ptr rhs) = ghostCopyLeak rhs
+ghostCopyLeak _ = False
+
+||| Pointer store of a copy that still names a live pointer place.
+public export
+ghostCopyDiag : Nat -> String -> Diag
+ghostCopyDiag id nm =
+  MkDiag KUnproven
+    ("pointer assignment to `" ++ nm ++ "` copies a live pointer without taking it")
+    id "assigned here"
+    []
+    "the source stays a use-safe owner, so this alias is not tracked; move the pointer instead"
+
+export
+ghostCopyLeakDirect : ghostCopyLeak (EVar 0 1 "p") = False
+ghostCopyLeakDirect = Refl
+
+export
+ghostCopyLeakMalloc : ghostCopyLeak (EMalloc 0 []) = False
+ghostCopyLeakMalloc = Refl
+
+export
+ghostCopyLeakCopyMalloc :
+  ghostCopyLeak (EAssign 0 1 "x" Copy (EMalloc 2 [])) = False
+ghostCopyLeakCopyMalloc = Refl
+
+export
+ghostCopyLeakCopyNull :
+  ghostCopyLeak (EAssign 0 1 "x" Copy (ENull 2)) = False
+ghostCopyLeakCopyNull = Refl
+
+export
+ghostCopyLeakCopyVar :
+  ghostCopyLeak (EAssign 0 1 "x" Copy (EVar 2 3 "p")) = True
+ghostCopyLeakCopyVar = Refl
+
+export
+ghostCopyLeakPtrOfCopy :
+  ghostCopyLeak (EAssign 0 1 "r" Ptr (EAssign 2 3 "x" Copy (EVar 4 5 "p"))) = True
+ghostCopyLeakPtrOfCopy = Refl
+
+export
+ghostCopyLeakCopyOfPtrMalloc :
+  ghostCopyLeak (EAssign 0 1 "x" Copy (EAssign 2 3 "r" Ptr (EMalloc 4 []))) = True
+ghostCopyLeakCopyOfPtrMalloc = Refl
+
 ||| True when any place is in both lists.
 public export
 placesHitBoth : List Place -> List Place -> List Place -> Bool
@@ -496,13 +557,17 @@ nestAssigns _ = []
 public export
 nestPlace : Expr -> List Place
 nestPlace (EVar _ p _) = [p]
-nestPlace (EAssign _ p _ Ptr rhs) =
-  let rest = nestAssigns rhs in
-  if maybeLivePtr rhs then p :: rest else rest
+nestPlace (EAssign id p nm Ptr rhs) = nestAssigns (EAssign id p nm Ptr rhs)
 -- Copy assignment uses the rhs; it does not move it. `valuePlaces`
 -- still denote that source, so `f(x = p, g(p))` is `nestedMixed`.
 nestPlace (EAssign _ _ _ Copy rhs) = valuePlaces rhs
 nestPlace _ = []
+
+||| A pointer assignment's borrow places are its nested destinations.
+export
+nestPlaceAsgPtr : (id : Nat) -> (dest : Place) -> (nm : String) -> (rhs : Expr) ->
+  nestPlace (EAssign id dest nm Ptr rhs) = nestAssigns (EAssign id dest nm Ptr rhs)
+nestPlaceAsgPtr _ _ _ _ = Refl
 
 ||| Borrow-argument places for `nestedMixed`. Extras are consumes.
 public export
@@ -821,7 +886,9 @@ mutual
   takeOwner ctx sc (EAssign id n nm ty rhs) =
     case ty of
       Copy => mapToGhost (checkExpr ctx sc rhs)
-      Ptr => takeAssignPtrFrom id n nm (takeOwner ctx sc rhs)
+      Ptr => case ghostCopyLeak rhs of
+        True => Left (ghostCopyDiag id nm)
+        False => takeAssignPtrFrom id n nm (takeOwner ctx sc rhs)
   takeOwner ctx sc (ECall id callee args) =
     reallocOwner (isRealloc callee && not (isDefined ctx callee))
       (checkCall ctx sc id callee args)
@@ -833,7 +900,9 @@ mutual
   assignPlace ctx sc id n nm ty rhs asMove =
     case ty of
       Copy => checkExpr ctx sc rhs
-      Ptr => assignPtrFrom asMove id n nm (takeOwner ctx sc rhs)
+      Ptr => case ghostCopyLeak rhs of
+        True => Left (ghostCopyDiag id nm)
+        False => assignPtrFrom asMove id n nm (takeOwner ctx sc rhs)
 
   public export
   argsBorrowFrom : Ctx -> List Expr -> Either Diag Scopes -> Either Diag Scopes
@@ -930,11 +999,15 @@ mutual
       Ptr =>
         case init of
           Nothing => Right (declarePlace n (Pagurus.Status.singleton AEmpty) sc)
-          Just e => declPtrFrom id n nm (takeOwner ctx sc e)
+          Just e => case ghostCopyLeak e of
+            True => Left (ghostCopyDiag id nm)
+            False => declPtrFrom id n nm (takeOwner ctx sc e)
   checkStmt (S fuel) ctx sc (SAssign id n nm ty rhs) =
     case ty of
       Copy => checkExpr ctx sc rhs
-      Ptr => stmtAsgPtrFrom n (takeOwner ctx sc rhs)
+      Ptr => case ghostCopyLeak rhs of
+        True => Left (ghostCopyDiag id nm)
+        False => stmtAsgPtrFrom n (takeOwner ctx sc rhs)
   checkStmt (S fuel) ctx sc (SDrop id n nm) = dropPlace sc n id nm
   checkStmt (S fuel) ctx sc (SCall id callee args) = checkCall ctx sc id callee args
   checkStmt (S fuel) ctx sc (SReturn id (Just e)) =
@@ -1825,92 +1898,134 @@ callNilScope eq =
       void (leftNotRightChk (trans (sym (checkCallOpaque {args = []} pb pr pd)) eq))
 
 export
+assignPtrLeak :
+  {ctx : Ctx} -> {sc : Scopes} ->
+  {id : Nat} -> {n : Place} -> {nm : String} -> {rhs : Expr} ->
+  ghostCopyLeak rhs = True ->
+  assignPlace ctx sc id n nm Ptr rhs False = Left (ghostCopyDiag id nm)
+assignPtrLeak leak = rewrite leak in Refl
+
+export
 assignPtrLeft :
   (id : Nat) -> (n : Place) -> (nm : String) ->
   {ctx : Ctx} -> {sc : Scopes} -> {rhs : Expr} -> {d : Diag} ->
+  (leak : ghostCopyLeak rhs = False) ->
   takeOwner ctx sc rhs = Left d ->
   assignPlace ctx sc id n nm Ptr rhs False = Left d
-assignPtrLeft _ _ _ prf = rewrite prf in Refl
+assignPtrLeft _ _ _ leak prf = rewrite leak in rewrite prf in Refl
 
 export
 assignPtrOwner :
   {ctx : Ctx} -> {sc, sc1, sc2 : Scopes} -> {id : Nat} -> {n : Place} ->
   {nm : String} -> {rhs : Expr} ->
+  (leak : ghostCopyLeak rhs = False) ->
   takeOwner ctx sc rhs = Right (sc1, Owner) ->
   usePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n id nm = Right sc2 ->
   assignPlace ctx sc id n nm Ptr rhs False = Right sc2
-assignPtrOwner pT pU = rewrite pT in rewrite pU in Refl
+assignPtrOwner leak pT pU = rewrite leak in rewrite pT in rewrite pU in Refl
 
 export
 assignPtrUseFail :
   {ctx : Ctx} -> {sc, sc1 : Scopes} -> {id : Nat} -> {n : Place} ->
   {nm : String} -> {rhs : Expr} -> {d : Diag} ->
+  (leak : ghostCopyLeak rhs = False) ->
   takeOwner ctx sc rhs = Right (sc1, Owner) ->
   usePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n id nm = Left d ->
   assignPlace ctx sc id n nm Ptr rhs False = Left d
-assignPtrUseFail pT pU = rewrite pT in rewrite pU in Refl
+assignPtrUseFail leak pT pU = rewrite leak in rewrite pT in rewrite pU in Refl
 
 export
 assignPtrGhost :
   (id : Nat) -> (n : Place) -> (nm : String) ->
   {ctx : Ctx} -> {sc, sc1 : Scopes} -> {rhs : Expr} ->
+  (leak : ghostCopyLeak rhs = False) ->
   takeOwner ctx sc rhs = Right (sc1, Ghost) ->
   assignPlace ctx sc id n nm Ptr rhs False =
     Right (setPlace n (Pagurus.Status.singleton AEmpty) sc1)
-assignPtrGhost _ _ _ pT = rewrite pT in Refl
+assignPtrGhost _ _ _ leak pT = rewrite leak in rewrite pT in Refl
 
 export
 assignPtrNull :
   (id : Nat) -> (n : Place) -> (nm : String) ->
   {ctx : Ctx} -> {sc, sc1 : Scopes} -> {rhs : Expr} ->
+  (leak : ghostCopyLeak rhs = False) ->
   takeOwner ctx sc rhs = Right (sc1, Null) ->
   assignPlace ctx sc id n nm Ptr rhs False =
     Right (setPlace n (Pagurus.Status.singleton ANull) sc1)
-assignPtrNull _ _ _ pT = rewrite pT in Refl
+assignPtrNull _ _ _ leak pT = rewrite leak in rewrite pT in Refl
+
+export
+checkExprAsgPtrLeak :
+  {ctx : Ctx} -> {sc : Scopes} ->
+  {id : Nat} -> {n : Place} -> {nm : String} -> {rhs : Expr} ->
+  ghostCopyLeak rhs = True ->
+  checkExpr ctx sc (EAssign id n nm Ptr rhs) = Left (ghostCopyDiag id nm)
+checkExprAsgPtrLeak leak = rewrite leak in Refl
+
+||| A pointer store the checker accepted did not copy a named live pointer.
+export
+ghostCopyLeakFalseChk :
+  {ctx : Ctx} -> {sc, sc' : Scopes} ->
+  {id : Nat} -> {n : Place} -> {nm : String} -> {rhs : Expr} ->
+  checkExpr ctx sc (EAssign id n nm Ptr rhs) = Right sc' ->
+  ghostCopyLeak rhs = False
+ghostCopyLeakFalseChk eq = leakFalseGo (ghostCopyLeak rhs) Refl eq
+  where
+    leakFalseGo : (b : Bool) -> ghostCopyLeak rhs = b ->
+                  checkExpr ctx sc (EAssign id n nm Ptr rhs) = Right sc' ->
+                  ghostCopyLeak rhs = False
+    leakFalseGo True p eq1 =
+      void (leftNotRightChk (trans (sym (checkExprAsgPtrLeak p)) eq1))
+    leakFalseGo False p _ = p
 
 export
 checkExprAsgPtrLeft :
   (id : Nat) -> (n : Place) -> (nm : String) ->
   {ctx : Ctx} -> {sc : Scopes} -> {rhs : Expr} -> {d : Diag} ->
+  (leak : ghostCopyLeak rhs = False) ->
   takeOwner ctx sc rhs = Left d ->
   checkExpr ctx sc (EAssign id n nm Ptr rhs) = Left d
-checkExprAsgPtrLeft _ _ _ prf = rewrite prf in Refl
+checkExprAsgPtrLeft _ _ _ leak prf = rewrite leak in rewrite prf in Refl
 
 export
 checkExprAsgPtrOwner :
   {ctx : Ctx} -> {sc, sc1, sc2 : Scopes} -> {id : Nat} -> {n : Place} ->
   {nm : String} -> {rhs : Expr} ->
+  (leak : ghostCopyLeak rhs = False) ->
   takeOwner ctx sc rhs = Right (sc1, Owner) ->
   usePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n id nm = Right sc2 ->
   checkExpr ctx sc (EAssign id n nm Ptr rhs) = Right sc2
-checkExprAsgPtrOwner pT pU = rewrite pT in rewrite pU in Refl
+checkExprAsgPtrOwner leak pT pU = rewrite leak in rewrite pT in rewrite pU in Refl
 
 export
 checkExprAsgPtrUseFail :
   {ctx : Ctx} -> {sc, sc1 : Scopes} -> {id : Nat} -> {n : Place} ->
   {nm : String} -> {rhs : Expr} -> {d : Diag} ->
+  (leak : ghostCopyLeak rhs = False) ->
   takeOwner ctx sc rhs = Right (sc1, Owner) ->
   usePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n id nm = Left d ->
   checkExpr ctx sc (EAssign id n nm Ptr rhs) = Left d
-checkExprAsgPtrUseFail pT pU = rewrite pT in rewrite pU in Refl
+checkExprAsgPtrUseFail leak pT pU = rewrite leak in rewrite pT in rewrite pU in Refl
 
 export
 checkExprAsgPtrGhost :
   (id : Nat) -> (n : Place) -> (nm : String) ->
   {ctx : Ctx} -> {sc, sc1 : Scopes} -> {rhs : Expr} ->
+  (leak : ghostCopyLeak rhs = False) ->
   takeOwner ctx sc rhs = Right (sc1, Ghost) ->
   checkExpr ctx sc (EAssign id n nm Ptr rhs) =
     Right (setPlace n (Pagurus.Status.singleton AEmpty) sc1)
-checkExprAsgPtrGhost _ _ _ pT = rewrite pT in Refl
+checkExprAsgPtrGhost _ _ _ leak pT = rewrite leak in rewrite pT in Refl
 
 export
 checkExprAsgPtrNull :
   (id : Nat) -> (n : Place) -> (nm : String) ->
   {ctx : Ctx} -> {sc, sc1 : Scopes} -> {rhs : Expr} ->
+  (leak : ghostCopyLeak rhs = False) ->
   takeOwner ctx sc rhs = Right (sc1, Null) ->
   checkExpr ctx sc (EAssign id n nm Ptr rhs) =
     Right (setPlace n (Pagurus.Status.singleton ANull) sc1)
-checkExprAsgPtrNull _ _ _ pT = rewrite pT in Refl
+checkExprAsgPtrNull _ _ _ leak pT = rewrite leak in rewrite pT in Refl
 
 export
 takeMallocLeft :
@@ -1945,48 +2060,77 @@ takeAsgCopyRight :
 takeAsgCopyRight _ _ _ prf = rewrite prf in Refl
 
 export
+takeAsgPtrLeak :
+  {ctx : Ctx} -> {sc : Scopes} ->
+  {id : Nat} -> {n : Place} -> {nm : String} -> {rhs : Expr} ->
+  ghostCopyLeak rhs = True ->
+  takeOwner ctx sc (EAssign id n nm Ptr rhs) = Left (ghostCopyDiag id nm)
+takeAsgPtrLeak leak = rewrite leak in Refl
+
+||| A taken pointer store the checker accepted did not copy a named live pointer.
+export
+ghostCopyLeakFalseTake :
+  {ctx : Ctx} -> {sc : Scopes} -> {r : (Scopes, Flag)} ->
+  {id : Nat} -> {n : Place} -> {nm : String} -> {rhs : Expr} ->
+  takeOwner ctx sc (EAssign id n nm Ptr rhs) = Right r ->
+  ghostCopyLeak rhs = False
+ghostCopyLeakFalseTake eq = leakFalseGo (ghostCopyLeak rhs) Refl eq
+  where
+    leakFalseGo : (b : Bool) -> ghostCopyLeak rhs = b ->
+                  takeOwner ctx sc (EAssign id n nm Ptr rhs) = Right r ->
+                  ghostCopyLeak rhs = False
+    leakFalseGo True p eq1 =
+      void (leftNotRightChk (trans (sym (takeAsgPtrLeak p)) eq1))
+    leakFalseGo False p _ = p
+
+export
 takeAsgPtrLeft :
   (id : Nat) -> (n : Place) -> (nm : String) ->
   {ctx : Ctx} -> {sc : Scopes} -> {rhs : Expr} -> {d : Diag} ->
+  (leak : ghostCopyLeak rhs = False) ->
   takeOwner ctx sc rhs = Left d ->
   takeOwner ctx sc (EAssign id n nm Ptr rhs) = Left d
-takeAsgPtrLeft _ _ _ prf = rewrite prf in Refl
+takeAsgPtrLeft _ _ _ leak prf = rewrite leak in rewrite prf in Refl
 
 export
 takeAsgPtrOwner :
   {ctx : Ctx} -> {sc, sc1, sc2 : Scopes} -> {id : Nat} -> {n : Place} ->
   {nm : String} -> {rhs : Expr} ->
+  (leak : ghostCopyLeak rhs = False) ->
   takeOwner ctx sc rhs = Right (sc1, Owner) ->
   movePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n id nm = Right sc2 ->
   takeOwner ctx sc (EAssign id n nm Ptr rhs) = Right (sc2, Owner)
-takeAsgPtrOwner pT pM = rewrite pT in rewrite pM in Refl
+takeAsgPtrOwner leak pT pM = rewrite leak in rewrite pT in rewrite pM in Refl
 
 export
 takeAsgPtrGhost :
   (id : Nat) -> (n : Place) -> (nm : String) ->
   {ctx : Ctx} -> {sc, sc1 : Scopes} -> {rhs : Expr} ->
+  (leak : ghostCopyLeak rhs = False) ->
   takeOwner ctx sc rhs = Right (sc1, Ghost) ->
   takeOwner ctx sc (EAssign id n nm Ptr rhs) =
     Right (setPlace n (Pagurus.Status.singleton AEmpty) sc1, Ghost)
-takeAsgPtrGhost _ _ _ pT = rewrite pT in Refl
+takeAsgPtrGhost _ _ _ leak pT = rewrite leak in rewrite pT in Refl
 
 export
 takeAsgPtrNull :
   (id : Nat) -> (n : Place) -> (nm : String) ->
   {ctx : Ctx} -> {sc, sc1 : Scopes} -> {rhs : Expr} ->
+  (leak : ghostCopyLeak rhs = False) ->
   takeOwner ctx sc rhs = Right (sc1, Null) ->
   takeOwner ctx sc (EAssign id n nm Ptr rhs) =
     Right (setPlace n (Pagurus.Status.singleton ANull) sc1, Null)
-takeAsgPtrNull _ _ _ pT = rewrite pT in Refl
+takeAsgPtrNull _ _ _ leak pT = rewrite leak in rewrite pT in Refl
 
 export
 takeAsgPtrFail :
   {ctx : Ctx} -> {sc, sc1 : Scopes} -> {id : Nat} -> {n : Place} ->
   {nm : String} -> {rhs : Expr} -> {d : Diag} ->
+  (leak : ghostCopyLeak rhs = False) ->
   takeOwner ctx sc rhs = Right (sc1, Owner) ->
   movePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n id nm = Left d ->
   takeOwner ctx sc (EAssign id n nm Ptr rhs) = Left d
-takeAsgPtrFail pT pM = rewrite pT in rewrite pM in Refl
+takeAsgPtrFail leak pT pM = rewrite leak in rewrite pT in rewrite pM in Refl
 
 export
 takeVarMiss :
@@ -2270,74 +2414,130 @@ loopFixZero :
 loopFixZero _ _ _ _ = Refl
 
 export
+declPtrLeak :
+  {fuel : Nat} -> {ctx : Ctx} -> {sc : Scopes} ->
+  {id : Nat} -> {n : Place} -> {nm : String} -> {e : Expr} ->
+  ghostCopyLeak e = True ->
+  checkStmt (S fuel) ctx sc (SDecl id n nm Ptr (Just e)) = Left (ghostCopyDiag id nm)
+declPtrLeak leak = rewrite leak in Refl
+
+||| A pointer initialiser the checker accepted did not copy a named live pointer.
+export
+ghostCopyLeakFalseDecl :
+  {fuel : Nat} -> {ctx : Ctx} -> {sc, sc' : Scopes} ->
+  {id : Nat} -> {n : Place} -> {nm : String} -> {e : Expr} ->
+  checkStmt (S fuel) ctx sc (SDecl id n nm Ptr (Just e)) = Right sc' ->
+  ghostCopyLeak e = False
+ghostCopyLeakFalseDecl eq = leakFalseGo (ghostCopyLeak e) Refl eq
+  where
+    leakFalseGo : (b : Bool) -> ghostCopyLeak e = b ->
+                  checkStmt (S fuel) ctx sc (SDecl id n nm Ptr (Just e)) = Right sc' ->
+                  ghostCopyLeak e = False
+    leakFalseGo True p eq1 =
+      void (leftNotRightChk (trans (sym (declPtrLeak p)) eq1))
+    leakFalseGo False p _ = p
+
+export
 declPtrLeft :
   (fuel : Nat) -> (id : Nat) -> (n : Place) -> (nm : String) ->
   {ctx : Ctx} -> {sc : Scopes} -> {e : Expr} -> {d : Diag} ->
+  (leak : ghostCopyLeak e = False) ->
   takeOwner ctx sc e = Left d ->
   checkStmt (S fuel) ctx sc (SDecl id n nm Ptr (Just e)) = Left d
-declPtrLeft _ _ _ _ prf = rewrite prf in Refl
+declPtrLeft _ _ _ _ leak prf = rewrite leak in rewrite prf in Refl
 
 export
 declPtrOwner :
   (fuel : Nat) -> (id : Nat) -> (n : Place) -> (nm : String) ->
   {ctx : Ctx} -> {sc, sc1 : Scopes} -> {e : Expr} ->
+  (leak : ghostCopyLeak e = False) ->
   takeOwner ctx sc e = Right (sc1, Owner) ->
   checkStmt (S fuel) ctx sc (SDecl id n nm Ptr (Just e)) =
     Right (declarePlace n (Pagurus.Status.singleton AOwned) sc1)
-declPtrOwner _ _ _ _ prf = rewrite prf in Refl
+declPtrOwner _ _ _ _ leak prf = rewrite leak in rewrite prf in Refl
 
 export
 declPtrGhostEq :
   (fuel : Nat) -> (id : Nat) -> (n : Place) -> (nm : String) ->
   {ctx : Ctx} -> {sc, sc1 : Scopes} -> {e : Expr} ->
+  (leak : ghostCopyLeak e = False) ->
   takeOwner ctx sc e = Right (sc1, Ghost) ->
   checkStmt (S fuel) ctx sc (SDecl id n nm Ptr (Just e)) =
     Right (declarePlace n (Pagurus.Status.singleton AEmpty) sc1)
-declPtrGhostEq _ _ _ _ prf = rewrite prf in Refl
+declPtrGhostEq _ _ _ _ leak prf = rewrite leak in rewrite prf in Refl
 
 export
 declPtrNullEq :
   (fuel : Nat) -> (id : Nat) -> (n : Place) -> (nm : String) ->
   {ctx : Ctx} -> {sc, sc1 : Scopes} -> {e : Expr} ->
+  (leak : ghostCopyLeak e = False) ->
   takeOwner ctx sc e = Right (sc1, Null) ->
   checkStmt (S fuel) ctx sc (SDecl id n nm Ptr (Just e)) =
     Right (declarePlace n (Pagurus.Status.singleton ANull) sc1)
-declPtrNullEq _ _ _ _ prf = rewrite prf in Refl
+declPtrNullEq _ _ _ _ leak prf = rewrite leak in rewrite prf in Refl
+
+export
+stmtAsgPtrLeak :
+  {fuel : Nat} -> {ctx : Ctx} -> {sc : Scopes} ->
+  {id : Nat} -> {n : Place} -> {nm : String} -> {rhs : Expr} ->
+  ghostCopyLeak rhs = True ->
+  checkStmt (S fuel) ctx sc (SAssign id n nm Ptr rhs) = Left (ghostCopyDiag id nm)
+stmtAsgPtrLeak leak = rewrite leak in Refl
+
+||| A pointer statement the checker accepted did not copy a named live pointer.
+export
+ghostCopyLeakFalseStmt :
+  {fuel : Nat} -> {ctx : Ctx} -> {sc, sc' : Scopes} ->
+  {id : Nat} -> {n : Place} -> {nm : String} -> {rhs : Expr} ->
+  checkStmt (S fuel) ctx sc (SAssign id n nm Ptr rhs) = Right sc' ->
+  ghostCopyLeak rhs = False
+ghostCopyLeakFalseStmt eq = leakFalseGo (ghostCopyLeak rhs) Refl eq
+  where
+    leakFalseGo : (b : Bool) -> ghostCopyLeak rhs = b ->
+                  checkStmt (S fuel) ctx sc (SAssign id n nm Ptr rhs) = Right sc' ->
+                  ghostCopyLeak rhs = False
+    leakFalseGo True p eq1 =
+      void (leftNotRightChk (trans (sym (stmtAsgPtrLeak p)) eq1))
+    leakFalseGo False p _ = p
 
 export
 stmtAsgPtrLeft :
   (fuel : Nat) -> (id : Nat) -> (n : Place) -> (nm : String) ->
   {ctx : Ctx} -> {sc : Scopes} -> {rhs : Expr} -> {d : Diag} ->
+  (leak : ghostCopyLeak rhs = False) ->
   takeOwner ctx sc rhs = Left d ->
   checkStmt (S fuel) ctx sc (SAssign id n nm Ptr rhs) = Left d
-stmtAsgPtrLeft _ _ _ _ prf = rewrite prf in Refl
+stmtAsgPtrLeft _ _ _ _ leak prf = rewrite leak in rewrite prf in Refl
 
 export
 stmtAsgPtrOwner :
   (fuel : Nat) -> (id : Nat) -> (n : Place) -> (nm : String) ->
   {ctx : Ctx} -> {sc, sc1 : Scopes} -> {rhs : Expr} ->
+  (leak : ghostCopyLeak rhs = False) ->
   takeOwner ctx sc rhs = Right (sc1, Owner) ->
   checkStmt (S fuel) ctx sc (SAssign id n nm Ptr rhs) =
     Right (setPlace n (Pagurus.Status.singleton AOwned) sc1)
-stmtAsgPtrOwner _ _ _ _ prf = rewrite prf in Refl
+stmtAsgPtrOwner _ _ _ _ leak prf = rewrite leak in rewrite prf in Refl
 
 export
 stmtAsgPtrGhost :
   (fuel : Nat) -> (id : Nat) -> (n : Place) -> (nm : String) ->
   {ctx : Ctx} -> {sc, sc1 : Scopes} -> {rhs : Expr} ->
+  (leak : ghostCopyLeak rhs = False) ->
   takeOwner ctx sc rhs = Right (sc1, Ghost) ->
   checkStmt (S fuel) ctx sc (SAssign id n nm Ptr rhs) =
     Right (setPlace n (Pagurus.Status.singleton AEmpty) sc1)
-stmtAsgPtrGhost _ _ _ _ prf = rewrite prf in Refl
+stmtAsgPtrGhost _ _ _ _ leak prf = rewrite leak in rewrite prf in Refl
 
 export
 stmtAsgPtrNull :
   (fuel : Nat) -> (id : Nat) -> (n : Place) -> (nm : String) ->
   {ctx : Ctx} -> {sc, sc1 : Scopes} -> {rhs : Expr} ->
+  (leak : ghostCopyLeak rhs = False) ->
   takeOwner ctx sc rhs = Right (sc1, Null) ->
   checkStmt (S fuel) ctx sc (SAssign id n nm Ptr rhs) =
     Right (setPlace n (Pagurus.Status.singleton ANull) sc1)
-stmtAsgPtrNull _ _ _ _ prf = rewrite prf in Refl
+stmtAsgPtrNull _ _ _ _ leak prf = rewrite leak in rewrite prf in Refl
 
 export
 retVarLeft :

@@ -800,9 +800,9 @@ ownerAsgMove :
   movePlace (setPlace n (Pagurus.Status.singleton AOwned) sc1) n id nm = resM ->
   fl = Owner
 ownerAsgMove eq pT (Left d) pM =
-  void (leftNotRight (trans (sym (takeAsgPtrFail pT pM)) eq))
+  void (leftNotRight (trans (sym (takeAsgPtrFail (ghostCopyLeakFalseTake eq) pT pM)) eq))
 ownerAsgMove eq pT (Right sc2) pM =
-  sym (cong snd (rightInj (trans (sym (takeAsgPtrOwner pT pM)) eq)))
+  sym (cong snd (rightInj (trans (sym (takeAsgPtrOwner (ghostCopyLeakFalseTake eq) pT pM)) eq)))
 
 export
 reallocFresh :
@@ -884,7 +884,7 @@ mutual
     takeOwner ctx sc rhs = res ->
     fl = Owner
   ownerAsgGo id n nm eq r take (Left d) pT =
-    void (leftNotRight (trans (sym (takeAsgPtrLeft id n nm pT)) eq))
+    void (leftNotRight (trans (sym (takeAsgPtrLeft id n nm (ghostCopyLeakFalseTake eq) pT)) eq))
   ownerAsgGo id n nm eq r take (Right (sc1, Ghost)) pT =
     void (ghostNotOwner (ownerFlagTrue pT r take))
   ownerAsgGo id n nm eq r take (Right (sc1, Null)) pT =

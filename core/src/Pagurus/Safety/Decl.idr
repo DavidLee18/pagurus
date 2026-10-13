@@ -63,7 +63,7 @@ declPtrCrash :
   takeOwner ctx sc e = res ->
   SafeOut (Crash d) sc'
 declPtrCrash fuel id n nm ih eq r (Left _) pT =
-  void (leftNotRight (trans (sym (declPtrLeft fuel id n nm pT)) eq))
+  void (leftNotRight (trans (sym (declPtrLeft fuel id n nm (ghostCopyLeakFalseDecl eq) pT)) eq))
 declPtrCrash fuel id n nm ih eq r (Right (sc1, fl1)) pT =
   crashScope (ih sc1 fl1 pT)
 
@@ -81,13 +81,13 @@ declPtrOwn :
   takeOwner ctx sc e = res ->
   SafeOut (Ok (setC n AOwned c')) sc'
 declPtrOwn fuel id n nm ih eq r take (Left _) pT =
-  void (leftNotRight (trans (sym (declPtrLeft fuel id n nm pT)) eq))
+  void (leftNotRight (trans (sym (declPtrLeft fuel id n nm (ghostCopyLeakFalseDecl eq) pT)) eq))
 declPtrOwn fuel id n nm ih eq r take (Right (sc1, Ghost)) pT =
   void (ghostNotOwner (ownerFlagTrue pT r take))
 declPtrOwn fuel id n nm ih eq r take (Right (sc1, Null)) pT =
   void (nullNotOwner (ownerFlagTrue pT r take))
 declPtrOwn fuel id n nm ih eq r take (Right (sc1, Owner)) pT =
-  outRewrite (rightInj (trans (sym (declPtrOwner fuel id n nm pT)) eq))
+  outRewrite (rightInj (trans (sym (declPtrOwner fuel id n nm (ghostCopyLeakFalseDecl eq) pT)) eq))
     (OutOk (reprSetOwned (fromOk (ih sc1 Owner pT))))
 
 export
@@ -103,15 +103,15 @@ declPtrGhost :
   takeOwner ctx sc e = res ->
   SafeOut (Ok (setC n AEmpty c')) sc'
 declPtrGhost fuel id n nm ih eq r (Left _) pT =
-  void (leftNotRight (trans (sym (declPtrLeft fuel id n nm pT)) eq))
+  void (leftNotRight (trans (sym (declPtrLeft fuel id n nm (ghostCopyLeakFalseDecl eq) pT)) eq))
 declPtrGhost fuel id n nm ih eq r (Right (sc1, Ghost)) pT =
-  outRewrite (rightInj (trans (sym (declPtrGhostEq fuel id n nm pT)) eq))
+  outRewrite (rightInj (trans (sym (declPtrGhostEq fuel id n nm (ghostCopyLeakFalseDecl eq) pT)) eq))
     (OutOk (reprSetEmpty (fromOk (ih sc1 Ghost pT))))
 declPtrGhost fuel id n nm ih eq r (Right (sc1, Null)) pT =
-  outRewrite (rightInj (trans (sym (declPtrNullEq fuel id n nm pT)) eq))
+  outRewrite (rightInj (trans (sym (declPtrNullEq fuel id n nm (ghostCopyLeakFalseDecl eq) pT)) eq))
     (OutOk (reprSetFitEmpty (fromOk (ih sc1 Null pT))))
 declPtrGhost fuel id n nm ih eq r (Right (sc1, Owner)) pT =
-  outRewrite (rightInj (trans (sym (declPtrOwner fuel id n nm pT)) eq))
+  outRewrite (rightInj (trans (sym (declPtrOwner fuel id n nm (ghostCopyLeakFalseDecl eq) pT)) eq))
     (OutOk (reprSetFitEmpty (fromOk (ih sc1 Owner pT))))
 
 export
@@ -127,13 +127,13 @@ declPtrNull :
   takeOwner ctx sc e = res ->
   SafeOut (Ok (setC n ANull c')) sc'
 declPtrNull fuel id n nm ih eq r (Left _) pT =
-  void (leftNotRight (trans (sym (declPtrLeft fuel id n nm pT)) eq))
+  void (leftNotRight (trans (sym (declPtrLeft fuel id n nm (ghostCopyLeakFalseDecl eq) pT)) eq))
 declPtrNull fuel id n nm ih eq r (Right (sc1, Ghost)) pT =
-  outRewrite (rightInj (trans (sym (declPtrGhostEq fuel id n nm pT)) eq))
+  outRewrite (rightInj (trans (sym (declPtrGhostEq fuel id n nm (ghostCopyLeakFalseDecl eq) pT)) eq))
     (OutOk (reprSetFitNull (fromOk (ih sc1 Ghost pT))))
 declPtrNull fuel id n nm ih eq r (Right (sc1, Null)) pT =
-  outRewrite (rightInj (trans (sym (declPtrNullEq fuel id n nm pT)) eq))
+  outRewrite (rightInj (trans (sym (declPtrNullEq fuel id n nm (ghostCopyLeakFalseDecl eq) pT)) eq))
     (OutOk (reprSetNull (fromOk (ih sc1 Null pT))))
 declPtrNull fuel id n nm ih eq r (Right (sc1, Owner)) pT =
-  outRewrite (rightInj (trans (sym (declPtrOwner fuel id n nm pT)) eq))
+  outRewrite (rightInj (trans (sym (declPtrOwner fuel id n nm (ghostCopyLeakFalseDecl eq) pT)) eq))
     (OutOk (reprSetFitNull (fromOk (ih sc1 Owner pT))))

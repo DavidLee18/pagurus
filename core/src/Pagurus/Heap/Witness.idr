@@ -123,7 +123,7 @@ mallocDeclAccepted :
   (fuel : Nat) ->
   checkStmt (S fuel) EmptyCtx [] MallocP =
     Right (declarePlace 0 (Pagurus.Status.singleton AOwned) [])
-mallocDeclAccepted fuel = declPtrOwner fuel 1 0 "p" takeMallocNil
+mallocDeclAccepted fuel = declPtrOwner fuel 1 0 "p" Refl takeMallocNil
 
 ||| `dropPlace` of a unique owner is public and computes.
 export

@@ -1206,9 +1206,12 @@ ghostSrcVoid (EUnsupported _ _) HEUnsup _ _ veq _ _ =
   void (hvNoneNotPtrF veq)
 
 ||| The borrow expression that yielded `HVPtr a` names the use-safe owner.
-||| A pointer store of a copy that still names a place is `Left`
-||| (`ghostCopyLeak`). A `Ghost` store is the `Ghost` arm: its destination
-||| is `AEmpty`, and the value is a fresh address or a missing name.
+||| The first component is a `valuePlaces` entry (`assignAlias`). The
+||| second is a `nestPlace` entry, which may also name a destination
+||| stored inside a call. A pointer store of a copy that still names a
+||| place is `Left` (`ghostCopyLeak`). A `Ghost` store is the `Ghost`
+||| arm: its destination is `AEmpty`, and the value is a fresh address
+||| or a missing name.
 headNamesOwner :
   {funs : List Fun} -> {ctx : Ctx} -> {e : Expr} ->
   {env, env' : HEnv} -> {h, h' : Heap} -> {sc, sc' : Scopes} -> {a : Addr} ->
@@ -1218,7 +1221,7 @@ headNamesOwner :
   checkExpr ctx sc e = Right sc' ->
   HEvalExpr {funs} env h e (HROk (HVPtr a) env' h') ->
   OverApprox env h sc ->
-  placeIn own.ownQ (nestPlace e) = True
+  (placeIn own.ownQ (valuePlaces e) = True, placeIn own.ownQ (nestPlace e) = True)
 headNamesOwner own oa eq ev oa0 = resGo e ev Refl eq
   where
     hrOkValEq : {v1, v2 : HVal} -> {e1, e2 : HEnv} -> {h1, h2 : Heap} ->
@@ -1358,7 +1361,8 @@ headNamesOwner own oa eq ev oa0 = resGo e ev Refl eq
             HEvalExpr {funs} env h e1 (HROk v envR hR) ->
             HROk v envR hR = HROk (HVPtr a) env' h' ->
             checkExpr ctx sc e1 = Right sc' ->
-            placeIn own.ownQ (nestPlace e1) = True
+            (placeIn own.ownQ (valuePlaces e1) = True,
+             placeIn own.ownQ (nestPlace e1) = True)
     resGo (ELit _) HELit prf _ = void (hvCopyNotPtrF (hrOkValEq prf))
     resGo (ENull _) HENull prf _ = void (hvNoneNotPtrF (hrOkValEq prf))
     resGo (EVar nid n nm) (HEVarLive b look _) prf pChk =
@@ -1367,7 +1371,8 @@ headNamesOwner own oa eq ev oa0 = resGo e ev Refl eq
           envEq = hrOkEnvEq prf
           lookB = replace {p = \en => lookupH n en = Just (HVPtr b)} envEq look
           lookA = replace {p = \x => lookupH n env' = Just (HVPtr x)} same lookB
-      in varGo (own.ownQ == n) Refl pE lookB lookA
+          pin = varGo (own.ownQ == n) Refl pE lookB lookA
+      in (pin, pin)
       where
         hrOkValEq : {v1, v2 : HVal} -> {e1, e2 : HEnv} -> {h1, h2 : Heap} ->
                     HROk v1 e1 h1 = HROk v2 e2 h2 -> v1 = v2
@@ -1428,7 +1433,8 @@ headNamesOwner own oa eq ev oa0 = resGo e ev Refl eq
       in void (freshOwnerVoid oaPre ownF)
     resGo (EAssign nid n nm Copy rhs) (HEAsgCopy _ _ _ evR) prf pChk =
       let pR = trans (sym (checkExprAsgCopy nid n nm)) pChk
-      in placeInAppendL {ys = nestBuried rhs} (copyGo rhs evR prf pR)
+          pinV = copyGo rhs evR prf pR
+      in (pinV, placeInAppendL {ys = nestBuried rhs} pinV)
       where
         ||| `valuePlaces` of the copied expression. A call, malloc, or use
         ||| may name a destination `valuePlaces` omits; the caller appends
@@ -1439,11 +1445,12 @@ headNamesOwner own oa eq ev oa0 = resGo e ev Refl eq
                  HROk v envR hR = HROk (HVPtr a) env' h' ->
                  checkExpr ctx sc e1 = Right sc' ->
                  placeIn own.ownQ (valuePlaces e1) = True
-        copyGo (EVar i q nm1) ev prf0 p0 = resGo (EVar i q nm1) ev prf0 p0
-        copyGo (ELit i) ev prf0 p0 = resGo (ELit i) ev prf0 p0
-        copyGo (ENull i) ev prf0 p0 = resGo (ENull i) ev prf0 p0
+        copyGo (EVar i q nm1) ev prf0 p0 =
+          fst (resGo (EVar i q nm1) ev prf0 p0)
+        copyGo (ELit i) ev prf0 p0 = fst (resGo (ELit i) ev prf0 p0)
+        copyGo (ENull i) ev prf0 p0 = fst (resGo (ENull i) ev prf0 p0)
         copyGo (EUnsupported i reason) ev prf0 p0 =
-          resGo (EUnsupported i reason) ev prf0 p0
+          fst (resGo (EUnsupported i reason) ev prf0 p0)
         copyGo (EAssign i q nm1 Copy rhs1) (HEAsgCopy _ _ _ evR) prf0 p0 =
           let pR = trans (sym (checkExprAsgCopy i q nm1)) p0
           in copyGo rhs1 evR prf0 pR
@@ -1484,8 +1491,9 @@ headNamesOwner own oa eq ev oa0 = resGo e ev Refl eq
         copyGo (EUse _ _) (HEUse _ _ _) prf0 _ =
           void (hvNoneNotPtrF (hrOkValEq prf0))
     resGo (EAssign nid n nm Ptr rhs) (HEAsgPtr v env1 h1 evR) prf pChk =
-      placeInAppendL {ys = nestBuried rhs}
-        (assignNestOwner nid n nm rhs evR prf pChk)
+      let pinN = assignNestOwner nid n nm rhs evR prf pChk
+      in (nestAssignsInValue (EAssign nid n nm Ptr rhs) own.ownQ pinN,
+          placeInAppendL {ys = nestBuried rhs} pinN)
     resGo (ECall id callee args) (HERealloc pName _ env1 h1 evs) prf pChk =
       let pCall = trans (sym (checkExprCall ctx sc id callee args)) pChk
           oaPre = reallocCallOA {id} {callee} {args} pName pCall evs oa0
@@ -1502,6 +1510,44 @@ headNamesOwner own oa eq ev oa0 = resGo e ev Refl eq
     resGo (EUse _ _) (HEUse _ _ _) prf _ = void (hvNoneNotPtrF (hrOkValEq prf))
     resGo (EUnsupported _ _) HEUnsup prf _ = void (hvNoneNotPtrF (hrOkValEq prf))
 
+||| Cell and frame facts for an accepted tail. Filled outside this mutual
+||| (`ownerCellGo` / `ownerFrameGo`) so the Restore SCC does not grow.
+||| `uk` is the post-head environment: `bindOkJust` needs it when a nested
+||| user call rebuilds `BindOk`.
+public export
+record OwnerIHs (funs : List Fun) (ctx : Ctx) where
+  constructor MkOwnerIHs
+  ownerCell :
+    {callee : String} -> {es : List Expr} -> {ms : List Consume} ->
+    {env, env1 : HEnv} -> {h, h1 : Heap} -> {sc, sc' : Scopes} -> {a : Addr} ->
+    UniqueKeys env ->
+    (own : Own env sc a) ->
+    OverApprox env h sc ->
+    argsHit ctx.summaries own.ownQ es = False ->
+    placeIn own.ownQ (aliasConsumePlaces es ms) = False ->
+    nestedMixed ctx es ms = False ->
+    assignAlias es ms = False ->
+    mixedAlias es ms = False ->
+    checkArgsModes ctx sc callee es ms = Right sc' ->
+    HEvalExprs {funs} env h es (HROk HVNone env1 h1) ->
+    cell h1 a = Just Live
+  ownerFrame :
+    {fid : Nat} -> {ps : List Param} ->
+    {callee : String} -> {es : List Expr} -> {ms : List Consume} ->
+    {env, env1 : HEnv} -> {h, h1 : Heap} -> {sc, sc' : Scopes} -> {a : Addr} ->
+    UniqueKeys env ->
+    (own : Own env sc a) ->
+    OverApprox env h sc ->
+    argsHit ctx.summaries own.ownQ es = False ->
+    placeIn own.ownQ (aliasConsumePlaces es ms) = False ->
+    nestedMixed ctx es ms = False ->
+    assignAlias es ms = False ->
+    mixedAlias es ms = False ->
+    checkArgsModes ctx sc callee es ms = Right sc' ->
+    (evs : HEvalExprs {funs} env h es (HROk HVNone env1 h1)) ->
+    noOwnerHere (bindFrame ps (collectArgVals evs)) (bindParams fid ps ms) a = False ->
+    Void
+
 ||| Cell of `a` stays live across a tail that does not free the owner.
 heldOwnerCell :
   {funs : List Fun} -> {ctx : Ctx} ->
@@ -1511,13 +1557,14 @@ heldOwnerCell :
   (own : Own env sc a) ->
   OverApprox env h sc ->
   argsHit ctx.summaries own.ownQ es = False ->
+  placeIn own.ownQ (aliasConsumePlaces es ms) = False ->
   nestedMixed ctx es ms = False ->
   assignAlias es ms = False ->
   mixedAlias es ms = False ->
   checkArgsModes ctx sc callee es ms = Right sc' ->
   HEvalExprs {funs} env h es (HROk HVNone env1 h1) ->
   cell h1 a = Just Live
-heldOwnerCell own oa _ _ _ _ eq HEArgsNil =
+heldOwnerCell own oa _ _ _ _ _ eq HEArgsNil =
   let scEq = rightInj (trans (sym (checkArgsModesNil ctx sc callee ms)) eq)
   in ownLive (oaRewrite scEq oa) (ownRewrite scEq own)
 
@@ -1532,6 +1579,7 @@ ownerFrameVoid :
   (own : Own env sc a) ->
   OverApprox env h sc ->
   argsHit ctx.summaries own.ownQ es = False ->
+  placeIn own.ownQ (aliasConsumePlaces es ms) = False ->
   nestedMixed ctx es ms = False ->
   assignAlias es ms = False ->
   mixedAlias es ms = False ->
@@ -1539,11 +1587,13 @@ ownerFrameVoid :
   (evs : HEvalExprs {funs} env h es (HROk HVNone env1 h1)) ->
   noOwnerHere (bindFrame ps (collectArgVals evs)) (bindParams fid ps ms) a = False ->
   Void
-ownerFrameVoid {ps = []} own oa _ _ _ _ _ evs pno =
+ownerFrameVoid {ps = []} own oa _ _ _ _ _ _ evs pno =
   void (trueNotFalse
     (replace {p = \e => noOwnerHere e (bindParams fid [] ms) a = False}
        (bindFrameNil (collectArgVals evs)) pno))
-ownerFrameVoid own oa hit pn pa pm eq HEArgsNil pno =
+ownerFrameVoid {ms = []} own oa _ _ _ _ _ _ evs pno =
+  extraFrameNotOwner fid ps (collectArgVals evs) a pno
+ownerFrameVoid own oa hit _ pn pa pm eq HEArgsNil pno =
   noOwnerHereMissVoid fid ps ms a pno
 
 --------------------------------------------------------------------------------
@@ -3897,6 +3947,7 @@ mutual
   bindOkJust :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
     {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
+    {auto oih : OwnerIHs funs ctx} ->
     {fid : Nat} -> {ps : List Param} ->
     {callee : String} -> {es : List Expr} -> {ms : List Consume} ->
     {env, env1 : HEnv} -> {h, h1 : Heap} -> {sc, sc' : Scopes} ->
@@ -4044,6 +4095,7 @@ mutual
   bindOkConsumePtr :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
     {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
+    {auto oih : OwnerIHs funs ctx} ->
     {fid : Nat} -> {id, pl : Nat} -> {nm : String} -> {ps : List Param} ->
     {e : Expr} -> {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
     {callee : String} ->
@@ -4103,6 +4155,7 @@ mutual
   bindOkExtraPtr :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
     {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
+    {auto oih : OwnerIHs funs ctx} ->
     {fid : Nat} -> {id, pl : Nat} -> {nm : String} -> {ps : List Param} ->
     {e : Expr} -> {es : List Expr} -> {callee : String} ->
     {env, envA, env1 : HEnv} -> {h, hA, h1 : Heap} -> {sc, sc' : Scopes} ->
@@ -4162,6 +4215,7 @@ mutual
   bindOkBorrowPtr :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
     {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
+    {auto oih : OwnerIHs funs ctx} ->
     {fid : Nat} -> {id, pl : Nat} -> {nm : String} -> {ps : List Param} ->
     {e : Expr} -> {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
     {callee : String} ->
@@ -4232,6 +4286,7 @@ mutual
       ownFrame : (own : Own envA sc1 a) ->
                  OverApprox envA hA sc1 ->
                  argsHit ctx.summaries own.ownQ es = False ->
+                 placeIn own.ownQ (aliasConsumePlaces es ms) = False ->
                  mixedAlias es ms = False ->
                  nestedMixed ctx es ms = False ->
                  assignAlias es ms = False ->
@@ -4245,9 +4300,9 @@ mutual
                          (HVPtr a :: collectArgVals evEs) **
                    bindOkFrom {fid} {h = h1} (MkParam id pl nm Ptr :: ps) (m :: ms)
                      (HVPtr a :: collectArgVals evEs) = Just bok)
-      ownFrame _ _ _ _ _ _ _ live1 (_ ** eqb) False nh =
+      ownFrame _ _ _ _ _ _ _ _ live1 (_ ** eqb) False nh =
         bindOkFromPtrBorrowUnheld {id} {pl} {nm} eqb live1 nh pc
-      ownFrame own oaA hit pm1 pn1 pa1 pEs live1 (_ ** eqb) True hd =
+      ownFrame own oaA hit quiet pm1 pn1 pa1 pEs live1 (_ ** eqb) True hd =
         ownNuo (noOwnerHere (bindFrame ps (collectArgVals evEs))
                   (bindParams fid ps ms) a) Refl
         where
@@ -4261,8 +4316,8 @@ mutual
           ownNuo True pno =
             bindOkFromPtrBorrowHeld {id} {pl} {nm} eqb live1 hd pno pc
           ownNuo False pno =
-            void (ownerFrameVoid {funs} {ctx} {fid} {ps} {es} {ms} {a}
-                    own oaA hit pn1 pa1 pm1 pEs evEs pno)
+            void (oih.ownerFrame (exprUK uk evE) own oaA hit quiet pn1 pa1 pm1
+                    pEs evEs pno)
       ownerGo : (sc1 : Scopes) ->
                 (pE : checkExpr ctx sc e = Right sc1) ->
                 (pEs : checkArgsModes ctx sc1 callee es ms = Right sc') ->
@@ -4326,11 +4381,12 @@ mutual
                 (q ** st ** (look, lp, safe, has, nb)) =
                   ownerHereWitness (exprUK uk evE) oaA pnoF
                 own = MkOwn q st look lp safe has nb
-                pin = headNamesOwner {funs} own oaA pE evE oa
+                (pinV, pin) = headNamesOwner {funs} own oaA pE evE oa
                 hit = borrowPlaceQuietTail {e} pc pin pn
-                live1 = heldOwnerCell {funs} {ctx} own oaA hit pnO paO pmO pO evEs
+                quiet = consumeQuietTail {e} pc pinV pa
+                live1 = oih.ownerCell (exprUK uk evE) own oaA hit quiet pnO paO pmO pO evEs
                 rec = tailBok sc1 pO pmO pnO paO oaA
-            in ownFrame own oaA hit pmO pnO paO pO live1 rec
+            in ownFrame own oaA hit quiet pmO pnO paO pO live1 rec
                  (heldPtr (bindFrame ps (collectArgVals evEs)) a) Refl
       nEnv : (sc1 : Scopes) ->
              (pE : checkExpr ctx sc e = Right sc1) ->

@@ -43,7 +43,7 @@ argsBorrowCrashH :
   checkExpr ctx sc e = res ->
   HSafeRes (HRCrash c) sc'
 argsBorrowCrashH es ih eq (Left _) pE =
-  void (leftNotRight (trans (sym (argsBorrowLeft es pE)) eq))
+  void (leftNotRight (trans (sym (argsBorrowLeft es (borrowHeldFreesFalse eq) pE)) eq))
 argsBorrowCrashH es ih eq (Right sc1) pE =
   hrCrashScope (ih sc1 pE)
 
@@ -64,9 +64,10 @@ argsBorrowConsH :
   checkExpr ctx sc e = res ->
   HSafeRes o sc'
 argsBorrowConsH es ihE ihEs eq (Left _) pE =
-  void (leftNotRight (trans (sym (argsBorrowLeft es pE)) eq))
+  void (leftNotRight (trans (sym (argsBorrowLeft es (borrowHeldFreesFalse eq) pE)) eq))
 argsBorrowConsH es ihE ihEs eq (Right sc1) pE =
-  ihEs sc1 (trans (sym (argsBorrowRight es pE)) eq) (hrFromOk (ihE sc1 pE))
+  ihEs sc1 (trans (sym (argsBorrowRight es (borrowHeldFreesFalse eq) pE)) eq)
+    (hrFromOk (ihE sc1 pE))
 
 export
 argsMoveCrashH :

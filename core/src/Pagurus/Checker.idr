@@ -575,6 +575,36 @@ mutual
   nestStoreds [] = []
   nestStoreds (e :: es) = nestStored e ++ nestStoreds es
 
+||| True when a pointer assignment's value is an existing place, not a
+||| fresh allocation. `takeOwner` of that variable moves it, and `argFrees`
+||| of a variable is false, so an outer `argsHit` does not see the move.
+public export
+heldFromVar : Expr -> Bool
+heldFromVar (EVar _ _ _) = True
+heldFromVar (EAssign _ _ _ Ptr rhs) = heldFromVar rhs
+heldFromVar _ = False
+
+mutual
+  ||| Destinations that can hold an address which was already live.
+  ||| A fresh `malloc` is not one: its result is new, and a free of that
+  ||| result does not kill a cell the caller already owned. A bare variable
+  ||| is not a destination. The source is not included.
+  public export
+  nestHeld : Expr -> List Place
+  nestHeld (EAssign _ p _ Ptr rhs) =
+    let rest = nestHeld rhs in
+    if heldFromVar rhs then p :: rest else rest
+  nestHeld (EAssign _ _ _ Copy rhs) = nestHeld rhs
+  nestHeld (ECall _ _ args) = nestHelds args
+  nestHeld (EMalloc _ args) = nestHelds args
+  nestHeld (EUse _ args) = nestHelds args
+  nestHeld _ = []
+
+  public export
+  nestHelds : List Expr -> List Place
+  nestHelds [] = []
+  nestHelds (e :: es) = nestHeld e ++ nestHelds es
+
 ||| Pointer destinations stored inside a call, malloc, or use.
 ||| An assignment is walked through and its own destination is not
 ||| added: `nestAssigns` and `valuePlaces` already name that. The
@@ -700,6 +730,65 @@ export
 nestedGo : List (String, List Consume) -> List Place -> List Expr -> Bool
 nestedGo _ [] _ = False
 nestedGo acc (p :: ps) es0 = argsHit acc p es0 || nestedGo acc ps es0
+
+||| A borrow-only argument list (`malloc`, `use`, a builtin) stores an
+||| existing pointer and a later argument frees that destination.
+||| `nestBorrowPlaces` skips a consume argument, so `f(p, malloc(r = p, g(r)))`
+||| with `g` consuming `r` has `nestedMixed` and `argsHit` of `p` both false
+||| while `g` frees `p`. A fresh destination (`r = malloc()`) is not included.
+||| A bare `malloc(p, g(p))` is not included either: that free names `p`,
+||| which an outer `argsHit` already sees. `g(p, p = NULL)` is not this list.
+public export
+borrowHeldFrees : List (String, List Consume) -> List Expr -> Bool
+borrowHeldFrees acc es = nestedGo acc (nestHelds es) es
+
+public export
+borrowHeldAt : List Expr -> Nat
+borrowHeldAt [] = 0
+borrowHeldAt (e :: _) = exprId e
+
+public export
+borrowHeldDiag : List Expr -> Diag
+borrowHeldDiag es =
+  MkDiag KUnproven
+    "later argument frees a pointer stored by an earlier argument"
+    (borrowHeldAt es) "freed here"
+    []
+    "a malloc, use, or builtin argument stores an existing pointer and a later argument frees that temporary"
+
+||| `malloc(r = p, g(r))` where `g` consumes `r`.
+export
+borrowHeldFreesMallocDest :
+  borrowHeldFrees [("g", [Always])]
+    [ EAssign 1 2 "r" Ptr (EVar 3 4 "p")
+    , ECall 5 "g" [EVar 6 2 "r"]
+    ] = True
+borrowHeldFreesMallocDest = Refl
+
+||| A fresh cell stored and then freed is not an existing address.
+export
+borrowHeldFreesFresh :
+  borrowHeldFrees [("g", [Always])]
+    [ EAssign 1 2 "r" Ptr (EMalloc 3 [])
+    , ECall 4 "g" [EVar 5 2 "r"]
+    ] = False
+borrowHeldFreesFresh = Refl
+
+||| `malloc(p, g(p))` names no stored destination. The free of `p` is `argsHit`.
+export
+borrowHeldFreesBare :
+  borrowHeldFrees [("g", [Always])]
+    [ EVar 0 1 "p"
+    , ECall 2 "g" [EVar 3 1 "p"]
+    ] = False
+borrowHeldFreesBare = Refl
+
+||| Storing `p` without a later free of that destination.
+export
+borrowHeldFreesNoFree :
+  borrowHeldFrees [("g", [Always])]
+    [EAssign 1 2 "r" Ptr (EVar 3 4 "p")] = False
+borrowHeldFreesNoFree = Refl
 
 ||| Nested consume of a borrow-argument place (e.g. `f(p, g(p))` where `g`
 ||| consumes `p`, or `f(q = malloc(), g(q))`). Direct Never+May/Always of
@@ -958,6 +1047,33 @@ aliasBad ctx args callee =
   mixedAlias args (funModes ctx callee)
     || nestedMixed ctx args (funModes ctx callee)
     || assignAlias args (funModes ctx callee)
+
+||| `f(p, malloc(r = p, g(r)))` with modes `[Never, Always]`. The outer
+||| flags stay false: `g` frees `r`, not `p`, and a consume argument is
+||| not a `nestBorrowPlaces` entry. `checkArgsBorrow` rejects the malloc.
+export
+mallocHeldOuterAlias :
+  aliasBad
+    (MkCtx [("f", [Never, Always]), ("g", [Always])] ["f", "g"])
+    [ EVar 0 1 "p"
+    , EMalloc 2
+        [ EAssign 3 4 "r" Ptr (EVar 5 1 "p")
+        , ECall 6 "g" [EVar 7 4 "r"]
+        ]
+    ]
+    "f" = False
+mallocHeldOuterAlias = Refl
+
+||| `g(p, p = NULL)` stays accepted. Null is not a free of the borrowed place.
+export
+nullAssignNotAlias :
+  aliasBad
+    (MkCtx [("g", [Never, Never])] ["g"])
+    [ EVar 0 1 "p"
+    , EAssign 2 1 "p" Ptr (ENull 3)
+    ]
+    "g" = False
+nullAssignNotAlias = Refl
 
 public export
 paramStatus : Consume -> Nat -> Status
@@ -1240,7 +1356,10 @@ mutual
   export
   checkArgsBorrow : Ctx -> Scopes -> List Expr -> Either Diag Scopes
   checkArgsBorrow _ sc [] = Right sc
-  checkArgsBorrow ctx sc (e :: es) = argsBorrowFrom ctx es (checkExpr ctx sc e)
+  checkArgsBorrow ctx sc (e :: es) =
+    if borrowHeldFrees ctx.summaries (e :: es)
+      then Left (borrowHeldDiag (e :: es))
+      else argsBorrowFrom ctx es (checkExpr ctx sc e)
 
   public export
   argsMoveFrom : Ctx -> List Expr -> Either Diag (Scopes, Flag) -> Either Diag Scopes
@@ -1659,6 +1778,36 @@ argsHitTail : {acc : List (String, List Consume)} -> {p : Place} ->
   argsHit acc p (e :: es) = False -> argsHit acc p es = False
 argsHitTail prf = snd (orFalseC _ _ prf)
 
+||| `argsHit` does not reduce outside Checker. The head `argFrees` is the
+||| other half of `argsHitTail`.
+export
+argsHitHead : {acc : List (String, List Consume)} -> {p : Place} ->
+              {e : Expr} -> {es : List Expr} ->
+              argsHit acc p (e :: es) = False -> argFrees acc p e = False
+argsHitHead prf = fst (orFalseC _ _ prf)
+
+export
+argsFreeHead : {acc : List (String, List Consume)} -> {p : Place} ->
+               {e : Expr} -> {es : List Expr} ->
+               argsFree acc p (e :: es) = False -> argFrees acc p e = False
+argsFreeHead prf = fst (orFalseC _ _ prf)
+
+export
+argsFreeTail : {acc : List (String, List Consume)} -> {p : Place} ->
+               {e : Expr} -> {es : List Expr} ->
+               argsFree acc p (e :: es) = False -> argsFree acc p es = False
+argsFreeTail prf = snd (orFalseC _ _ prf)
+
+||| `argsFree` and `argsHit` are the same recursion, both opaque outside.
+export
+argsFreeIsHit : (acc : List (String, List Consume)) -> (p : Place) ->
+                (es : List Expr) ->
+                argsFree acc p es = argsHit acc p es
+argsFreeIsHit _ _ [] = Refl
+argsFreeIsHit acc p (e :: es) with (argFrees acc p e)
+  argsFreeIsHit acc p (e :: es) | False = argsFreeIsHit acc p es
+  argsFreeIsHit acc p (e :: es) | True = Refl
+
 nestedGoPlacesAppend : {acc : List (String, List Consume)} -> {xs, ys : List Place} ->
   {es : List Expr} ->
   nestedGo acc (xs ++ ys) es = False -> nestedGo acc ys es = False
@@ -1959,6 +2108,17 @@ export
 checkExprMalloc : (ctx : Ctx) -> (sc : Scopes) -> (id : Nat) -> (args : List Expr) ->
                   checkExpr ctx sc (EMalloc id args) = checkArgsBorrow ctx sc args
 checkExprMalloc _ _ _ _ = Refl
+
+||| `malloc(r = p, g(r))` is rejected before any scope step.
+export
+checkExprMallocHeldFree :
+  checkExpr (MkCtx [("g", [Always])] ["g"]) []
+    (EMalloc 0 [ EAssign 1 2 "r" Ptr (EVar 3 4 "p")
+               , ECall 5 "g" [EVar 6 2 "r"] ])
+    = Left (borrowHeldDiag
+        [ EAssign 1 2 "r" Ptr (EVar 3 4 "p")
+        , ECall 5 "g" [EVar 6 2 "r"] ])
+checkExprMallocHeldFree = Refl
 
 export
 checkExprVar : (ctx : Ctx) -> (sc : Scopes) -> (id : Nat) -> (n : Place) -> (nm : String) ->
@@ -2883,37 +3043,79 @@ retVarRight :
   checkStmt (S fuel) ctx sc (SReturn rid (Just (EVar nid n nm))) = Right sc1
 retVarRight _ _ _ prf = rewrite prf in Refl
 
+||| The stored-destination free is its own `Left`. It is not the head
+||| expression's failure, so the old cons equations need this flag quiet.
+export
+argsBorrowHeld :
+  {ctx : Ctx} -> {sc : Scopes} -> {e : Expr} -> {es : List Expr} ->
+  borrowHeldFrees ctx.summaries (e :: es) = True ->
+  checkArgsBorrow ctx sc (e :: es) = Left (borrowHeldDiag (e :: es))
+argsBorrowHeld prf = rewrite prf in Refl
+
+||| A successful borrow list did not free a stored existing pointer.
+||| `borrowHeldFrees` unfolds, so the flag is matched as a `Bool`, the
+||| same way `ghostCopyLeakFalseTake` matches its flag.
+export
+borrowHeldFreesFalse :
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {es : List Expr} ->
+  checkArgsBorrow ctx sc es = Right sc' ->
+  borrowHeldFrees ctx.summaries es = False
+borrowHeldFreesFalse {es = []} _ = Refl
+borrowHeldFreesFalse {es = e :: es} eq =
+  heldQuiet (borrowHeldFrees ctx.summaries (e :: es)) Refl eq
+  where
+    heldQuiet : (b : Bool) ->
+                borrowHeldFrees ctx.summaries (e :: es) = b ->
+                checkArgsBorrow ctx sc (e :: es) = Right sc' ->
+                b = False
+    heldQuiet False _ _ = Refl
+    heldQuiet True p eq1 =
+      void (leftNotRightChk (trans (sym (argsBorrowHeld p)) eq1))
+
 export
 argsBorrowLeft :
   (es : List Expr) ->
   {ctx : Ctx} -> {sc : Scopes} -> {e : Expr} -> {d : Diag} ->
+  (quiet : borrowHeldFrees ctx.summaries (e :: es) = False) ->
   checkExpr ctx sc e = Left d ->
   checkArgsBorrow ctx sc (e :: es) = Left d
-argsBorrowLeft _ prf = rewrite prf in Refl
+argsBorrowLeft _ quiet prf = rewrite quiet in rewrite prf in Refl
 
 export
 argsBorrowRight :
   (es : List Expr) ->
   {ctx : Ctx} -> {sc, sc1 : Scopes} -> {e : Expr} ->
+  (quiet : borrowHeldFrees ctx.summaries (e :: es) = False) ->
   checkExpr ctx sc e = Right sc1 ->
   checkArgsBorrow ctx sc (e :: es) = checkArgsBorrow ctx sc1 es
-argsBorrowRight _ prf = rewrite prf in Refl
+argsBorrowRight _ quiet prf = rewrite quiet in rewrite prf in Refl
 
 export
 argsBorrowSplit :
   {ctx : Ctx} -> {sc, sc' : Scopes} -> {e : Expr} -> {es : List Expr} ->
   checkArgsBorrow ctx sc (e :: es) = Right sc' ->
   (sc1 ** (checkExpr ctx sc e = Right sc1, checkArgsBorrow ctx sc1 es = Right sc'))
-argsBorrowSplit eq = splitGo (checkExpr ctx sc e) Refl
+argsBorrowSplit eq =
+  splitHeld (borrowHeldFrees ctx.summaries (e :: es)) Refl eq
   where
-    splitGo :
-      (res : Either Diag Scopes) ->
-      checkExpr ctx sc e = res ->
-      (sc1 ** (checkExpr ctx sc e = Right sc1, checkArgsBorrow ctx sc1 es = Right sc'))
-    splitGo (Left d) pE =
-      void (leftNotRightChk (trans (sym (argsBorrowLeft es pE)) eq))
-    splitGo (Right sc1) pE =
-      (sc1 ** (pE, trans (sym (argsBorrowRight es pE)) eq))
+    splitHeld : (b : Bool) ->
+                borrowHeldFrees ctx.summaries (e :: es) = b ->
+                checkArgsBorrow ctx sc (e :: es) = Right sc' ->
+                (sc1 ** (checkExpr ctx sc e = Right sc1,
+                         checkArgsBorrow ctx sc1 es = Right sc'))
+    splitHeld True p eq1 =
+      void (leftNotRightChk (trans (sym (argsBorrowHeld p)) eq1))
+    splitHeld False p eq1 = splitGo (checkExpr ctx sc e) Refl
+      where
+        splitGo :
+          (res : Either Diag Scopes) ->
+          checkExpr ctx sc e = res ->
+          (sc1 ** (checkExpr ctx sc e = Right sc1,
+                   checkArgsBorrow ctx sc1 es = Right sc'))
+        splitGo (Left d) pE =
+          void (leftNotRightChk (trans (sym (argsBorrowLeft es p pE)) eq1))
+        splitGo (Right sc1) pE =
+          (sc1 ** (pE, trans (sym (argsBorrowRight es p pE)) eq1))
 
 export
 argsMoveLeft :

@@ -552,8 +552,32 @@ nestAssigns (EAssign _ p _ Ptr rhs) =
   if maybeLivePtr rhs then p :: rest else rest
 nestAssigns _ = []
 
-||| Place a borrow argument still denotes: the variable, or the
-||| destinations of a pointer assignment (`f(q = malloc(), …)`).
+mutual
+  ||| Pointer-assignment destinations that stay live in the caller.
+  ||| A call, malloc, or use returns before the next argument, so a store
+  ||| in an argument is still there. The source is not included. A bare
+  ||| variable is not a destination, so f(g(p), h(p)) stays accepted.
+  ||| valuePlaces of a call stays empty, so a later move of the dest
+  ||| (f(g(r = p), r)) is not assignAlias.
+  public export
+  nestStored : Expr -> List Place
+  nestStored (EAssign _ p _ Ptr rhs) =
+    let rest = nestStored rhs in
+    if maybeLivePtr rhs then p :: rest else rest
+  nestStored (EAssign _ _ _ Copy rhs) = nestStored rhs
+  nestStored (ECall _ _ args) = nestStoreds args
+  nestStored (EMalloc _ args) = nestStoreds args
+  nestStored (EUse _ args) = nestStoreds args
+  nestStored _ = []
+
+  public export
+  nestStoreds : List Expr -> List Place
+  nestStoreds [] = []
+  nestStoreds (e :: es) = nestStored e ++ nestStoreds es
+
+||| Place a borrow argument still denotes: the variable, the
+||| destinations of a pointer assignment (`f(q = malloc(), …)`), or a
+||| destination stored inside a call, malloc, or use.
 public export
 nestPlace : Expr -> List Place
 nestPlace (EVar _ p _) = [p]
@@ -561,6 +585,9 @@ nestPlace (EAssign id p nm Ptr rhs) = nestAssigns (EAssign id p nm Ptr rhs)
 -- Copy assignment uses the rhs; it does not move it. `valuePlaces`
 -- still denote that source, so `f(x = p, g(p))` is `nestedMixed`.
 nestPlace (EAssign _ _ _ Copy rhs) = valuePlaces rhs
+nestPlace (ECall _ _ args) = nestStoreds args
+nestPlace (EMalloc _ args) = nestStoreds args
+nestPlace (EUse _ args) = nestStoreds args
 nestPlace _ = []
 
 ||| A pointer assignment's borrow places are its nested destinations.
@@ -568,6 +595,52 @@ export
 nestPlaceAsgPtr : (id : Nat) -> (dest : Place) -> (nm : String) -> (rhs : Expr) ->
   nestPlace (EAssign id dest nm Ptr rhs) = nestAssigns (EAssign id dest nm Ptr rhs)
 nestPlaceAsgPtr _ _ _ _ = Refl
+
+||| `g(r = p)` exposes the destination, not the source.
+export
+nestPlaceCallDest :
+  nestPlace (ECall 0 "g" [EAssign 1 2 "r" Ptr (EVar 3 4 "p")]) = [2]
+nestPlaceCallDest = Refl
+
+||| `g(p)` names no stored destination.
+export
+nestPlaceCallVar :
+  nestPlace (ECall 0 "g" [EVar 1 2 "p"]) = []
+nestPlaceCallVar = Refl
+
+||| `g(h(r = p))` still exposes the destination.
+export
+nestPlaceCallNested :
+  nestPlace (ECall 0 "g" [ECall 1 "h" [EAssign 2 3 "r" Ptr (EVar 4 5 "p")]]) = [3]
+nestPlaceCallNested = Refl
+
+||| A copy inside a call does not store a pointer destination.
+export
+nestPlaceCallCopy :
+  nestPlace (ECall 0 "g" [EAssign 1 2 "x" Copy (EVar 3 4 "p")]) = []
+nestPlaceCallCopy = Refl
+
+||| `r = NULL` does not store a live pointer.
+export
+nestPlaceCallNull :
+  nestPlace (ECall 0 "g" [EAssign 1 2 "r" Ptr (ENull 3)]) = []
+nestPlaceCallNull = Refl
+
+export
+nestPlaceMallocDest :
+  nestPlace (EMalloc 0 [EAssign 1 2 "r" Ptr (EVar 3 4 "p")]) = [2]
+nestPlaceMallocDest = Refl
+
+export
+nestPlaceUseDest :
+  nestPlace (EUse 0 [EAssign 1 2 "r" Ptr (EVar 3 4 "p")]) = [2]
+nestPlaceUseDest = Refl
+
+||| A call's `valuePlaces` stay empty, including when it stores a dest.
+export
+valuePlacesCallEmpty :
+  valuePlaces (ECall 0 "g" [EAssign 1 2 "r" Ptr (EVar 3 4 "p")]) = []
+valuePlacesCallEmpty = Refl
 
 ||| Borrow-argument places for `nestedMixed`. Extras are consumes.
 public export
@@ -621,6 +694,73 @@ export
 nestedMixedEq : {ctx : Ctx} -> {es : List Expr} -> {ms : List Consume} ->
   nestedMixed ctx es ms = nestedGo ctx.summaries (nestBorrowPlaces es ms) es
 nestedMixedEq = Refl
+
+||| `f(p, g(r = p), h(r))`: `r` stays live after `g`, and `h` frees it.
+export
+nestedCallFreesDest :
+  nestedMixed
+    (MkCtx [("g", [Never]), ("h", [Always])] ["g", "h"])
+    [ EVar 0 1 "p"
+    , ECall 2 "g" [EAssign 3 4 "r" Ptr (EVar 5 1 "p")]
+    , ECall 6 "h" [EVar 7 4 "r"]
+    ]
+    [Never, Never, Always] = True
+nestedCallFreesDest = Refl
+
+||| `f(g(p), h(p))`: the call names no stored destination.
+export
+nestedCallBareVar :
+  nestedMixed
+    (MkCtx [("g", [Never]), ("h", [Always])] ["g", "h"])
+    [ ECall 0 "g" [EVar 1 2 "p"]
+    , ECall 3 "h" [EVar 4 2 "p"]
+    ]
+    [Never, Always] = False
+nestedCallBareVar = Refl
+
+||| `f(g(r = p), r)`: the later argument moves `r`. It does not free it.
+export
+nestedCallMoveDest :
+  nestedMixed
+    (MkCtx [("g", [Never])] ["g"])
+    [ ECall 0 "g" [EAssign 1 2 "r" Ptr (EVar 3 4 "p")]
+    , EVar 5 2 "r"
+    ]
+    [Never, Always] = False
+nestedCallMoveDest = Refl
+
+||| Moving that dest is not `assignAlias` either (`valuePlaces` of the call is empty).
+export
+assignAliasMoveDest :
+  assignAlias
+    [ ECall 0 "g" [EAssign 1 2 "r" Ptr (EVar 3 4 "p")]
+    , EVar 5 2 "r"
+    ]
+    [Never, Always] = False
+assignAliasMoveDest = Refl
+
+||| `f(p, g(r = p))`: nothing later frees `p` or `r`.
+export
+nestedCallNoFree :
+  nestedMixed
+    (MkCtx [("g", [Never])] ["g"])
+    [ EVar 0 1 "p"
+    , ECall 2 "g" [EAssign 3 4 "r" Ptr (EVar 5 1 "p")]
+    ]
+    [Never, Never] = False
+nestedCallNoFree = Refl
+
+||| `use(r = p)` hides the same store as a call.
+export
+nestedUseFreesDest :
+  nestedMixed
+    (MkCtx [("h", [Always])] ["h"])
+    [ EVar 0 1 "p"
+    , EUse 2 [EAssign 3 4 "r" Ptr (EVar 5 1 "p")]
+    , ECall 6 "h" [EVar 7 4 "r"]
+    ]
+    [Never, Never, Always] = True
+nestedUseFreesDest = Refl
 
 ||| True when the call aliases a borrow with a consume, including nested
 ||| callees in later arguments and a pointer assignment used as a borrow.

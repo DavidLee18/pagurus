@@ -512,6 +512,37 @@ insertBorrowedContra n (AMoved m :: xs) prf = nothingNotJustH (sym prf)
 insertBorrowedContra n (AFreed m :: xs) prf = nothingNotJustH (sym prf)
 insertBorrowedContra n (ANull :: xs) prf = nothingNotJustH (sym prf)
 
+||| Use does not introduce `ABorrowed`. A status with no borrow stays unborrowed.
+export
+stepUseBorrowFwd : (st : Status) -> (nid : Nat) -> (st' : Status) ->
+                   stepStatus st Use nid = Right st' ->
+                   hasBorrowed st = Nothing -> hasBorrowed st' = Nothing
+stepUseBorrowFwd [] _ _ Refl _ = Refl
+stepUseBorrowFwd (x :: xs) nid st' eq nb with (stepAtom x Use nid) proof px
+  stepUseBorrowFwd (x :: xs) nid st' eq nb | Left d = void (leftNotRight eq)
+  stepUseBorrowFwd (x :: xs) nid st' eq nb | Right x' with (stepStatus xs Use nid) proof pxs
+    stepUseBorrowFwd (x :: xs) nid st' eq nb | Right x' | Left d = void (leftNotRight eq)
+    stepUseBorrowFwd (x :: xs) nid st' eq nb | Right x' | Right rest =
+      let stEq = rightInj eq
+          ih = stepUseBorrowFwd xs nid rest pxs
+      in replace {p = \s => hasBorrowed s = Nothing} stEq
+           (borrowGo x x' px nb ih)
+      where
+        borrowGo : (x0, x1 : Atom) ->
+                   stepAtom x0 Use nid = Right x1 ->
+                   hasBorrowed (x0 :: xs) = Nothing ->
+                   (hasBorrowed xs = Nothing -> hasBorrowed rest = Nothing) ->
+                   hasBorrowed (insertSorted x1 rest) = Nothing
+        borrowGo AOwned AOwned Refl nbH ih =
+          trans (insertOwnedBorrow rest) (ih nbH)
+        borrowGo ANull ANull Refl nbH ih =
+          trans (insertNullBorrow rest) (ih nbH)
+        borrowGo (ABorrowed n) (ABorrowed n) Refl nbH _ =
+          void (nothingNotJustH (sym nbH))
+        borrowGo AEmpty _ Refl _ _ impossible
+        borrowGo (AMoved _) _ Refl _ _ impossible
+        borrowGo (AFreed _) _ Refl _ _ impossible
+
 export
 stepUseBorrowBack : (st : Status) -> (nid : Nat) -> (st' : Status) ->
                     stepStatus st Use nid = Right st' ->

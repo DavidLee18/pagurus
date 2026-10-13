@@ -324,3 +324,50 @@ mutual
       HEvalStmt {funs} env h s (HOk env1 h1) ->
       HEvalStmts {funs} env1 h1 ss o ->
       HEvalStmts {funs} env h (s :: ss) o
+
+-- One S per constructor the Inh proofs recurse under.
+mutual
+  public export
+  evalSize : {funs : List Fun} -> {env : HEnv} -> {h : Heap} ->
+             {e : Expr} -> {o : HResult} ->
+             HEvalExpr {funs} env h e o -> Nat
+  public export
+  exprsSize : {funs : List Fun} -> {env : HEnv} -> {h : Heap} ->
+              {es : List Expr} -> {o : HResult} ->
+              HEvalExprs {funs} env h es o -> Nat
+  public export
+  reallocSize : {funs : List Fun} -> {env : HEnv} -> {h : Heap} ->
+                {es : List Expr} -> {o : HResult} ->
+                HEvalReallocArgs {funs} env h es o -> Nat
+
+  evalSize HELit = Z
+  evalSize HENull = Z
+  evalSize (HEVarLive _ _ _) = Z
+  evalSize (HEVarFreed _ _ _) = Z
+  evalSize (HEVarWild _ _ _) = Z
+  evalSize (HEVarNone _) = Z
+  evalSize (HEVarCopy _) = Z
+  evalSize (HEVarMiss _) = Z
+  evalSize (HEMallocCrash evs) = S (exprsSize evs)
+  evalSize (HEMalloc _ _ evs) = S (exprsSize evs)
+  evalSize (HEAsgCrash ev) = S (evalSize ev)
+  evalSize (HEAsgCopy _ _ _ ev) = S (evalSize ev)
+  evalSize (HEAsgPtr _ _ _ ev) = S (evalSize ev)
+  evalSize (HECallCrash evs) = S (exprsSize evs)
+  evalSize (HECall _ _ _ evs) = S (exprsSize evs)
+  evalSize (HECallUser _ _ _ _ _ _ evs _ _ _) = S (exprsSize evs)
+  evalSize (HECallUserCrash _ _ _ _ _ _ evs _) = S (exprsSize evs)
+  evalSize (HECallUserRet _ _ _ _ _ _ evs _ _ _) = S (exprsSize evs)
+  evalSize (HEReallocCrash _ _ evr) = S (reallocSize evr)
+  evalSize (HERealloc _ _ _ _ evr) = S (reallocSize evr)
+  evalSize (HEUseCrash evs) = S (exprsSize evs)
+  evalSize (HEUse _ _ evs) = S (exprsSize evs)
+  evalSize HEUnsup = Z
+
+  exprsSize HEArgsNil = Z
+  exprsSize (HEArgsCrash ev) = S (evalSize ev)
+  exprsSize (HEArgsCons _ _ _ ev es) = S (evalSize ev + exprsSize es)
+
+  reallocSize HRNil = Z
+  reallocSize (HRHeadCrash ev) = S (evalSize ev)
+  reallocSize (HRHeadOk _ _ _ ev es) = S (evalSize ev + exprsSize es)

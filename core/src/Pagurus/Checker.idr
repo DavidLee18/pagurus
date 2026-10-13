@@ -6,6 +6,7 @@ import Decidable.Equality
 import Pagurus.IR
 import Pagurus.Status
 import Pagurus.Step
+import Pagurus.Lattice
 
 %default total
 
@@ -80,6 +81,7 @@ eqScopes = eqEnv
 
 mutual
   ||| True when `p` is used as a unique-owner rvalue (move/return), not a borrow.
+  export
   movedInExpr : Place -> Expr -> Bool
   movedInExpr p (EVar _ q _) = p == q
   movedInExpr p (EAssign _ _ _ _ rhs) = movedInExpr p rhs
@@ -90,6 +92,7 @@ mutual
   movedInExpr _ (ENull _) = False
   movedInExpr _ (EUnsupported _ _) = False
 
+  export
   movedInExprs : Place -> List Expr -> Bool
   movedInExprs _ [] = False
   movedInExprs p (e :: es) = movedInExpr p e || movedInExprs p es
@@ -113,7 +116,8 @@ doesConsume Never = False
 doesConsume May = True
 doesConsume Always = True
 
-||| Place of a variable argument; other forms are not tracked as aliases.
+||| Place of a variable argument. A pointer assignment is not an `EVar`;
+||| `valuePlaces` tracks the destination it stores into.
 public export
 argVarPlace : Expr -> Maybe Place
 argVarPlace (EVar _ p _) = Just p
@@ -183,17 +187,88 @@ consumeTail : List Consume -> List Consume
 consumeTail [] = []
 consumeTail (_ :: ms) = ms
 
-||| First overlapping consume-side `EVar` used for the diagnostic span.
+||| True when evaluation can yield a live pointer (`HVPtr`).
+||| Null, literals, uses, and ordinary calls do not. Prototype `realloc`
+||| does, matching `HERealloc`. A defined function of that name still
+||| returns `HVNone`, so this is a slight over-approx only for that name.
+public export
+maybeLivePtr : Expr -> Bool
+maybeLivePtr (EVar _ _ _) = True
+maybeLivePtr (EMalloc _ _) = True
+maybeLivePtr (ECall _ callee _) = callee == "realloc"
+maybeLivePtr (EAssign _ _ _ _ rhs) = maybeLivePtr rhs
+maybeLivePtr (ELit _) = False
+maybeLivePtr (ENull _) = False
+maybeLivePtr (EUse _ _) = False
+maybeLivePtr (EUnsupported _ _) = False
+
+||| Places that hold this expression's pointer value.
+||| `HEAsgPtr` stores a live rhs address into the destination and does
+||| not clear the rhs. A null or non-pointer rhs does not, so the
+||| destination is left out. Fresh `malloc` has no existing place.
+public export
+valuePlaces : Expr -> List Place
+valuePlaces (EVar _ p _) = [p]
+valuePlaces (EAssign _ p _ Ptr rhs) =
+  let rest = valuePlaces rhs in
+  if maybeLivePtr rhs then p :: rest else rest
+valuePlaces (EAssign _ _ _ Copy rhs) = valuePlaces rhs
+valuePlaces (EMalloc _ _) = []
+valuePlaces (ECall _ _ _) = []
+valuePlaces (ELit _) = []
+valuePlaces (ENull _) = []
+valuePlaces (EUse _ _) = []
+valuePlaces (EUnsupported _ _) = []
+
+||| True when any place is in both lists.
+public export
+placesHitBoth : List Place -> List Place -> List Place -> Bool
+placesHitBoth [] _ _ = False
+placesHitBoth (p :: ps) bs cs =
+  (placeIn p bs && placeIn p cs) || placesHitBoth ps bs cs
+
+||| Places of Never arguments, including a pointer assignment's destination.
+||| Extra arguments are consumed, matching `borrowPlaces` on `[]`.
+public export
+aliasBorrowPlaces : List Expr -> List Consume -> List Place
+aliasBorrowPlaces [] _ = []
+aliasBorrowPlaces (_ :: es) [] = aliasBorrowPlaces es []
+aliasBorrowPlaces (e :: es) (m :: ms) =
+  if doesConsume m
+    then aliasBorrowPlaces es ms
+    else valuePlaces e ++ aliasBorrowPlaces es ms
+
+||| Places of May/Always arguments, including extras and assignment
+||| destinations that hold the consumed value.
+public export
+aliasConsumePlaces : List Expr -> List Consume -> List Place
+aliasConsumePlaces [] _ = []
+aliasConsumePlaces (e :: es) [] = valuePlaces e ++ aliasConsumePlaces es []
+aliasConsumePlaces (e :: es) (m :: ms) =
+  if doesConsume m
+    then valuePlaces e ++ aliasConsumePlaces es ms
+    else aliasConsumePlaces es ms
+
+||| Borrow and consume arguments that denote one place, where the borrow
+||| may be a pointer assignment. `f(p, p)` is already `mixedAlias`.
+||| This is `f(q = malloc(), q)` and a nested store of that address,
+||| `f(r = (q = malloc()), q)`. `f(q = NULL, q)` is not: null is not a
+||| live pointer. Distinct places stay apart.
+public export
+assignAlias : List Expr -> List Consume -> Bool
+assignAlias es ms =
+  placesOverlap (aliasBorrowPlaces es ms) (aliasConsumePlaces es ms)
+
+||| First argument whose value shares a place with both sides.
 public export
 mixedAliasArg : List Expr -> List Consume -> Expr
 mixedAliasArg [] _ = EUnsupported 0 "mixed alias"
 mixedAliasArg (e :: es) ms =
-  case argVarPlace e of
-    Just p =>
-      if placeIn p (borrowPlaces (e :: es) ms) && placeIn p (consumePlaces (e :: es) ms)
-        then e
-        else mixedAliasArg es (consumeTail ms)
-    Nothing => mixedAliasArg es (consumeTail ms)
+  let bs = aliasBorrowPlaces (e :: es) ms
+      cs = aliasConsumePlaces (e :: es) ms
+  in if placesHitBoth (valuePlaces e) bs cs
+       then e
+       else mixedAliasArg es (consumeTail ms)
 
 public export
 record Ctx where
@@ -286,11 +361,44 @@ loopWeaken _ = May
 
 ||| Modes of a callee during summarising. Unknown names are all-Never
 ||| (least fixpoint). Prototype `realloc` consumes its first argument.
+export
 calleeModes : List (String, List Consume) -> String -> List Consume
 calleeModes acc callee =
   case lookupNamed acc callee of
     Nothing => if callee == "realloc" then [Always] else []
     Just ms => ms
+
+||| `funModes` and `calleeModes` agree, except a missing summary for the
+||| realloc name: `funModes` is `[]` and `calleeModes` is `[Always]`.
+export
+calleeModesFunModes : (ctx : Ctx) -> (n : String) ->
+  Either (calleeModes ctx.summaries n = funModes ctx n)
+         (funModes ctx n = [], calleeModes ctx.summaries n = [Always])
+calleeModesFunModes ctx n = go (lookupNamed ctx.summaries n) Refl
+  where
+    modesJust : (ms : List Consume) ->
+                lookupNamed ctx.summaries n = Just ms ->
+                calleeModes ctx.summaries n = ms
+    modesJust _ prf = rewrite prf in Refl
+    listJust : (ms : List Consume) ->
+               lookupNamed ctx.summaries n = Just ms ->
+               funModes ctx n = ms
+    listJust _ prf = rewrite prf in Refl
+    go : (r : Maybe (List Consume)) -> lookupNamed ctx.summaries n = r ->
+         Either (calleeModes ctx.summaries n = funModes ctx n)
+                (funModes ctx n = [], calleeModes ctx.summaries n = [Always])
+    go (Just ms) prf =
+      Left (trans (modesJust ms prf) (sym (listJust ms prf)))
+    go Nothing prf = missGo (n == "realloc") Refl
+      where
+        missGo : (b : Bool) -> n == "realloc" = b ->
+                 Either (calleeModes ctx.summaries n = funModes ctx n)
+                        (funModes ctx n = [], calleeModes ctx.summaries n = [Always])
+        missGo True pb =
+          Right (rewrite prf in Refl, rewrite prf in rewrite pb in Refl)
+        missGo False pb =
+          Left (trans (rewrite prf in rewrite pb in Refl)
+                      (sym (rewrite prf in Refl)))
 
 ||| During summarising, a missing mode is Never (not yet known to consume).
 sumHead : List Consume -> Consume
@@ -312,6 +420,7 @@ mutual
   consumeInExpr _ _ (ENull _) = Never
   consumeInExpr _ _ (EUnsupported _ _) = Never
 
+  export
   consumeInArgs : List (String, List Consume) -> Place -> String -> List Expr -> Consume
   consumeInArgs acc p callee args = consumeInArgsGo p args (calleeModes acc callee)
 
@@ -373,30 +482,89 @@ summarise (S k) funs acc =
       next = map (\f => (f.name, joinModes (lookupNamedList acc f.name) (paramModes acc f))) defs
   in if eqNamedModes next acc then acc else summarise k funs next
 
+||| Destinations a borrow assignment still holds. The rhs place is not
+||| included: the assignment moves it, and a later use is use-after-move.
+public export
+nestAssigns : Expr -> List Place
+nestAssigns (EAssign _ p _ Ptr rhs) =
+  let rest = nestAssigns rhs in
+  if maybeLivePtr rhs then p :: rest else rest
+nestAssigns _ = []
+
+||| Place a borrow argument still denotes: the variable, or the
+||| destinations of a pointer assignment (`f(q = malloc(), …)`).
+public export
+nestPlace : Expr -> List Place
+nestPlace (EVar _ p _) = [p]
+nestPlace (EAssign _ p _ Ptr rhs) =
+  let rest = nestAssigns rhs in
+  if maybeLivePtr rhs then p :: rest else rest
+-- Copy assignment uses the rhs; it does not move it. `valuePlaces`
+-- still denote that source, so `f(x = p, g(p))` is `nestedMixed`.
+nestPlace (EAssign _ _ _ Copy rhs) = valuePlaces rhs
+nestPlace _ = []
+
+||| Borrow-argument places for `nestedMixed`. Extras are consumes.
+public export
+nestBorrowPlaces : List Expr -> List Consume -> List Place
+nestBorrowPlaces [] _ = []
+nestBorrowPlaces (_ :: es) [] = nestBorrowPlaces es []
+nestBorrowPlaces (e :: es) (m :: ms) =
+  if doesConsume m
+    then nestBorrowPlaces es ms
+    else nestPlace e ++ nestBorrowPlaces es ms
+
+mutual
+  ||| True when evaluating `e` can free `p`, including a consume nested
+  ||| under a Never-mode call (`f(p, h(g(p)))` where `h` does not consume).
+  export
+  argFrees : List (String, List Consume) -> Place -> Expr -> Bool
+  argFrees acc p (ECall _ callee args) =
+    doesConsume (consumeInArgs acc p callee args) || argsFree acc p args
+  argFrees acc p (EMalloc _ args) = argsFree acc p args
+  argFrees acc p (EUse _ args) = argsFree acc p args
+  argFrees acc p (EAssign _ _ _ _ rhs) = argFrees acc p rhs
+  argFrees _ _ _ = False
+
+  export
+  argsFree : List (String, List Consume) -> Place -> List Expr -> Bool
+  argsFree _ _ [] = False
+  argsFree acc p (e :: es) = argFrees acc p e || argsFree acc p es
+
+||| `argFrees` of one place across an argument list.
+export
+argsHit : List (String, List Consume) -> Place -> List Expr -> Bool
+argsHit _ _ [] = False
+argsHit acc p (e :: rest) = argFrees acc p e || argsHit acc p rest
+
+||| Any borrow place freed by any argument.
+export
+nestedGo : List (String, List Consume) -> List Place -> List Expr -> Bool
+nestedGo _ [] _ = False
+nestedGo acc (p :: ps) es0 = argsHit acc p es0 || nestedGo acc ps es0
+
 ||| Nested consume of a borrow-argument place (e.g. `f(p, g(p))` where `g`
-||| consumes `p`). Direct Never+May/Always of the same `EVar` is `mixedAlias`.
+||| consumes `p`, or `f(q = malloc(), g(q))`). Direct Never+May/Always of
+||| the same `EVar` is `mixedAlias`. A freeing call under a Never wrapper
+||| (`f(p, h(g(p)))`) counts too.
 export
 nestedMixed : Ctx -> List Expr -> List Consume -> Bool
-nestedMixed ctx es ms = nestedGo ctx.summaries (borrowPlaces es ms) es
-  where
-    exprHits : List (String, List Consume) -> Place -> Expr -> Bool
-    exprHits acc p e = doesConsume (consumeInExpr acc p e)
+nestedMixed ctx es ms = nestedGo ctx.summaries (nestBorrowPlaces es ms) es
 
-    argsHit : List (String, List Consume) -> Place -> List Expr -> Bool
-    argsHit _ _ [] = False
-    argsHit acc p (e :: rest) = exprHits acc p e || argsHit acc p rest
-
-    nestedGo : List (String, List Consume) -> List Place -> List Expr -> Bool
-    nestedGo _ [] _ = False
-    nestedGo acc (p :: ps) es0 = argsHit acc p es0 || nestedGo acc ps es0
+||| `nestedMixed` is `export`, so other modules transport through this.
+export
+nestedMixedEq : {ctx : Ctx} -> {es : List Expr} -> {ms : List Consume} ->
+  nestedMixed ctx es ms = nestedGo ctx.summaries (nestBorrowPlaces es ms) es
+nestedMixedEq = Refl
 
 ||| True when the call aliases a borrow with a consume, including nested
-||| callees in later arguments.
+||| callees in later arguments and a pointer assignment used as a borrow.
 public export
 aliasBad : Ctx -> List Expr -> String -> Bool
 aliasBad ctx args callee =
   mixedAlias args (funModes ctx callee)
     || nestedMixed ctx args (funModes ctx callee)
+    || assignAlias args (funModes ctx callee)
 
 public export
 paramStatus : Consume -> Nat -> Status
@@ -942,8 +1110,22 @@ mixedAliasNilModes : (es : List Expr) -> mixedAlias es [] = False
 mixedAliasNilModes es = rewrite borrowPlacesNilModes es in Refl
 
 export
+nestBorrowNil : (es : List Expr) -> nestBorrowPlaces es [] = []
+nestBorrowNil [] = Refl
+nestBorrowNil (_ :: es) = nestBorrowNil es
+
+export
 nestedMixedNilModes : (ctx : Ctx) -> (es : List Expr) -> nestedMixed ctx es [] = False
-nestedMixedNilModes ctx es = rewrite borrowPlacesNilModes es in Refl
+nestedMixedNilModes ctx es = rewrite nestBorrowNil es in Refl
+
+export
+aliasBorrowNil : (es : List Expr) -> aliasBorrowPlaces es [] = []
+aliasBorrowNil [] = Refl
+aliasBorrowNil (_ :: es) = aliasBorrowNil es
+
+export
+assignAliasNilModes : (es : List Expr) -> assignAlias es [] = False
+assignAliasNilModes es = rewrite aliasBorrowNil es in Refl
 
 export
 aliasBadNilModes :
@@ -953,7 +1135,391 @@ aliasBadNilModes :
 aliasBadNilModes {ctx} {callee} {args} prf =
   rewrite prf in
     rewrite mixedAliasNilModes args in
-      rewrite nestedMixedNilModes ctx args in Refl
+      rewrite nestedMixedNilModes ctx args in
+        rewrite assignAliasNilModes args in Refl
+
+trueNotFalseC : Not (True = False)
+trueNotFalseC Refl impossible
+
+orFalseC : (x, y : Bool) -> x || y = False -> (x = False, y = False)
+orFalseC False False Refl = (Refl, Refl)
+orFalseC True _ prf = void (trueNotFalseC prf)
+
+orFalseIntro : {x, y : Bool} -> x = False -> y = False -> x || y = False
+orFalseIntro Refl Refl = Refl
+
+placeInAppendR : {p : Place} -> {xs, ys : List Place} ->
+  placeIn p (xs ++ ys) = False -> placeIn p ys = False
+placeInAppendR {xs = []} prf = prf
+placeInAppendR {xs = _ :: qs} prf =
+  let (_, rest) = orFalseC _ _ prf
+  in placeInAppendR {xs = qs} rest
+
+placesOverlapAppendL : {xs, ys, zs : List Place} ->
+  placesOverlap (xs ++ ys) zs = False -> placesOverlap ys zs = False
+placesOverlapAppendL {xs = []} prf = prf
+placesOverlapAppendL {xs = _ :: ps} prf =
+  let (_, rest) = orFalseC _ _ prf
+  in placesOverlapAppendL {xs = ps} rest
+
+placesOverlapAppendR : {xs, ys, zs : List Place} ->
+  placesOverlap xs (ys ++ zs) = False -> placesOverlap xs zs = False
+placesOverlapAppendR {xs = []} _ = Refl
+placesOverlapAppendR {xs = _ :: ps} prf =
+  let (hd, tl) = orFalseC _ _ prf
+  in orFalseIntro (placeInAppendR {xs = ys} hd) (placesOverlapAppendR {xs = ps} tl)
+
+export
+nestBorrowBorrow : {e : Expr} -> {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+  doesConsume m = False ->
+  nestBorrowPlaces (e :: es) (m :: ms) = nestPlace e ++ nestBorrowPlaces es ms
+nestBorrowBorrow {m = Never} _ = Refl
+nestBorrowBorrow {m = May} prf = void (trueNotFalseC prf)
+nestBorrowBorrow {m = Always} prf = void (trueNotFalseC prf)
+
+nestBorrowConsume : {e : Expr} -> {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+  doesConsume m = True ->
+  nestBorrowPlaces (e :: es) (m :: ms) = nestBorrowPlaces es ms
+nestBorrowConsume {m = Never} prf = void (trueNotFalseC (sym prf))
+nestBorrowConsume {m = May} _ = Refl
+nestBorrowConsume {m = Always} _ = Refl
+
+aliasBorrowBorrow : {e : Expr} -> {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+  doesConsume m = False ->
+  aliasBorrowPlaces (e :: es) (m :: ms) = valuePlaces e ++ aliasBorrowPlaces es ms
+aliasBorrowBorrow {m = Never} _ = Refl
+aliasBorrowBorrow {m = May} prf = void (trueNotFalseC prf)
+aliasBorrowBorrow {m = Always} prf = void (trueNotFalseC prf)
+
+aliasBorrowConsume : {e : Expr} -> {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+  doesConsume m = True ->
+  aliasBorrowPlaces (e :: es) (m :: ms) = aliasBorrowPlaces es ms
+aliasBorrowConsume {m = Never} prf = void (trueNotFalseC (sym prf))
+aliasBorrowConsume {m = May} _ = Refl
+aliasBorrowConsume {m = Always} _ = Refl
+
+aliasConsumeBorrow : {e : Expr} -> {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+  doesConsume m = False ->
+  aliasConsumePlaces (e :: es) (m :: ms) = aliasConsumePlaces es ms
+aliasConsumeBorrow {m = Never} _ = Refl
+aliasConsumeBorrow {m = May} prf = void (trueNotFalseC prf)
+aliasConsumeBorrow {m = Always} prf = void (trueNotFalseC prf)
+
+aliasConsumeConsume : {e : Expr} -> {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+  doesConsume m = True ->
+  aliasConsumePlaces (e :: es) (m :: ms) = valuePlaces e ++ aliasConsumePlaces es ms
+aliasConsumeConsume {m = Never} prf = void (trueNotFalseC (sym prf))
+aliasConsumeConsume {m = May} _ = Refl
+aliasConsumeConsume {m = Always} _ = Refl
+
+consumePlacesBorrow : {e : Expr} -> {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+  doesConsume m = False ->
+  consumePlaces (e :: es) (m :: ms) = consumePlaces es ms
+consumePlacesBorrow {m = Never} _ = Refl
+consumePlacesBorrow {m = May} prf = void (trueNotFalseC prf)
+consumePlacesBorrow {m = Always} prf = void (trueNotFalseC prf)
+
+consumePlacesConsume : {e : Expr} -> {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+  doesConsume m = True ->
+  consumePlaces (e :: es) (m :: ms) =
+    case argVarPlace e of
+      Just p => p :: consumePlaces es ms
+      Nothing => consumePlaces es ms
+consumePlacesConsume {m = Never} prf = void (trueNotFalseC (sym prf))
+consumePlacesConsume {m = May} _ with (argVarPlace e)
+  consumePlacesConsume _ | Just _ = Refl
+  consumePlacesConsume _ | Nothing = Refl
+consumePlacesConsume {m = Always} _ with (argVarPlace e)
+  consumePlacesConsume _ | Just _ = Refl
+  consumePlacesConsume _ | Nothing = Refl
+
+borrowPlacesBorrow : {e : Expr} -> {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+  doesConsume m = False ->
+  borrowPlaces (e :: es) (m :: ms) =
+    case argVarPlace e of
+      Just p => p :: borrowPlaces es ms
+      Nothing => borrowPlaces es ms
+borrowPlacesBorrow {m = Never} _ with (argVarPlace e)
+  borrowPlacesBorrow _ | Just _ = Refl
+  borrowPlacesBorrow _ | Nothing = Refl
+borrowPlacesBorrow {m = May} prf = void (trueNotFalseC prf)
+borrowPlacesBorrow {m = Always} prf = void (trueNotFalseC prf)
+
+borrowPlacesConsume : {e : Expr} -> {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+  doesConsume m = True ->
+  borrowPlaces (e :: es) (m :: ms) = borrowPlaces es ms
+borrowPlacesConsume {m = Never} prf = void (trueNotFalseC (sym prf))
+borrowPlacesConsume {m = May} _ = Refl
+borrowPlacesConsume {m = Always} _ = Refl
+
+export
+argsHitTail : {acc : List (String, List Consume)} -> {p : Place} ->
+  {e : Expr} -> {es : List Expr} ->
+  argsHit acc p (e :: es) = False -> argsHit acc p es = False
+argsHitTail prf = snd (orFalseC _ _ prf)
+
+nestedGoPlacesAppend : {acc : List (String, List Consume)} -> {xs, ys : List Place} ->
+  {es : List Expr} ->
+  nestedGo acc (xs ++ ys) es = False -> nestedGo acc ys es = False
+nestedGoPlacesAppend {xs = []} prf = prf
+nestedGoPlacesAppend {xs = _ :: ps} prf =
+  let (_, rest) = orFalseC _ _ prf
+  in nestedGoPlacesAppend {xs = ps} rest
+
+||| Head places of a `nestedGo` over a concatenation stay quiet when the
+||| whole concatenation is quiet. Dual of `nestedGoPlacesAppend`.
+export
+nestedGoPlacesHead : {acc : List (String, List Consume)} -> {xs, ys : List Place} ->
+  {es : List Expr} ->
+  nestedGo acc (xs ++ ys) es = False -> nestedGo acc xs es = False
+nestedGoPlacesHead {xs = []} _ = Refl
+nestedGoPlacesHead {xs = _ :: ps} prf =
+  let (hd, rest) = orFalseC _ _ prf
+  in orFalseIntro hd (nestedGoPlacesHead {xs = ps} rest)
+
+||| A place named in `ps` is not freed by `es` when `nestedGo` is quiet.
+export
+argsHitIn : {acc : List (String, List Consume)} -> {p : Place} ->
+  {ps : List Place} -> {es : List Expr} ->
+  placeIn p ps = True ->
+  nestedGo acc ps es = False ->
+  argsHit acc p es = False
+argsHitIn {ps = []} pin _ = void (trueNotFalseC (sym pin))
+argsHitIn {ps = q :: qs} pin prf = hitGo (p == q) Refl pin prf
+  where
+    hitGo : (eqb : Bool) -> p == q = eqb ->
+            placeIn p (q :: qs) = True ->
+            nestedGo acc (q :: qs) es = False ->
+            argsHit acc p es = False
+    hitGo True pq _ prf0 =
+      replace {p = \n => argsHit acc n es = False}
+        (sym (eqNatTrue p q pq)) (fst (orFalseC _ _ prf0))
+    hitGo False pq pin0 prf0 =
+      argsHitIn {ps = qs}
+        (replace {p = \b => (b || Delay (placeIn p qs)) = True} pq pin0)
+        (snd (orFalseC _ _ prf0))
+
+nestedGoArgsTail : {acc : List (String, List Consume)} -> {ps : List Place} ->
+  {e : Expr} -> {es : List Expr} ->
+  nestedGo acc ps (e :: es) = False -> nestedGo acc ps es = False
+nestedGoArgsTail {ps = []} _ = Refl
+nestedGoArgsTail {ps = _ :: qs} prf =
+  let (hd, tl) = orFalseC _ _ prf
+  in orFalseIntro (argsHitTail hd) (nestedGoArgsTail tl)
+
+mixedOverlapBorrow : {e : Expr} -> {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+  doesConsume m = False ->
+  mixedAlias (e :: es) (m :: ms) = False ->
+  mixedAlias es ms = False
+mixedOverlapBorrow {m = Never} _ prf with (argVarPlace e)
+  mixedOverlapBorrow {m = Never} _ prf | Just _ = snd (orFalseC _ _ prf)
+  mixedOverlapBorrow {m = Never} _ prf | Nothing = prf
+mixedOverlapBorrow {m = May} pc _ = void (trueNotFalseC pc)
+mixedOverlapBorrow {m = Always} pc _ = void (trueNotFalseC pc)
+
+mixedOverlapConsume : {e : Expr} -> {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+  doesConsume m = True ->
+  mixedAlias (e :: es) (m :: ms) = False ->
+  mixedAlias es ms = False
+mixedOverlapConsume {m = May} _ prf with (argVarPlace e)
+  mixedOverlapConsume {m = May} _ prf | Just p =
+    placesOverlapAppendR {ys = [p]} prf
+  mixedOverlapConsume {m = May} _ prf | Nothing = prf
+mixedOverlapConsume {m = Always} _ prf with (argVarPlace e)
+  mixedOverlapConsume {m = Always} _ prf | Just p =
+    placesOverlapAppendR {ys = [p]} prf
+  mixedOverlapConsume {m = Always} _ prf | Nothing = prf
+mixedOverlapConsume {m = Never} pc _ = void (trueNotFalseC (sym pc))
+
+assignOverlapBorrow : {e : Expr} -> {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+  doesConsume m = False ->
+  assignAlias (e :: es) (m :: ms) = False ->
+  assignAlias es ms = False
+assignOverlapBorrow {m = Never} _ prf =
+  placesOverlapAppendL
+    {xs = valuePlaces e} {ys = aliasBorrowPlaces es ms} {zs = aliasConsumePlaces es ms}
+    prf
+assignOverlapBorrow {m = May} pc _ = void (trueNotFalseC pc)
+assignOverlapBorrow {m = Always} pc _ = void (trueNotFalseC pc)
+
+assignOverlapConsume : {e : Expr} -> {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+  doesConsume m = True ->
+  mixedAlias (e :: es) (m :: ms) = False ->
+  assignAlias (e :: es) (m :: ms) = False ->
+  assignAlias es ms = False
+assignOverlapConsume {m = May} _ _ prf =
+  placesOverlapAppendR
+    {xs = aliasBorrowPlaces es ms} {ys = valuePlaces e} {zs = aliasConsumePlaces es ms}
+    prf
+assignOverlapConsume {m = Always} _ _ prf =
+  placesOverlapAppendR
+    {xs = aliasBorrowPlaces es ms} {ys = valuePlaces e} {zs = aliasConsumePlaces es ms}
+    prf
+assignOverlapConsume {m = Never} pc _ _ = void (trueNotFalseC (sym pc))
+
+nestedOverlapBorrow : {ctx : Ctx} -> {e : Expr} -> {es : List Expr} ->
+  {m : Consume} -> {ms : List Consume} ->
+  doesConsume m = False ->
+  nestedMixed ctx (e :: es) (m :: ms) = False ->
+  nestedMixed ctx es ms = False
+nestedOverlapBorrow {m = Never} _ prf =
+  nestedGoArgsTail
+    (nestedGoPlacesAppend {acc = ctx.summaries} {xs = nestPlace e}
+       {ys = nestBorrowPlaces es ms} {es = e :: es} prf)
+nestedOverlapBorrow {m = May} pc _ = void (trueNotFalseC pc)
+nestedOverlapBorrow {m = Always} pc _ = void (trueNotFalseC pc)
+
+nestedOverlapConsume : {ctx : Ctx} -> {e : Expr} -> {es : List Expr} ->
+  {m : Consume} -> {ms : List Consume} ->
+  doesConsume m = True ->
+  nestedMixed ctx (e :: es) (m :: ms) = False ->
+  nestedMixed ctx es ms = False
+nestedOverlapConsume {m = May} _ prf =
+  nestedGoArgsTail {acc = ctx.summaries} {ps = nestBorrowPlaces es ms} {e} {es} prf
+nestedOverlapConsume {m = Always} _ prf =
+  nestedGoArgsTail {acc = ctx.summaries} {ps = nestBorrowPlaces es ms} {e} {es} prf
+nestedOverlapConsume {m = Never} pc _ = void (trueNotFalseC (sym pc))
+
+||| Tail of a borrow-head argument list keeps all three alias flags false.
+export
+aliasQuietBorrowTail :
+  {ctx : Ctx} -> {e : Expr} -> {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+  doesConsume m = False ->
+  mixedAlias (e :: es) (m :: ms) = False ->
+  nestedMixed ctx (e :: es) (m :: ms) = False ->
+  assignAlias (e :: es) (m :: ms) = False ->
+  (mixedAlias es ms = False, nestedMixed ctx es ms = False, assignAlias es ms = False)
+aliasQuietBorrowTail pc pm pn pa =
+  (mixedOverlapBorrow pc pm, nestedOverlapBorrow pc pn, assignOverlapBorrow pc pa)
+
+||| Tail of a consume-head argument list keeps all three alias flags false.
+export
+aliasQuietConsumeTail :
+  {ctx : Ctx} -> {e : Expr} -> {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+  doesConsume m = True ->
+  mixedAlias (e :: es) (m :: ms) = False ->
+  nestedMixed ctx (e :: es) (m :: ms) = False ->
+  assignAlias (e :: es) (m :: ms) = False ->
+  (mixedAlias es ms = False, nestedMixed ctx es ms = False, assignAlias es ms = False)
+aliasQuietConsumeTail pc pm pn pa =
+  (mixedOverlapConsume pc pm, nestedOverlapConsume pc pn, assignOverlapConsume pc pm pa)
+
+||| `argFrees` of a call is false only when the callee does not consume `p`
+||| and no argument expression frees `p`.
+export
+argFreesCallSplit :
+  {acc : List (String, List Consume)} -> {p : Place} -> {id : Nat} ->
+  {callee : String} -> {args : List Expr} ->
+  argFrees acc p (ECall id callee args) = False ->
+  (doesConsume (consumeInArgs acc p callee args) = False, argsFree acc p args = False)
+argFreesCallSplit prf = orFalseC _ _ prf
+
+export
+argFreesAssignEq :
+  {acc : List (String, List Consume)} -> {p : Place} ->
+  {id, n : Nat} -> {nm : String} -> {ty : Ty} -> {rhs : Expr} ->
+  argFrees acc p (EAssign id n nm ty rhs) = argFrees acc p rhs
+argFreesAssignEq = Refl
+
+export
+argFreesMallocEq :
+  {acc : List (String, List Consume)} -> {p : Place} -> {id : Nat} -> {args : List Expr} ->
+  argFrees acc p (EMalloc id args) = argsFree acc p args
+argFreesMallocEq = Refl
+
+export
+argFreesUseEq :
+  {acc : List (String, List Consume)} -> {p : Place} -> {id : Nat} -> {args : List Expr} ->
+  argFrees acc p (EUse id args) = argsFree acc p args
+argFreesUseEq = Refl
+
+export
+argFreesVarFalse :
+  {acc : List (String, List Consume)} -> {p : Place} -> {id, q : Nat} -> {nm : String} ->
+  argFrees acc p (EVar id q nm) = False
+argFreesVarFalse = Refl
+
+export
+argFreesOtherFalse :
+  {acc : List (String, List Consume)} -> {p : Place} -> {e : Expr} ->
+  argFrees acc p e = False ->
+  argsFree acc p [] = False
+argFreesOtherFalse _ = Refl
+
+||| Consume positions under `modes` do not move `p`. Extras (past `modes`)
+||| are not consume positions of `consumeInArgs` (`sumHead []` is Never).
+export
+data MoveQuiet : Place -> List Expr -> List Consume -> Type where
+  MQNil : MoveQuiet p [] ms
+  MQBorrow : doesConsume m = False -> MoveQuiet p es ms -> MoveQuiet p (e :: es) (m :: ms)
+  MQMove : doesConsume m = True -> movedInExpr p e = False ->
+           MoveQuiet p es ms -> MoveQuiet p (e :: es) (m :: ms)
+  MQExtra : MoveQuiet p es [] -> MoveQuiet p (e :: es) []
+
+doesConsumeNeverOnly : {c : Consume} -> doesConsume c = False -> c = Never
+doesConsumeNeverOnly {c = Never} _ = Refl
+doesConsumeNeverOnly {c = May} prf = void (trueNotFalseC prf)
+doesConsumeNeverOnly {c = Always} prf = void (trueNotFalseC prf)
+
+consumeMaySkip : {p : Place} -> {e : Expr} -> {es : List Expr} -> {ms : List Consume} ->
+  movedInExpr p e = False ->
+  consumeInArgsGo p (e :: es) (May :: ms) = consumeInArgsGo p es ms
+consumeMaySkip pm = rewrite pm in Refl
+
+consumeMayHit : {p : Place} -> {e : Expr} -> {es : List Expr} -> {ms : List Consume} ->
+  movedInExpr p e = True ->
+  consumeInArgsGo p (e :: es) (May :: ms) = Always
+consumeMayHit pm = rewrite pm in Refl
+
+consumeAlwaysSkip : {p : Place} -> {e : Expr} -> {es : List Expr} -> {ms : List Consume} ->
+  movedInExpr p e = False ->
+  consumeInArgsGo p (e :: es) (Always :: ms) = consumeInArgsGo p es ms
+consumeAlwaysSkip pm = rewrite pm in Refl
+
+consumeAlwaysHit : {p : Place} -> {e : Expr} -> {es : List Expr} -> {ms : List Consume} ->
+  movedInExpr p e = True ->
+  consumeInArgsGo p (e :: es) (Always :: ms) = Always
+consumeAlwaysHit pm = rewrite pm in Refl
+
+consumeGoQuiet : {p : Place} -> {es : List Expr} -> {modes : List Consume} ->
+  consumeInArgsGo p es modes = Never ->
+  MoveQuiet p es modes
+consumeGoQuiet {es = []} _ = MQNil
+consumeGoQuiet {p} {es = e :: es} {modes = []} prf =
+  MQExtra (consumeGoQuiet prf)
+consumeGoQuiet {p} {es = e :: es} {modes = Never :: ms} prf =
+  MQBorrow Refl (consumeGoQuiet prf)
+consumeGoQuiet {p} {es = e :: es} {modes = May :: ms} prf =
+  mayArm (movedInExpr p e) Refl prf
+  where
+    mayArm : (b : Bool) -> movedInExpr p e = b ->
+             consumeInArgsGo p (e :: es) (May :: ms) = Never ->
+             MoveQuiet p (e :: es) (May :: ms)
+    mayArm False pb eq =
+      MQMove Refl pb
+        (consumeGoQuiet (replace {p = \c => c = Never} (consumeMaySkip pb) eq))
+    mayArm True pb eq =
+      void (trueNotFalseC (cong doesConsume (trans (sym (consumeMayHit pb)) eq)))
+consumeGoQuiet {p} {es = e :: es} {modes = Always :: ms} prf =
+  alwaysArm (movedInExpr p e) Refl prf
+  where
+    alwaysArm : (b : Bool) -> movedInExpr p e = b ->
+                consumeInArgsGo p (e :: es) (Always :: ms) = Never ->
+                MoveQuiet p (e :: es) (Always :: ms)
+    alwaysArm False pb eq =
+      MQMove Refl pb
+        (consumeGoQuiet (replace {p = \c => c = Never} (consumeAlwaysSkip pb) eq))
+    alwaysArm True pb eq =
+      void (trueNotFalseC (cong doesConsume (trans (sym (consumeAlwaysHit pb)) eq)))
+
+||| `consumeInArgs` is Never, so no consume-mode argument moves `p`.
+export
+moveQuietOfConsume :
+  {acc : List (String, List Consume)} -> {p : Place} -> {callee : String} ->
+  {args : List Expr} ->
+  doesConsume (consumeInArgs acc p callee args) = False ->
+  MoveQuiet p args (calleeModes acc callee)
+moveQuietOfConsume prf = consumeGoQuiet (doesConsumeNeverOnly prf)
 
 export
 checkFunsFromNil : (fuel : Nat) -> (ctx : Ctx) ->
@@ -1479,6 +2045,31 @@ takeCallRight pFresh prf =
   rewrite pFresh in
   rewrite (sym (checkExprCall ctx sc id callee args)) in
   rewrite prf in Refl
+
+pairFstChk : {x, y : t} -> {p, q : u} -> (x, p) = (y, q) -> x = y
+pairFstChk Refl = Refl
+
+||| A non-prototype call's `takeOwner` is `mapToGhost` of `checkCall`.
+export
+takeCallCheck :
+  {ctx : Ctx} -> {sc, sc1 : Scopes} -> {id : Nat} -> {callee : String} ->
+  {args : List Expr} -> {fl : Flag} ->
+  isRealloc callee && not (isDefined ctx callee) = False ->
+  takeOwner ctx sc (ECall id callee args) = Right (sc1, fl) ->
+  checkCall ctx sc id callee args = Right sc1
+takeCallCheck pFresh pT =
+  go (checkCall ctx sc id callee args) Refl
+    (replace {p = \b =>
+        reallocOwner b (checkCall ctx sc id callee args) = Right (sc1, fl)}
+       pFresh pT)
+  where
+    go : (res : Either Diag Scopes) ->
+         checkCall ctx sc id callee args = res ->
+         reallocOwner False res = Right (sc1, fl) ->
+         checkCall ctx sc id callee args = Right sc1
+    go (Left _) _ eq = void (leftNotRightChk eq)
+    go (Right scA) pr eq =
+      rewrite pr in rewrite (pairFstChk (rightInjChk eq)) in Refl
 
 export
 takeReallocLeft :

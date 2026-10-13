@@ -915,6 +915,32 @@ noOwnerHerePtrHitJust :
     notUniqueSt stK && Delay (noOwnerHere xs sc a)
 noOwnerHerePtrHitJust pab lk = rewrite pab in rewrite lk in Refl
 
+||| An address absent from the frame has no unique owner there.
+||| `heldPtr` is `(a == b) ||` on a pointer cell, so a `False` head
+||| forces the tail and rules out a hit.
+export
+noOwnerHereUnheld :
+  (env : HEnv) -> (sc : Scopes) -> (a : Addr) ->
+  heldPtr env a = False ->
+  noOwnerHere env sc a = True
+noOwnerHereUnheld [] _ _ _ = Refl
+noOwnerHereUnheld ((_, HVNone) :: xs) sc a prf = noOwnerHereUnheld xs sc a prf
+noOwnerHereUnheld ((_, HVCopy) :: xs) sc a prf = noOwnerHereUnheld xs sc a prf
+noOwnerHereUnheld ((p, HVPtr b) :: xs) sc a prf = ptrGo (a == b) Refl prf
+  where
+    ptrGo :
+      (eqb : Bool) ->
+      a == b = eqb ->
+      heldPtr ((p, HVPtr b) :: xs) a = False ->
+      noOwnerHere ((p, HVPtr b) :: xs) sc a = True
+    ptrGo True pab prf0 =
+      void (trueNotFalse (trans (trueOrDelay (heldPtr xs a))
+        (replace {p = \eqb => (eqb || Delay (heldPtr xs a)) = False} pab prf0)))
+    ptrGo False pab prf0 =
+      trans (noOwnerHerePtrMiss {k = p} {c = b} {xs} {sc} pab)
+        (noOwnerHereUnheld xs sc a
+          (replace {p = \eqb => (eqb || Delay (heldPtr xs a)) = False} pab prf0))
+
 lookupPlaceConsMiss :
   {k, pl : Place} -> {st : Status} -> {sc : Scopes} ->
   k == pl = False ->
@@ -1462,6 +1488,93 @@ noOwnerHereSkipPtrExtra :
 noOwnerHereSkipPtrExtra fid id pl nm ps vs a b pab pno =
   skipPtrExtraGo fid id pl nm ps (HVPtr b) vs a
     (\eq => eqNatFalse a b pab (sym (hvPtrInj (trans (sym (ptrArgPtr b)) eq)))) pno
+
+||| Extra pointer parameter binds `ABorrowed`. The same address is not a
+||| unique owner, so uniqueness of leftover `a` stays in the tail frame.
+skipPtrExtraSameGo :
+  (fid : Nat) -> (id : Nat) -> (pl : Place) -> (nm : String) ->
+  (ps : List Param) -> (v : HVal) -> (vs : List HVal) -> (a : Addr) ->
+  ptrArg v = HVPtr a ->
+  noOwnerHere (bindFrame (MkParam id pl nm Ptr :: ps) (v :: vs))
+              (bindParams fid (MkParam id pl nm Ptr :: ps) []) a = False ->
+  noOwnerHere (bindFrame ps vs) (bindParams fid ps []) a = False
+skipPtrExtraSameGo fid id pl nm ps v vs a veq pno =
+  let p1 = replace {p = \e => noOwnerHere e
+                    (bindParams fid (MkParam id pl nm Ptr :: ps) []) a = False}
+             (bindFramePtr id pl nm ps v vs) pno
+      p2 = replace {p = \s => noOwnerHere (setH pl (ptrArg v) (bindFrame ps vs)) s a = False}
+             (bindParamsPtrNil fid id pl nm ps) p1
+  in noOwnerHereSetValBorrowNotA {pl} {v = ptrArg v} {env = bindFrame ps vs}
+       {st = Pagurus.Status.singleton (ABorrowed fid)} {sc = bindParams fid ps []} {a}
+       (bindFrameUK ps vs) veq (borrowedNotUnique fid) p2
+
+export
+noOwnerHereSkipPtrExtraSame :
+  (fid : Nat) -> (id : Nat) -> (pl : Place) -> (nm : String) ->
+  (ps : List Param) -> (vs : List HVal) -> (a, b : Addr) ->
+  a == b = True ->
+  noOwnerHere (bindFrame (MkParam id pl nm Ptr :: ps) (HVPtr b :: vs))
+              (bindParams fid (MkParam id pl nm Ptr :: ps) []) a = False ->
+  noOwnerHere (bindFrame ps vs) (bindParams fid ps []) a = False
+noOwnerHereSkipPtrExtraSame fid id pl nm ps vs a b pab pno =
+  skipPtrExtraSameGo fid id pl nm ps (HVPtr b) vs a
+    (trans (ptrArgPtr b) (cong HVPtr (sym (eqNatTrue a b pab)))) pno
+
+||| A frame of missing values binds `HVNone` or skips `Copy`. Neither is a
+||| unique owner, so `noOwnerHere = False` cannot arise.
+export
+noOwnerHereMissVoid :
+  (fid : Nat) -> (ps : List Param) -> (ms : List Consume) -> (a : Addr) ->
+  noOwnerHere (bindFrame ps []) (bindParams fid ps ms) a = False ->
+  Void
+noOwnerHereMissVoid _ [] _ _ pno = void (trueNotFalse pno)
+noOwnerHereMissVoid fid (MkParam _ _ _ Copy :: ps) (_ :: ms) a pno =
+  noOwnerHereMissVoid fid ps ms a pno
+noOwnerHereMissVoid fid (MkParam _ _ _ Copy :: ps) [] a pno =
+  noOwnerHereMissVoid fid ps [] a pno
+noOwnerHereMissVoid fid (MkParam id pl nm Ptr :: ps) (m :: ms) a pno =
+  noOwnerHereMissVoid fid ps ms a
+    (noOwnerHereSkipPtrMiss fid id pl nm ps m ms a pno)
+noOwnerHereMissVoid fid (MkParam id pl nm Ptr :: ps) [] a pno =
+  noOwnerHereMissVoid fid ps [] a
+    (noOwnerHereSkipPtrBothMiss fid id pl nm ps a pno)
+
+||| Modes `[]` bind every pointer parameter as `ABorrowed`. A borrowed
+||| cell is not a unique owner, so `noOwnerHere = False` is impossible.
+export
+extraFrameNotOwner :
+  (fid : Nat) -> (ps : List Param) -> (vs : List HVal) -> (a : Addr) ->
+  noOwnerHere (bindFrame ps vs) (bindParams fid ps []) a = False ->
+  Void
+extraFrameNotOwner _ [] _ _ pno = void (trueNotFalse pno)
+extraFrameNotOwner fid (MkParam _ _ _ Copy :: ps) [] a pno =
+  extraFrameNotOwner fid ps [] a pno
+extraFrameNotOwner fid (MkParam _ _ _ Copy :: ps) (_ :: vs) a pno =
+  extraFrameNotOwner fid ps vs a pno
+extraFrameNotOwner fid (MkParam id pl nm Ptr :: ps) [] a pno =
+  extraFrameNotOwner fid ps [] a
+    (noOwnerHereSkipPtrBothMiss fid id pl nm ps a pno)
+extraFrameNotOwner fid (MkParam id pl nm Ptr :: ps) (HVNone :: vs) a pno =
+  extraFrameNotOwner fid ps vs a
+    (skipPtrExtraGo fid id pl nm ps HVNone vs a
+       (\eq => hvNoneNotPtr (trans (sym ptrArgNone) eq)) pno)
+extraFrameNotOwner fid (MkParam id pl nm Ptr :: ps) (HVCopy :: vs) a pno =
+  extraFrameNotOwner fid ps vs a
+    (skipPtrExtraGo fid id pl nm ps HVCopy vs a
+       (\eq => hvNoneNotPtr (trans (sym ptrArgCopy) eq)) pno)
+extraFrameNotOwner fid (MkParam id pl nm Ptr :: ps) (HVPtr b :: vs) a pno =
+  extraPtr (a == b) Refl pno
+  where
+    extraPtr : (eqb : Bool) -> a == b = eqb ->
+               noOwnerHere (bindFrame (MkParam id pl nm Ptr :: ps) (HVPtr b :: vs))
+                 (bindParams fid (MkParam id pl nm Ptr :: ps) []) a = False ->
+               Void
+    extraPtr True pab pno0 =
+      extraFrameNotOwner fid ps vs a
+        (noOwnerHereSkipPtrExtraSame fid id pl nm ps vs a b pab pno0)
+    extraPtr False pab pno0 =
+      extraFrameNotOwner fid ps vs a
+        (noOwnerHereSkipPtrExtra fid id pl nm ps vs a b pab pno0)
 
 neverNotMay : Not (Never = May)
 neverNotMay Refl impossible

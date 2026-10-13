@@ -6,3 +6,4 @@ core/build
 *.swp
 *.ttc
 *.ttm
+.DS_Store

@@ -540,6 +540,7 @@ exprOkPtrLive (HERealloc _ _ env1 h1 evs) = allocCell h1
 --------------------------------------------------------------------------------
 
 mutual
+  export
   exprStay :
     {funs : List Fun} -> {env, env' : HEnv} -> {h, h' : Heap} ->
     {e : Expr} -> {v : HVal} -> {a : Addr} -> {cl : Cell} ->
@@ -579,6 +580,7 @@ mutual
   exprStay wf (HEUse _ _ evs) prf eq = exprsStay wf evs prf eq
   exprStay wf HEUnsup prf eq = nothingNotJustH (trans (sym eq) prf)
 
+  export
   exprsStay :
     {funs : List Fun} -> {env, env' : HEnv} -> {h, h' : Heap} ->
     {es : List Expr} -> {v : HVal} -> {a : Addr} -> {cl : Cell} ->
@@ -593,6 +595,7 @@ mutual
     exprsStay wf (HEArgsCons w env1 h1 evE evEs) prf eq | Just cl1 =
       exprsStay (exprWf wf evE) evEs ph1 eq
 
+  export
   reallocStay :
     {funs : List Fun} -> {env, env' : HEnv} -> {h, h' : Heap} ->
     {es : List Expr} -> {v : HVal} -> {a : Addr} -> {cl : Cell} ->

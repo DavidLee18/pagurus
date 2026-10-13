@@ -13,7 +13,11 @@ Do not add holes, `believe_me`, `assert_total`, `postulate`, or `partial`.
 Do not add an axiom from `String ==` True to `x = y`.
 `CheckAcceptedNoHeapCrash` and `CheckAcceptedNoOwnershipCrash` stay
 byte-identical. Do not edit `OverApprox` or `uniqueLive`. Checker internals
-may change; the same programmes must still be accepted and rejected.
+may change; the same programmes must still be accepted and rejected,
+except one alias: a borrow argument whose value is a live pointer stored
+in a place that a consume argument of the same call also denotes.
+`f(q = malloc(), q)` (and a nested store of that address) is rejected.
+`f(q = NULL, q)` is not that alias. Distinct places stay accepted.
 
 ## Tasks
 
@@ -59,15 +63,26 @@ equality from a `findFun` hit (empty unit is `emptyFunsNoUser`).
 Do not add `{auto defNs : DefinedNamesEq ctx funs}` to Restore: auto
 search for that type leaves `funs` unsolved at `varUseH`.
 
-## Blocked on task 4
+## Task 4 checker change
 
-`bindOkJust` is false for the checker as it stands, and so is
-`CheckProgramNoHeapCrash`. Do not void the `Nothing` arms. Do not
-change what `checkProgram` accepts in order to make the lemma true.
+`bindOkJust` was false while `aliasBad` ignored assignment arguments.
+The accept/reject rule is relaxed only for:
 
-`aliasBad` only sees an `EVar` place (`borrowPlaces` / `consumePlaces`
-/ `nestedMixed`). An assignment argument is invisible to it. This unit
-is accepted (`checkProgram` returns `Right`):
+1. a borrow whose live pointer is stored in a place that a consume
+   argument of the same call also denotes (`assignAlias`), including a
+   nested store;
+2. a later argument, including under a Never-mode call, that frees
+   that stored dest or an earlier borrow (`nestedMixed`).
+
+`valuePlaces` follows `HEAsgPtr` only when the rhs can be `HVPtr`
+(`EVar`, `EMalloc`, prototype `realloc`, or a nested assignment of one).
+Null does not. Copy-assign sources are in `nestPlace`, so
+`f(x = p, g(p))` is `nestedMixed`. `f(p, p)` stays `mixedAlias`.
+Distinct places stay accepted. `f(q = NULL, q)` stays accepted.
+Do not void the `Nothing` arms until `bindOkJust` typechecks.
+Do not delete the four fallbacks until then.
+
+The unit that was accepted and crashed:
 
 ```
 void f(int *a, int *b) { free(b); use(a); }   /* modes Never, Always */
@@ -77,29 +92,65 @@ int main(void) {
 }
 ```
 
-`f(q, q)` is still rejected. `f(q = malloc(), q)` is not: the first
-argument is `EAssign`, so `borrowPlaces` is empty, `aliasBad` is false,
-and `checkArgsModes` is `Right` (`usePlace` on the assignment, then
-`takeOwner` of `q`).
+## Inh fuel
 
-Argument values are both `HVPtr` of that fresh address. `bindOkFrom` on
-`[Never, Always]` is `Nothing`: the head is a borrow, the tail holds the
-address, and the tail status is `AOwned`, so `noOwnerHere` is false.
-The cell is still live at the post-argument heap; the free is the callee
-body. The `Nothing` branch is inhabited.
+`Inh` typechecks. The group is `wfInd` on `Nat`. Each helper takes
+`{fk : LTE size k}`, and fuel `Z` on an `S _` constructor is
+`void (lteSuccZero fk)`. Same-fuel hops call `*_b` and do not re-enter
+`rec`. `idris2 --check Pagurus/Heap/Inh.idr` from `core/src` exits 0
+in 24s under the 5 GB cap.
 
-The body then `HSDropLive`s `b` and reads `a`. Those are the same
-address, so eval is `HEVarFreed` and `HSCallUserCrash` reports that crash
-from `main`, whose entry state is a valid `OverApprox`. Proved by running
-`checkProgram` on this IR (`assign ACCEPT`, `f(p, p)` `dup REJECT`).
+## Restore check (2026-10-13)
 
-Frame's `Just` lemmas and Inh's new `export`s are in the WIP commit that
-records this note. Restore's four fallback errors are unchanged.
-Do not commit `.DS_Store`.
+`idris2 --check Pagurus/Heap/Restore.idr` from `core/src` exits 1 in
+15s under the 5 GB cap. Totality does not hang. Exactly four errors,
+all the known fallbacks:
 
-A proof cannot clear this. The theorem is false for the current checker.
-Clearing it means rejecting this alias in the checker, then proving
-`bindOkJust` for that stricter checker. No passing fixture passes an
-assignment as a call argument, so the existing suite can stay put.
-The rule above still forbids that accept/reject change. Parked here
-on 2026-10-12.
+- `ownCellLive`: `stmtsStay` unifies `Just Freed` with `Nothing`
+- `ownCellLiveRet`: `equalNat c a` with `equalNat c c`
+- `restoreOwnLN` / `restoreOwnLNRet`: `heldPtr` `True` with `False`
+
+The six mechanical fixes are in the working tree (not committed).
+`nestedMixedEq` transports `borrowPlaceQuietTail`. `varGo True` rewrites
+`eqNatTrue`. `frameOwnerVoid` and `bindOkConsumePtr` take `sc1` as an
+argument. `bindOkJust` dispatches `go (doesConsume m) Refl`. `bindOkBorrowPtr`
+defines `tailBok` before `ownerGo`.
+
+Two elaborator holes found on the way are also closed, still without
+voiding `Nothing`:
+
+- `HEVarLive` binds its own address. `headNamesOwner` matches it on a
+  parameter expression `e1`, keeps `HROk (HVPtr b) = HROk (HVPtr a)`
+  abstract, and passes `HVPtr a` to `uniqueLive`.
+- `ownerGo` on `HEArgsNil` takes env, heap, and `es` as arguments.
+  `HEArgsNil` forces the result env and heap to reuse those names.
+  `collectNil` plus `bindFrameUnheld ps []` feed
+  `bindOkFromPtrBorrowUnheld`. The cons arm passes the whole `tailBok`
+  pair to `ownFrame`.
+
+`bindOkJust` still does not typecheck: the four fallbacks are called
+from the `Nothing` arms, and their bodies are the four errors. The
+coverage pass does not reach `headNamesOwner` while those errors remain,
+so missing `HEvalExpr` cases are not listed yet. Do not void `Nothing`.
+Do not delete the fallbacks. Do not edit `Inh`. Proof is not finished.
+Do not commit `.DS_Store` or `core/src/Probe.idr`. Pushed HEAD is
+`33e2ee6`.
+
+## Next session: remaining owner proof
+
+The mechanical scope bugs are gone. Next is the real proof, still with
+no `believe_me`:
+
+- `headNamesOwner` is written only for `HEVarLive`. `HEMalloc` and
+  `HERealloc` are fresh (`fst (alloc h1)`); a use-safe owner of that
+  address in the pre-alloc environment is `deadUnsafe` of `freshMiss`
+  (see `oaAlloc`). `HEAsgCopy` recurses on the rhs (`nestPlace` is
+  `valuePlaces rhs`). `HEAsgPtr` moves the rhs by `takeOwner`; the
+  post-owner is the destination, already in `nestPlace`. `HVNone`,
+  `HVCopy`, and crash constructors are impossible against
+  `HROk (HVPtr a)`.
+- `heldOwnerCell` and `ownerFrameVoid` are only total for an empty
+  tail. The nonempty tail is the induction.
+
+Only after `bindOkJust` typechecks: void `Nothing`, delete the four
+fallbacks and the dead helpers, then build and run tests.

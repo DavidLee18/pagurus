@@ -35,6 +35,7 @@ import Pagurus.Heap.Args
 import Pagurus.Heap.If
 import Pagurus.Heap.Return
 import public Pagurus.Heap.Unique
+import public Pagurus.Heap.Inh
 
 %default total
 
@@ -492,6 +493,302 @@ ownFreedHeldRet :
   Void
 ownFreedHeldRet leftoverSafe pnoF look lp safe live ph =
   leftoverSafe p st a pnoF look lp safe live ph
+
+||| `takeOwner` returned `Null` but the value is a pointer.
+nullNotPtrTaken : {env : HEnv} -> {h : Heap} -> {sc : Scopes} -> {a : Addr} ->
+  HTaken Null (HVPtr a) env h sc -> Void
+nullNotPtrTaken HNull impossible
+
+orF : (x, y : Bool) -> x || y = False -> (x = False, y = False)
+orF False False Refl = (Refl, Refl)
+orF True _ prf = void (trueNotFalse prf)
+
+placeInHere : (p : Place) -> placeIn p [p] = True
+placeInHere p = rewrite eqNatRefl p in Refl
+
+placeInAppendL : {p : Place} -> {xs, ys : List Place} ->
+  placeIn p xs = True -> placeIn p (xs ++ ys) = True
+placeInAppendL {xs = []} pin = void (trueNotFalse (sym pin))
+placeInAppendL {xs = q :: qs} pin = appGo (p == q) Refl pin
+  where
+    appGo : (eqb : Bool) -> p == q = eqb ->
+            placeIn p (q :: qs) = True -> placeIn p ((q :: qs) ++ ys) = True
+    appGo True pq _ = rewrite pq in Refl
+    appGo False pq pin0 =
+      let pin1 = replace {p = \b => (b || Delay (placeIn p qs)) = True} pq pin0
+      in rewrite pq in placeInAppendL pin1
+
+placeInPref : {p : Place} -> {xs, ys : List Place} ->
+  placeIn p (xs ++ ys) = False -> placeIn p xs = False
+placeInPref {xs = []} _ = Refl
+placeInPref {xs = q :: qs} prf =
+  let (hd, tl) = orF (p == q) (placeIn p (qs ++ ys)) prf
+  in rewrite hd in placeInPref tl
+
+overlapPref : {xs, ys, zs : List Place} ->
+  placesOverlap (xs ++ ys) zs = False -> placesOverlap xs zs = False
+overlapPref {xs = []} _ = Refl
+overlapPref {xs = p :: ps} prf =
+  let (hd, tl) = orF (placeIn p zs) (placesOverlap (ps ++ ys) zs) prf
+  in rewrite hd in overlapPref tl
+
+overlapMiss : {p : Place} -> {xs, zs : List Place} ->
+  placeIn p xs = True -> placesOverlap xs zs = False -> placeIn p zs = False
+overlapMiss {xs = []} pin _ = void (trueNotFalse (sym pin))
+overlapMiss {xs = q :: qs} pin prf = missGo (p == q) Refl pin prf
+  where
+    missGo : (eqb : Bool) -> p == q = eqb ->
+             placeIn p (q :: qs) = True ->
+             placesOverlap (q :: qs) zs = False -> placeIn p zs = False
+    missGo True pq _ prf0 =
+      let (hd, _) = orF (placeIn q zs) (placesOverlap qs zs) prf0
+      in replace {p = \n => placeIn n zs = False} (sym (eqNatTrue p q pq)) hd
+    missGo False pq pin0 prf0 =
+      let pin1 = replace {p = \b => (b || Delay (placeIn p qs)) = True} pq pin0
+          (_, tl) = orF (placeIn q zs) (placesOverlap qs zs) prf0
+      in overlapMiss pin1 tl
+
+||| A borrow head that names `q` is not freed by the tail.
+borrowPlaceQuietTail : {ctx : Ctx} -> {q : Place} -> {e : Expr} ->
+  {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+  doesConsume m = False ->
+  placeIn q (nestPlace e) = True ->
+  nestedMixed ctx (e :: es) (m :: ms) = False ->
+  argsHit ctx.summaries q es = False
+borrowPlaceQuietTail {ctx} {q} {e} pc pin pn =
+  let places = nestBorrowBorrow {e} {es} {m} {ms} pc
+      pinAll = replace {p = \ps => placeIn q ps = True} (sym places)
+                 (placeInAppendL {xs = nestPlace e} pin)
+      pnGo = replace {p = \b => b = False}
+               (nestedMixedEq {ctx} {es = e :: es} {ms = m :: ms}) pn
+      hitAll = argsHitIn {acc = ctx.summaries} {p = q}
+                 {ps = nestBorrowPlaces (e :: es) (m :: ms)} {es = e :: es}
+                 pinAll pnGo
+  in argsHitTail {e} {es} hitAll
+
+||| Use-safe unique owner of `a`. `oaLive` reads the cell off this.
+public export
+record Own (env : HEnv) (sc : Scopes) (a : Addr) where
+  constructor MkOwn
+  ownQ : Place
+  ownSt : Status
+  ownLook : lookupH ownQ env = Just (HVPtr a)
+  ownLp : lookupPlace ownQ sc = Just ownSt
+  ownSafe : unsafeUse ownSt = False
+  ownHas : hasOwned ownSt = True
+  ownNb : hasBorrowed ownSt = Nothing
+
+ownLive : {env : HEnv} -> {h : Heap} -> {sc : Scopes} -> {a : Addr} ->
+  OverApprox env h sc -> Own env sc a -> cell h a = Just Live
+ownLive oa own =
+  oaLive oa own.ownQ own.ownSt a own.ownLp own.ownLook own.ownSafe
+
+ownRewrite : {env : HEnv} -> {sc1, sc2 : Scopes} -> {a : Addr} ->
+  sc1 = sc2 -> Own env sc1 a -> Own env sc2 a
+ownRewrite Refl own = own
+
+||| `usePlace` of the owner keeps it a use-safe owner.
+ownUseHere : {env : HEnv} -> {sc, sc' : Scopes} -> {a : Addr} ->
+  {nid : Nat} -> {nm : String} ->
+  (own : Own env sc a) ->
+  usePlace sc own.ownQ nid nm = Right sc' ->
+  Own env sc' a
+ownUseHere own eq = go (lookupPlace own.ownQ sc) Refl
+  where
+    go : (lookP : Maybe Status) -> lookupPlace own.ownQ sc = lookP -> Own env sc' a
+    go Nothing pL = void (nothingNotJust (trans (sym pL) own.ownLp))
+    go (Just st0) pL with (stepStatus st0 Use nid) proof pS
+      go (Just st0) pL | Left d =
+        void (leftNotRight (trans (sym (usePlaceJustL pL pS)) eq))
+      go (Just st0) pL | Right stN =
+        let scEq = rightInj (trans (sym (usePlaceJust pL pS)) eq)
+            stEq = justInj (trans (sym own.ownLp) pL)
+            safe1 = stepUseResultSafe st0 nid stN pS
+                      (replace {p = \s => unsafeUse s = False} stEq own.ownSafe)
+            has1 = stepUseOwnedFwd st0 nid stN pS
+                     (replace {p = \s => hasOwned s = True} stEq own.ownHas)
+            nb1 = stepUseBorrowFwd st0 nid stN pS
+                    (replace {p = \s => hasBorrowed s = Nothing} stEq own.ownNb)
+            built = MkOwn own.ownQ stN own.ownLook
+                      (lookupPlaceSetHit own.ownQ stN sc) safe1 has1 nb1
+        in ownRewrite scEq built
+
+||| `usePlace` of a different intern leaves the owner untouched.
+ownUseOther : {env : HEnv} -> {sc, sc' : Scopes} -> {a : Addr} ->
+  {n : Place} -> {nid : Nat} -> {nm : String} ->
+  (own : Own env sc a) ->
+  own.ownQ == n = False ->
+  usePlace sc n nid nm = Right sc' ->
+  Own env sc' a
+ownUseOther own ne eq =
+  MkOwn own.ownQ own.ownSt own.ownLook (useKeepLookup ne own.ownLp eq)
+    own.ownSafe own.ownHas own.ownNb
+
+||| `movePlace` of a different intern leaves the owner untouched.
+ownMoveOther : {env : HEnv} -> {sc, sc' : Scopes} -> {a : Addr} ->
+  {n : Place} -> {nid : Nat} -> {nm : String} ->
+  (own : Own env sc a) ->
+  own.ownQ == n = False ->
+  movePlace sc n nid nm = Right sc' ->
+  Own env sc' a
+ownMoveOther own ne eq =
+  MkOwn own.ownQ own.ownSt own.ownLook (moveKeepLookup ne own.ownLp eq)
+    own.ownSafe own.ownHas own.ownNb
+
+mutual
+  exprUK : {funs : List Fun} -> {env, env' : HEnv} -> {h, h' : Heap} ->
+    {e : Expr} -> {v : HVal} ->
+    UniqueKeys env ->
+    HEvalExpr {funs} env h e (HROk v env' h') ->
+    UniqueKeys env'
+  exprUK uk HELit = uk
+  exprUK uk HENull = uk
+  exprUK uk (HEVarLive _ _ _) = uk
+  exprUK uk (HEVarNone _) = uk
+  exprUK uk (HEVarCopy _) = uk
+  exprUK uk (HEVarMiss _) = uk
+  exprUK uk HEUnsup = uk
+  exprUK uk (HEMalloc _ _ evs) = exprsUK uk evs
+  exprUK uk (HEAsgCopy _ _ _ ev) = exprUK uk ev
+  exprUK uk (HEAsgPtr v _ _ ev) {e = EAssign _ n _ _ _} =
+    uniqueKeysSetH n v (exprUK uk ev)
+  exprUK uk (HECall _ _ _ evs) = exprsUK uk evs
+  exprUK uk (HECallUser _ _ _ _ _ _ evs _ _ _) = exprsUK uk evs
+  exprUK uk (HECallUserRet _ _ _ _ _ _ evs _ _ _) = exprsUK uk evs
+  exprUK uk (HERealloc _ _ _ _ evr) = reallocUK uk evr
+  exprUK uk (HEUse _ _ evs) = exprsUK uk evs
+
+  exprsUK : {funs : List Fun} -> {env, env' : HEnv} -> {h, h' : Heap} ->
+    {es : List Expr} -> {v : HVal} ->
+    UniqueKeys env ->
+    HEvalExprs {funs} env h es (HROk v env' h') ->
+    UniqueKeys env'
+  exprsUK uk HEArgsNil = uk
+  exprsUK uk (HEArgsCons _ _ _ evE evEs) = exprsUK (exprUK uk evE) evEs
+
+  reallocUK : {funs : List Fun} -> {env, env' : HEnv} -> {h, h' : Heap} ->
+    {es : List Expr} -> {v : HVal} ->
+    UniqueKeys env ->
+    HEvalReallocArgs {funs} env h es (HROk v env' h') ->
+    UniqueKeys env'
+  reallocUK uk HRNil = uk
+  reallocUK uk (HRHeadOk _ _ _ evE evEs) = exprsUK (exprUK uk evE) evEs
+
+||| The borrow expression that yielded `HVPtr a` names the use-safe owner.
+headNamesOwner :
+  {funs : List Fun} -> {ctx : Ctx} -> {e : Expr} ->
+  {env, env' : HEnv} -> {h, h' : Heap} -> {sc, sc' : Scopes} -> {a : Addr} ->
+  (own : Own env' sc' a) ->
+  OverApprox env' h' sc' ->
+  checkExpr ctx sc e = Right sc' ->
+  HEvalExpr {funs} env h e (HROk (HVPtr a) env' h') ->
+  placeIn own.ownQ (nestPlace e) = True
+headNamesOwner own oa eq ev = resGo e ev Refl Refl
+  where
+    ||| `e1` is a parameter so `HEVarLive` can refine it. The outer `e`
+    ||| stays rigid; `eqE` transports the place and the checker result.
+    resGo : (e1 : Expr) -> {v : HVal} -> {envR : HEnv} -> {hR : Heap} ->
+            HEvalExpr {funs} env h e1 (HROk v envR hR) ->
+            e1 = e ->
+            HROk v envR hR = HROk (HVPtr a) env' h' ->
+            placeIn own.ownQ (nestPlace e) = True
+    resGo (EVar nid n nm) (HEVarLive b look _) eqE prf =
+      let eqVar = replace {p = \ex => checkExpr ctx sc ex = Right sc'} (sym eqE) eq
+          pE = trans (sym (checkExprVar ctx sc nid n nm)) eqVar
+          same = hvPtrInj (hrOkValEq prf)
+          envEq = hrOkEnvEq prf
+          lookB = replace {p = \en => lookupH n en = Just (HVPtr b)} envEq look
+          lookA = replace {p = \x => lookupH n env' = Just (HVPtr x)} same lookB
+          here = varGo (own.ownQ == n) Refl pE lookB lookA
+      in replace {p = \ex => placeIn own.ownQ (nestPlace ex) = True} eqE here
+      where
+        hrOkValEq : {v1, v2 : HVal} -> {e1, e2 : HEnv} -> {h1, h2 : Heap} ->
+                    HROk v1 e1 h1 = HROk v2 e2 h2 -> v1 = v2
+        hrOkValEq Refl = Refl
+        hrOkEnvEq : {v1, v2 : HVal} -> {e1, e2 : HEnv} -> {h1, h2 : Heap} ->
+                    HROk v1 e1 h1 = HROk v2 e2 h2 -> e1 = e2
+        hrOkEnvEq Refl = Refl
+        varSafePost : lookupH n env' = Just (HVPtr b) ->
+                      usePlace sc n nid nm = Right sc' ->
+                      (stN ** (lookupPlace n sc' = Just stN, unsafeUse stN = False))
+        varSafePost lookB pU = postGo (lookupPlace n sc) Refl
+          where
+            postGo : (lookP : Maybe Status) -> lookupPlace n sc = lookP ->
+                     (stN ** (lookupPlace n sc' = Just stN, unsafeUse stN = False))
+            postGo Nothing pL =
+              let (_ ** lp) = oa.tracked n (HVPtr b) lookB
+              in void (nothingNotJust (trans (sym (replace {p = \s => lookupPlace n s = Nothing}
+                     (rightInj (trans (sym (usePlaceNothing pL)) pU)) pL)) lp))
+            postGo (Just st0) pL = stepGo (stepStatus st0 Use nid) Refl
+              where
+                stepGo : (r : Either Diag Status) -> stepStatus st0 Use nid = r ->
+                         (stN ** (lookupPlace n sc' = Just stN, unsafeUse stN = False))
+                stepGo (Left d) pS =
+                  void (leftNotRight (trans (sym (usePlaceJustL pL pS)) pU))
+                stepGo (Right stN) pS =
+                  let scEq = rightInj (trans (sym (usePlaceJust pL pS)) pU)
+                      preSafe = stepUseSafe st0 nid stN pS
+                  in (stN ** (replace {p = \s => lookupPlace n s = Just stN} scEq
+                                (lookupPlaceSetHit n stN sc),
+                              stepUseResultSafe st0 nid stN pS preSafe))
+        varGo : (eqb : Bool) -> own.ownQ == n = eqb ->
+                usePlace sc n nid nm = Right sc' ->
+                lookupH n env' = Just (HVPtr b) ->
+                lookupH n env' = Just (HVPtr a) ->
+                placeIn own.ownQ (nestPlace (EVar nid n nm)) = True
+        varGo True pq _ _ _ =
+          rewrite eqNatTrue own.ownQ n pq in placeInHere n
+        varGo False pq pU lookB lookA =
+          let (stN ** (lpN, safeN)) = varSafePost lookB pU
+          in void (trueNotFalse (trans (sym
+               (oa.uniqueLive own.ownQ n a pq own.ownLook lookA
+                  (ownLive oa own)
+                  own.ownSt own.ownLp stN lpN
+                  own.ownSafe own.ownHas own.ownNb)) safeN))
+
+||| Cell of `a` stays live across a tail that does not free the owner.
+heldOwnerCell :
+  {funs : List Fun} -> {ctx : Ctx} ->
+  {auto ihs : CallIHs funs ctx} ->
+  {callee : String} -> {es : List Expr} -> {ms : List Consume} ->
+  {env, env1 : HEnv} -> {h, h1 : Heap} -> {sc, sc' : Scopes} -> {a : Addr} ->
+  (own : Own env sc a) ->
+  OverApprox env h sc ->
+  argsHit ctx.summaries own.ownQ es = False ->
+  nestedMixed ctx es ms = False ->
+  assignAlias es ms = False ->
+  mixedAlias es ms = False ->
+  checkArgsModes ctx sc callee es ms = Right sc' ->
+  HEvalExprs {funs} env h es (HROk HVNone env1 h1) ->
+  cell h1 a = Just Live
+heldOwnerCell own oa _ _ _ _ eq HEArgsNil =
+  let scEq = rightInj (trans (sym (checkArgsModesNil ctx sc callee ms)) eq)
+  in ownLive (oaRewrite scEq oa) (ownRewrite scEq own)
+
+||| A tail whose frame still has a unique owner of `a` contradicts the
+||| alias flags: that owner value was read from the protected place.
+ownerFrameVoid :
+  {funs : List Fun} -> {ctx : Ctx} ->
+  {auto ihs : CallIHs funs ctx} ->
+  {fid : Nat} -> {ps : List Param} ->
+  {callee : String} -> {es : List Expr} -> {ms : List Consume} ->
+  {env, env1 : HEnv} -> {h, h1 : Heap} -> {sc, sc' : Scopes} -> {a : Addr} ->
+  (own : Own env sc a) ->
+  OverApprox env h sc ->
+  argsHit ctx.summaries own.ownQ es = False ->
+  nestedMixed ctx es ms = False ->
+  assignAlias es ms = False ->
+  mixedAlias es ms = False ->
+  checkArgsModes ctx sc callee es ms = Right sc' ->
+  (evs : HEvalExprs {funs} env h es (HROk HVNone env1 h1)) ->
+  noOwnerHere (bindFrame ps (collectArgVals evs)) (bindParams fid ps ms) a = False ->
+  Void
+ownerFrameVoid {ps = []} own oa _ _ _ _ _ evs pno =
+  void (trueNotFalse
+    (replace {p = \e => noOwnerHere e (bindParams fid [] ms) a = False}
+       (bindFrameNil (collectArgVals evs)) pno))
+ownerFrameVoid own oa hit pn pa pm eq HEArgsNil pno =
+  noOwnerHereMissVoid fid ps ms a pno
 
 --------------------------------------------------------------------------------
 -- LiveNuo through an accepted body
@@ -2736,6 +3033,589 @@ mutual
     in MkLN (oaRewrite scEq ln.oaLN) (nuoRewrite scEq ln.nuoLN) ln.liveLN
   exprsModesRest ln eq (HEArgsCons w env1 h1 evE evEs) {es = e :: es} =
     exprsModesLN {funs} {chk} ln eq evE evEs
+
+  ||| `noOwnerHere` cannot become False while `LiveNuo` is kept: a consume
+  ||| of leftover `a` is `nuoNoTakeLeftover`, and a borrow or copy leaves
+  ||| the witness in the tail.
+  frameOwnerVoid :
+    {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
+    {fid : Nat} -> {ps : List Param} ->
+    {callee : String} -> {es : List Expr} -> {ms : List Consume} ->
+    {env, env1 : HEnv} -> {h, h1 : Heap} -> {sc, sc' : Scopes} -> {a : Addr} ->
+    LiveNuo env h sc a ->
+    checkArgsModes ctx sc callee es ms = Right sc' ->
+    (evs : HEvalExprs {funs} env h es (HROk HVNone env1 h1)) ->
+    noOwnerHere (bindFrame ps (collectArgVals evs)) (bindParams fid ps ms) a = False ->
+    Void
+  frameOwnerVoid {ps = []} _ _ evs pno =
+    void (trueNotFalse
+      (replace {p = \e => noOwnerHere e (bindParams fid [] ms) a = False}
+         (bindFrameNil (collectArgVals evs)) pno))
+  frameOwnerVoid {ms = []} _ _ evs pno =
+    extraFrameNotOwner fid ps (collectArgVals evs) a pno
+  frameOwnerVoid _ _ HEArgsNil pno =
+    noOwnerHereMissVoid fid ps ms a pno
+  frameOwnerVoid {ps = MkParam id pl nm Copy :: ps} {es = e :: es1} {ms = m :: ms}
+      ln eq (HEArgsCons v envA hA evE evEs) pno with (doesConsume m) proof pc
+    frameOwnerVoid {ps = MkParam id pl nm Copy :: ps} {es = e :: es1} {ms = m :: ms}
+        ln eq (HEArgsCons v envA hA evE evEs) pno | False =
+      let (sc1 ** (pE, pEs)) = argsModesBorrowSplit pc eq
+          ln1 = exprLN {funs} {chk} ln pE evE
+      in frameOwnerVoid {funs} {chk} {ps} {es = es1} {ms} ln1 pEs evEs pno
+    frameOwnerVoid {ps = MkParam id pl nm Copy :: ps} {es = e :: es1} {ms = m :: ms}
+        ln eq (HEArgsCons v envA hA evE evEs) pno | True =
+      let (sc1 ** (_ ** (pT, pEs))) = argsModesMoveSplit pc eq
+          ln1 = (takeLN {funs} {chk} ln pT evE).lnTLN
+      in frameOwnerVoid {funs} {chk} {ps} {es = es1} {ms} ln1 pEs evEs pno
+  frameOwnerVoid {ps = MkParam id pl nm Ptr :: ps} {es = e :: es1} {ms = m :: ms}
+      ln eq (HEArgsCons v envA hA evE evEs) pno with (doesConsume m) proof pc
+    frameOwnerVoid {ps = MkParam id pl nm Ptr :: ps} {es = e :: es1} {ms = m :: ms}
+        ln eq (HEArgsCons HVNone envA hA evE evEs) pno | False =
+      let (sc1 ** (pE, pEs)) = argsModesBorrowSplit pc eq
+          ln1 = exprLN {funs} {chk} ln pE evE
+          pno1 = noOwnerHereSkipPtrNone fid id pl nm ps m ms (collectArgVals evEs) a pno
+      in frameOwnerVoid {funs} {chk} {ps} {es = es1} {ms} ln1 pEs evEs pno1
+    frameOwnerVoid {ps = MkParam id pl nm Ptr :: ps} {es = e :: es1} {ms = m :: ms}
+        ln eq (HEArgsCons HVCopy envA hA evE evEs) pno | False =
+      let (sc1 ** (pE, pEs)) = argsModesBorrowSplit pc eq
+          ln1 = exprLN {funs} {chk} ln pE evE
+          pno1 = noOwnerHereSkipPtrCopy fid id pl nm ps m ms (collectArgVals evEs) a pno
+      in frameOwnerVoid {funs} {chk} {ps} {es = es1} {ms} ln1 pEs evEs pno1
+    frameOwnerVoid {ps = MkParam id pl nm Ptr :: ps} {es = e :: es1} {ms = m :: ms}
+        ln eq (HEArgsCons (HVPtr b) envA hA evE evEs) pno | False =
+      let (sc1 ** (pE, pEs)) = argsModesBorrowSplit pc eq
+          ln1 = exprLN {funs} {chk} ln pE evE
+      in ptrB (a == b) Refl sc1 ln1 pE pEs
+      where
+        ptrB : (eqb : Bool) -> a == b = eqb -> (sc1 : Scopes) ->
+               LiveNuo envA hA sc1 a ->
+               checkExpr ctx sc e = Right sc1 ->
+               checkArgsModes ctx sc1 callee es1 ms = Right sc' -> Void
+        ptrB False pab sc1 ln1 _ pEs =
+          frameOwnerVoid {funs} {chk} {ps} {es = es1} {ms} ln1 pEs evEs
+            (noOwnerHereSkipPtrOwn fid id pl nm ps m ms (collectArgVals evEs) a b pab pno)
+        ptrB True pab sc1 ln1 _ pEs =
+          frameOwnerVoid {funs} {chk} {ps} {es = es1} {ms} ln1 pEs evEs
+            (noOwnerHereSkipPtrBorrow fid id pl nm ps m ms (collectArgVals evEs) a b pab pc pno)
+    frameOwnerVoid {ps = MkParam id pl nm Ptr :: ps} {es = e :: es1} {ms = m :: ms}
+        ln eq (HEArgsCons HVNone envA hA evE evEs) pno | True =
+      let (sc1 ** (_ ** (pT, pEs))) = argsModesMoveSplit pc eq
+          ln1 = (takeLN {funs} {chk} ln pT evE).lnTLN
+          pno1 = noOwnerHereSkipPtrNone fid id pl nm ps m ms (collectArgVals evEs) a pno
+      in frameOwnerVoid {funs} {chk} {ps} {es = es1} {ms} ln1 pEs evEs pno1
+    frameOwnerVoid {ps = MkParam id pl nm Ptr :: ps} {es = e :: es1} {ms = m :: ms}
+        ln eq (HEArgsCons HVCopy envA hA evE evEs) pno | True =
+      let (sc1 ** (_ ** (pT, pEs))) = argsModesMoveSplit pc eq
+          ln1 = (takeLN {funs} {chk} ln pT evE).lnTLN
+          pno1 = noOwnerHereSkipPtrCopy fid id pl nm ps m ms (collectArgVals evEs) a pno
+      in frameOwnerVoid {funs} {chk} {ps} {es = es1} {ms} ln1 pEs evEs pno1
+    frameOwnerVoid {ps = MkParam id pl nm Ptr :: ps} {es = e :: es1} {ms = m :: ms}
+        ln eq (HEArgsCons (HVPtr b) envA hA evE evEs) pno | True =
+      ptrM (a == b) Refl
+      where
+        ptrM : (eqb : Bool) -> a == b = eqb -> Void
+        ptrM False pab =
+          let (sc1 ** (_ ** (pT, pEs))) = argsModesMoveSplit pc eq
+              ln1 = (takeLN {funs} {chk} ln pT evE).lnTLN
+              pno1 = noOwnerHereSkipPtrOwn fid id pl nm ps m ms
+                       (collectArgVals evEs) a b pab pno
+          in frameOwnerVoid {funs} {chk} {ps} {es = es1} {ms} ln1 pEs evEs pno1
+        ptrM True pab =
+          let (sc1 ** (fl ** (pT, _))) = argsModesMoveSplit pc eq
+          in flagGo fl sc1 pT
+          where
+            flagGo : (fl : Flag) -> (sc1 : Scopes) ->
+                     takeOwner ctx sc e = Right (sc1, fl) -> Void
+            flagGo Ghost sc1 pT =
+              void (leftNotRight (trans (sym (argsModesMoveGhost es1 ms pc pT)) eq))
+            flagGo Null sc1 pT =
+              nullNotPtrTaken (htTaken (ihs.takeIH evE sc sc1 Null pT ln.oaLN))
+            flagGo Owner sc1 pT =
+              nuoNoTakeLeftover {funs} {chk} evE pT ln
+                (cong HVPtr (sym (eqNatTrue a b pab)))
+
+  ||| Accepted arguments with the three alias flags false bind.
+  ||| Both the head step and the tail are indexed by the final heap.
+  export
+  bindOkJust :
+    {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
+    {fid : Nat} -> {ps : List Param} ->
+    {callee : String} -> {es : List Expr} -> {ms : List Consume} ->
+    {env, env1 : HEnv} -> {h, h1 : Heap} -> {sc, sc' : Scopes} ->
+    {uk : UniqueKeys env} ->
+    mixedAlias es ms = False ->
+    nestedMixed ctx es ms = False ->
+    assignAlias es ms = False ->
+    OverApprox env h sc ->
+    checkArgsModes ctx sc callee es ms = Right sc' ->
+    (evs : HEvalExprs {funs} env h es (HROk HVNone env1 h1)) ->
+    (bok : BindOk fid h1 ps ms (collectArgVals evs) **
+      bindOkFrom {fid} {h = h1} ps ms (collectArgVals evs) = Just bok)
+  bindOkJust {ps = []} _ _ _ _ _ evs =
+    (BONil ** bindOkFromNilJust ms (collectArgVals evs))
+  bindOkJust {ps = p :: ps1} _ _ _ _ _ HEArgsNil =
+    bindOkFromValsNil (p :: ps1) ms
+  bindOkJust {ps = MkParam id pl nm Copy :: ps1} {es = e :: es1}
+      pm pn pa oa eq (HEArgsCons v envA hA evE evEs) {ms = []} =
+    let (sc1 ** (_ ** (pT, pEs))) = argsModesExtraSplit eq
+        oaA = htFromOk (ihs.takeIH evE sc sc1 _ pT oa)
+        (rec ** eqb) = bindOkJust {funs} {chk} {ps = ps1} {es = es1} {ms = []}
+                         {env = envA} {h = hA} {h1}
+                         {uk = exprUK uk evE}
+                         (mixedAliasNilModes es1) (nestedMixedNilModes ctx es1)
+                         (assignAliasNilModes es1) oaA pEs evEs
+    in (BOCopyC rec ** bindOkFromCopyCJust {id} {pl} {nm} eqb)
+  bindOkJust {ps = MkParam id pl nm Copy :: ps1} {es = e :: es1} {ms = m :: ms1}
+      pm pn pa oa eq (HEArgsCons v envA hA evE evEs) =
+    go (doesConsume m) Refl
+    where
+      go : (b : Bool) -> doesConsume m = b ->
+           (bok : BindOk fid h1 (MkParam id pl nm Copy :: ps1) (m :: ms1)
+                   (v :: collectArgVals evEs) **
+             bindOkFrom {fid} {h = h1} (MkParam id pl nm Copy :: ps1) (m :: ms1)
+               (v :: collectArgVals evEs) = Just bok)
+      go False pc =
+        let (sc1 ** (pE, pEs)) = argsModesBorrowSplit pc eq
+            oaA = hrFromOk (ihs.exprIH evE sc sc1 pE oa)
+            (pm1, pn1, pa1) = aliasQuietBorrowTail pc pm pn pa
+            (rec ** eqb) = bindOkJust {funs} {chk} {ps = ps1} {es = es1} {ms = ms1}
+                             {env = envA} {h = hA} {h1}
+                             {uk = exprUK uk evE} pm1 pn1 pa1 oaA pEs evEs
+        in (BOCopyCV rec ** bindOkFromCopyCVJust {id} {pl} {nm} eqb)
+      go True pc =
+        let (sc1 ** (fl ** (pT, pEs))) = argsModesMoveSplit pc eq
+            oaA = htFromOk (ihs.takeIH evE sc sc1 fl pT oa)
+            (pm1, pn1, pa1) = aliasQuietConsumeTail pc pm pn pa
+            (rec ** eqb) = bindOkJust {funs} {chk} {ps = ps1} {es = es1} {ms = ms1}
+                             {env = envA} {h = hA} {h1}
+                             {uk = exprUK uk evE} pm1 pn1 pa1 oaA pEs evEs
+        in (BOCopyCV rec ** bindOkFromCopyCVJust {id} {pl} {nm} eqb)
+  bindOkJust {ps = MkParam id pl nm Ptr :: ps1} {es = e :: es1}
+      pm pn pa oa eq (HEArgsCons HVNone envA hA evE evEs) {ms = []} =
+    let (sc1 ** (fl ** (pT, pEs))) = argsModesExtraSplit eq
+        oaA = htFromOk (ihs.takeIH evE sc sc1 fl pT oa)
+        (rec ** eqb) = bindOkJust {funs} {chk} {ps = ps1} {es = es1} {ms = []}
+                         {env = envA} {h = hA} {h1}
+                         {uk = exprUK uk evE}
+                         (mixedAliasNilModes es1) (nestedMixedNilModes ctx es1)
+                         (assignAliasNilModes es1) oaA pEs evEs
+    in (BOPtrExtraNone rec ** bindOkFromPtrExtraNoneJust {id} {pl} {nm} eqb)
+  bindOkJust {ps = MkParam id pl nm Ptr :: ps1} {es = e :: es1}
+      pm pn pa oa eq (HEArgsCons HVCopy envA hA evE evEs) {ms = []} =
+    let (sc1 ** (fl ** (pT, pEs))) = argsModesExtraSplit eq
+        oaA = htFromOk (ihs.takeIH evE sc sc1 fl pT oa)
+        (rec ** eqb) = bindOkJust {funs} {chk} {ps = ps1} {es = es1} {ms = []}
+                         {env = envA} {h = hA} {h1}
+                         {uk = exprUK uk evE}
+                         (mixedAliasNilModes es1) (nestedMixedNilModes ctx es1)
+                         (assignAliasNilModes es1) oaA pEs evEs
+    in (BOPtrExtraCopy rec ** bindOkFromPtrExtraCopyJust {id} {pl} {nm} eqb)
+  bindOkJust {ps = MkParam id pl nm Ptr :: ps1} {es = e :: es1}
+      pm pn pa oa eq (HEArgsCons (HVPtr a) envA hA evE evEs) {ms = []} =
+    bindOkExtraPtr {funs} {chk} {id} {pl} {nm} {ps = ps1} {es = es1}
+      {env} {envA} {env1} {h} {hA} {h1} {sc} {a} {uk}
+      pm pn pa oa eq evE evEs
+  bindOkJust {ps = MkParam id pl nm Ptr :: ps1} {es = e :: es1} {ms = m :: ms1}
+      pm pn pa oa eq (HEArgsCons HVNone envA hA evE evEs) =
+    go (doesConsume m) Refl
+    where
+      go : (b : Bool) -> doesConsume m = b ->
+           (bok : BindOk fid h1 (MkParam id pl nm Ptr :: ps1) (m :: ms1)
+                   (HVNone :: collectArgVals evEs) **
+             bindOkFrom {fid} {h = h1} (MkParam id pl nm Ptr :: ps1) (m :: ms1)
+               (HVNone :: collectArgVals evEs) = Just bok)
+      go False pc =
+        let (sc1 ** (pE, pEs)) = argsModesBorrowSplit pc eq
+            oaA = hrFromOk (ihs.exprIH evE sc sc1 pE oa)
+            (pm1, pn1, pa1) = aliasQuietBorrowTail pc pm pn pa
+            (rec ** eqb) = bindOkJust {funs} {chk} {ps = ps1} {es = es1} {ms = ms1}
+                             {env = envA} {h = hA} {h1} {uk = exprUK uk evE}
+                             pm1 pn1 pa1 oaA pEs evEs
+        in (BOPtrNoneCV rec ** bindOkFromPtrNoneJust {id} {pl} {nm} eqb)
+      go True pc =
+        let (sc1 ** (fl ** (pT, pEs))) = argsModesMoveSplit pc eq
+            oaA = htFromOk (ihs.takeIH evE sc sc1 fl pT oa)
+            (pm1, pn1, pa1) = aliasQuietConsumeTail pc pm pn pa
+            (rec ** eqb) = bindOkJust {funs} {chk} {ps = ps1} {es = es1} {ms = ms1}
+                             {env = envA} {h = hA} {h1} {uk = exprUK uk evE}
+                             pm1 pn1 pa1 oaA pEs evEs
+        in (BOPtrNoneCV rec ** bindOkFromPtrNoneJust {id} {pl} {nm} eqb)
+  bindOkJust {ps = MkParam id pl nm Ptr :: ps1} {es = e :: es1} {ms = m :: ms1}
+      pm pn pa oa eq (HEArgsCons HVCopy envA hA evE evEs) =
+    go (doesConsume m) Refl
+    where
+      go : (b : Bool) -> doesConsume m = b ->
+           (bok : BindOk fid h1 (MkParam id pl nm Ptr :: ps1) (m :: ms1)
+                   (HVCopy :: collectArgVals evEs) **
+             bindOkFrom {fid} {h = h1} (MkParam id pl nm Ptr :: ps1) (m :: ms1)
+               (HVCopy :: collectArgVals evEs) = Just bok)
+      go False pc =
+        let (sc1 ** (pE, pEs)) = argsModesBorrowSplit pc eq
+            oaA = hrFromOk (ihs.exprIH evE sc sc1 pE oa)
+            (pm1, pn1, pa1) = aliasQuietBorrowTail pc pm pn pa
+            (rec ** eqb) = bindOkJust {funs} {chk} {ps = ps1} {es = es1} {ms = ms1}
+                             {env = envA} {h = hA} {h1} {uk = exprUK uk evE}
+                             pm1 pn1 pa1 oaA pEs evEs
+        in (BOPtrCopyCV rec ** bindOkFromPtrCopyJust {id} {pl} {nm} eqb)
+      go True pc =
+        let (sc1 ** (fl ** (pT, pEs))) = argsModesMoveSplit pc eq
+            oaA = htFromOk (ihs.takeIH evE sc sc1 fl pT oa)
+            (pm1, pn1, pa1) = aliasQuietConsumeTail pc pm pn pa
+            (rec ** eqb) = bindOkJust {funs} {chk} {ps = ps1} {es = es1} {ms = ms1}
+                             {env = envA} {h = hA} {h1} {uk = exprUK uk evE}
+                             pm1 pn1 pa1 oaA pEs evEs
+        in (BOPtrCopyCV rec ** bindOkFromPtrCopyJust {id} {pl} {nm} eqb)
+  bindOkJust {ps = MkParam id pl nm Ptr :: ps1} {es = e :: es1} {ms = m :: ms1}
+      pm pn pa oa eq (HEArgsCons (HVPtr a) envA hA evE evEs) =
+    go (doesConsume m) Refl
+    where
+      go : (b : Bool) -> doesConsume m = b ->
+           (bok : BindOk fid h1 (MkParam id pl nm Ptr :: ps1) (m :: ms1)
+                   (HVPtr a :: collectArgVals evEs) **
+             bindOkFrom {fid} {h = h1} (MkParam id pl nm Ptr :: ps1) (m :: ms1)
+               (HVPtr a :: collectArgVals evEs) = Just bok)
+      go True pc =
+        bindOkConsumePtr {funs} {chk} {id} {pl} {nm} {ps = ps1} {es = es1} {ms = ms1}
+          {env} {envA} {h} {hA} {h1} {sc} {a} {uk} {m}
+          pc pm pn pa oa eq evE evEs
+      go False pc =
+        bindOkBorrowPtr {funs} {chk} {id} {pl} {nm} {ps = ps1} {fid} {callee}
+          {es = es1} {ms = ms1} {env} {envA} {h} {hA} {h1} {sc} {a} {uk} {m}
+          pc pm pn pa oa eq evE evEs
+
+  bindOkConsumePtr :
+    {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
+    {fid : Nat} -> {id, pl : Nat} -> {nm : String} -> {ps : List Param} ->
+    {e : Expr} -> {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+    {callee : String} ->
+    {env, envA, env1 : HEnv} -> {h, hA, h1 : Heap} -> {sc, sc' : Scopes} ->
+    {a : Addr} -> {uk : UniqueKeys env} ->
+    doesConsume m = True ->
+    mixedAlias (e :: es) (m :: ms) = False ->
+    nestedMixed ctx (e :: es) (m :: ms) = False ->
+    assignAlias (e :: es) (m :: ms) = False ->
+    OverApprox env h sc ->
+    checkArgsModes ctx sc callee (e :: es) (m :: ms) = Right sc' ->
+    (evE : HEvalExpr {funs} env h e (HROk (HVPtr a) envA hA)) ->
+    (evEs : HEvalExprs {funs} envA hA es (HROk HVNone env1 h1)) ->
+    (bok : BindOk fid h1 (MkParam id pl nm Ptr :: ps) (m :: ms)
+            (HVPtr a :: collectArgVals evEs) **
+      bindOkFrom {fid} {h = h1} (MkParam id pl nm Ptr :: ps) (m :: ms)
+        (HVPtr a :: collectArgVals evEs) = Just bok)
+  bindOkConsumePtr {es} {ms} {a} pc pm pn pa oa eq evE evEs =
+    let (sc1 ** (fl ** (pT, pEs))) = argsModesMoveSplit pc eq
+    in cFlag fl sc1 pT pEs
+    where
+      cFlag : (fl : Flag) -> (sc1 : Scopes) ->
+              takeOwner ctx sc e = Right (sc1, fl) ->
+              checkArgsModes ctx sc1 callee es ms = Right sc' ->
+              (bok : BindOk fid h1 (MkParam id pl nm Ptr :: ps) (m :: ms)
+                      (HVPtr a :: collectArgVals evEs) **
+                bindOkFrom {fid} {h = h1} (MkParam id pl nm Ptr :: ps) (m :: ms)
+                  (HVPtr a :: collectArgVals evEs) = Just bok)
+      cFlag Ghost sc1 pT _ =
+        void (leftNotRight (trans (sym (argsModesMoveGhost es ms pc pT)) eq))
+      cFlag Null sc1 pT _ =
+        void (nullNotPtrTaken (htTaken (ihs.takeIH evE sc sc1 Null pT oa)))
+      cFlag Owner sc1 pT pEs =
+        let ht = ihs.takeIH evE sc sc1 Owner pT oa
+            oaA = htFromOk ht
+            taken = htTaken ht
+        in ownGo taken oaA pEs
+        where
+          ownGo : HTaken Owner (HVPtr a) envA hA sc1 ->
+                  OverApprox envA hA sc1 ->
+                  checkArgsModes ctx sc1 callee es ms = Right sc' ->
+                  (bok : BindOk fid h1 (MkParam id pl nm Ptr :: ps) (m :: ms)
+                          (HVPtr a :: collectArgVals evEs) **
+                    bindOkFrom {fid} {h = h1} (MkParam id pl nm Ptr :: ps) (m :: ms)
+                      (HVPtr a :: collectArgVals evEs) = Just bok)
+          ownGo (HOwnLive liveA inhA) oaA pEs =
+            let eih = MkExprIHs ihs.exprIH ihs.takeIH
+                inh1 = inhModesRest {fk = lteRefl} (exprsSize evEs) eih inhA oaA pEs evEs
+                vn = inhValsModesRest {fk = lteRefl} (exprsSize evEs) eih inhA oaA pEs evEs
+                nh = bindFrameUnheld ps (collectArgVals evEs) a vn
+                (pm1, pn1, pa1) = aliasQuietConsumeTail pc pm pn pa
+                (rec ** eqb) = bindOkJust {funs} {chk} {ps} {es} {ms}
+                                 {env = envA} {h = hA} {h1} {uk = exprUK uk evE}
+                                 pm1 pn1 pa1 oaA pEs evEs
+            in bindOkFromPtrOwnJust {id} {pl} {nm} eqb inh1.inLive nh pc
+
+  bindOkExtraPtr :
+    {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
+    {fid : Nat} -> {id, pl : Nat} -> {nm : String} -> {ps : List Param} ->
+    {e : Expr} -> {es : List Expr} -> {callee : String} ->
+    {env, envA, env1 : HEnv} -> {h, hA, h1 : Heap} -> {sc, sc' : Scopes} ->
+    {a : Addr} -> {uk : UniqueKeys env} ->
+    mixedAlias (e :: es) [] = False ->
+    nestedMixed ctx (e :: es) [] = False ->
+    assignAlias (e :: es) [] = False ->
+    OverApprox env h sc ->
+    checkArgsModes ctx sc callee (e :: es) [] = Right sc' ->
+    (evE : HEvalExpr {funs} env h e (HROk (HVPtr a) envA hA)) ->
+    (evEs : HEvalExprs {funs} envA hA es (HROk HVNone env1 h1)) ->
+    (bok : BindOk fid h1 (MkParam id pl nm Ptr :: ps) []
+            (HVPtr a :: collectArgVals evEs) **
+      bindOkFrom {fid} {h = h1} (MkParam id pl nm Ptr :: ps) []
+        (HVPtr a :: collectArgVals evEs) = Just bok)
+  bindOkExtraPtr {es} {a} pm pn pa oa eq evE evEs =
+    let (sc1 ** (fl ** (pT, pEs))) = argsModesExtraSplit eq
+    in xFlag fl sc1 pT pEs
+    where
+      xFlag : (fl : Flag) -> (sc1 : Scopes) ->
+              takeOwner ctx sc e = Right (sc1, fl) ->
+              checkArgsModes ctx sc1 callee es [] = Right sc' ->
+              (bok : BindOk fid h1 (MkParam id pl nm Ptr :: ps) []
+                      (HVPtr a :: collectArgVals evEs) **
+                bindOkFrom {fid} {h = h1} (MkParam id pl nm Ptr :: ps) []
+                  (HVPtr a :: collectArgVals evEs) = Just bok)
+      xFlag Ghost sc1 pT _ =
+        void (leftNotRight (trans (sym (argsModesExtraGhost es pT)) eq))
+      xFlag Null sc1 pT _ =
+        void (nullNotPtrTaken (htTaken (ihs.takeIH evE sc sc1 Null pT oa)))
+      xFlag Owner sc1 pT pEs =
+        let ht = ihs.takeIH evE sc sc1 Owner pT oa
+            oaA = htFromOk ht
+            taken = htTaken ht
+        in ownGo taken oaA pEs
+        where
+          ownGo : HTaken Owner (HVPtr a) envA hA sc1 ->
+                  OverApprox envA hA sc1 ->
+                  checkArgsModes ctx sc1 callee es [] = Right sc' ->
+                  (bok : BindOk fid h1 (MkParam id pl nm Ptr :: ps) []
+                          (HVPtr a :: collectArgVals evEs) **
+                    bindOkFrom {fid} {h = h1} (MkParam id pl nm Ptr :: ps) []
+                      (HVPtr a :: collectArgVals evEs) = Just bok)
+          ownGo (HOwnLive liveA inhA) oaA pEs =
+            let eih = MkExprIHs ihs.exprIH ihs.takeIH
+                inh1 = inhModesRest {fk = lteRefl} (exprsSize evEs) eih inhA oaA pEs evEs
+                vn = inhValsModesRest {fk = lteRefl} (exprsSize evEs) eih inhA oaA pEs evEs
+                nh = bindFrameUnheld ps (collectArgVals evEs) a vn
+                pno = noOwnerHereUnheld (bindFrame ps (collectArgVals evEs))
+                        (bindParams fid ps []) a nh
+                (rec ** eqb) = bindOkJust {funs} {chk} {ps} {es} {ms = []}
+                                 {env = envA} {h = hA} {h1} {uk = exprUK uk evE}
+                                 (mixedAliasNilModes es) (nestedMixedNilModes ctx es)
+                                 (assignAliasNilModes es) oaA pEs evEs
+            in bindOkFromPtrExtraLiveJust {id} {pl} {nm} eqb inh1.inLive pno
+
+  bindOkBorrowPtr :
+    {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
+    {fid : Nat} -> {id, pl : Nat} -> {nm : String} -> {ps : List Param} ->
+    {e : Expr} -> {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+    {callee : String} ->
+    {env, envA, env1 : HEnv} -> {h, hA, h1 : Heap} -> {sc, sc' : Scopes} ->
+    {a : Addr} -> {uk : UniqueKeys env} ->
+    doesConsume m = False ->
+    mixedAlias (e :: es) (m :: ms) = False ->
+    nestedMixed ctx (e :: es) (m :: ms) = False ->
+    assignAlias (e :: es) (m :: ms) = False ->
+    OverApprox env h sc ->
+    checkArgsModes ctx sc callee (e :: es) (m :: ms) = Right sc' ->
+    (evE : HEvalExpr {funs} env h e (HROk (HVPtr a) envA hA)) ->
+    (evEs : HEvalExprs {funs} envA hA es (HROk HVNone env1 h1)) ->
+    (bok : BindOk fid h1 (MkParam id pl nm Ptr :: ps) (m :: ms)
+            (HVPtr a :: collectArgVals evEs) **
+      bindOkFrom {fid} {h = h1} (MkParam id pl nm Ptr :: ps) (m :: ms)
+        (HVPtr a :: collectArgVals evEs) = Just bok)
+  bindOkBorrowPtr {es} {ms} {a} {m} pc pm pn pa oa eq evE evEs =
+    let (sc1 ** (pE, pEs)) = argsModesBorrowSplit pc eq
+        oaA = hrFromOk (ihs.exprIH evE sc sc1 pE oa)
+        liveA = exprOkPtrLive evE
+        (pm1, pn1, pa1) = aliasQuietBorrowTail pc pm pn pa
+    in hEnv sc1 pE pEs pm1 pn1 pa1 (heldPtr envA a) Refl oaA liveA
+    where
+      tailBok : (sc1 : Scopes) -> (pEs : checkArgsModes ctx sc1 callee es ms = Right sc') ->
+                mixedAlias es ms = False ->
+                nestedMixed ctx es ms = False ->
+                assignAlias es ms = False ->
+                OverApprox envA hA sc1 ->
+                (bok : BindOk fid h1 ps ms (collectArgVals evEs) **
+                  bindOkFrom {fid} {h = h1} ps ms (collectArgVals evEs) = Just bok)
+      tailBok sc1 pEs pm1 pn1 pa1 oaA =
+        bindOkJust {funs} {chk} {ps} {es} {ms} {env = envA} {h = hA} {h1}
+          {uk = exprUK uk evE} pm1 pn1 pa1 oaA pEs evEs
+      frHeld : (pnoT : noOwnerHere (bindFrame ps (collectArgVals evEs))
+                         (bindParams fid ps ms) a = True) ->
+               (hd : Bool) ->
+               heldPtr (bindFrame ps (collectArgVals evEs)) a = hd ->
+               LiveNuo env1 h1 sc' a ->
+               (rec : BindOk fid h1 ps ms (collectArgVals evEs) **
+                 bindOkFrom {fid} {h = h1} ps ms (collectArgVals evEs) = Just rec) ->
+               (bok : BindOk fid h1 (MkParam id pl nm Ptr :: ps) (m :: ms)
+                       (HVPtr a :: collectArgVals evEs) **
+                 bindOkFrom {fid} {h = h1} (MkParam id pl nm Ptr :: ps) (m :: ms)
+                   (HVPtr a :: collectArgVals evEs) = Just bok)
+      frHeld _ False nh ln1 (_ ** eqb) =
+        bindOkFromPtrBorrowUnheld {id} {pl} {nm} eqb ln1.liveLN nh pc
+      frHeld pnoT True hd ln1 (_ ** eqb) =
+        bindOkFromPtrBorrowHeld {id} {pl} {nm} eqb ln1.liveLN hd pnoT pc
+      fr : (sc1 : Scopes) ->
+           (pEs : checkArgsModes ctx sc1 callee es ms = Right sc') ->
+           (pm1 : mixedAlias es ms = False) ->
+           (pn1 : nestedMixed ctx es ms = False) ->
+           (pa1 : assignAlias es ms = False) ->
+           (b : Bool) ->
+           noOwnerHere (bindFrame ps (collectArgVals evEs)) (bindParams fid ps ms) a = b ->
+           LiveNuo envA hA sc1 a ->
+           (bok : BindOk fid h1 (MkParam id pl nm Ptr :: ps) (m :: ms)
+                   (HVPtr a :: collectArgVals evEs) **
+             bindOkFrom {fid} {h = h1} (MkParam id pl nm Ptr :: ps) (m :: ms)
+               (HVPtr a :: collectArgVals evEs) = Just bok)
+      fr sc1 pEs _ _ _ False pnoF ln =
+        void (frameOwnerVoid {funs} {chk} {fid} {ps} ln pEs evEs pnoF)
+      fr sc1 pEs pm1 pn1 pa1 True pnoT ln =
+        let ln1 = exprsModesRest {funs} {chk} ln pEs evEs
+        in frHeld pnoT (heldPtr (bindFrame ps (collectArgVals evEs)) a) Refl
+             ln1 (tailBok sc1 pEs pm1 pn1 pa1 ln.oaLN)
+      ownFrame : (own : Own envA sc1 a) ->
+                 OverApprox envA hA sc1 ->
+                 argsHit ctx.summaries own.ownQ es = False ->
+                 mixedAlias es ms = False ->
+                 nestedMixed ctx es ms = False ->
+                 assignAlias es ms = False ->
+                 (pEs : checkArgsModes ctx sc1 callee es ms = Right sc') ->
+                 cell h1 a = Just Live ->
+                 (rec : BindOk fid h1 ps ms (collectArgVals evEs) **
+                   bindOkFrom {fid} {h = h1} ps ms (collectArgVals evEs) = Just rec) ->
+                 (hd : Bool) ->
+                 heldPtr (bindFrame ps (collectArgVals evEs)) a = hd ->
+                 (bok : BindOk fid h1 (MkParam id pl nm Ptr :: ps) (m :: ms)
+                         (HVPtr a :: collectArgVals evEs) **
+                   bindOkFrom {fid} {h = h1} (MkParam id pl nm Ptr :: ps) (m :: ms)
+                     (HVPtr a :: collectArgVals evEs) = Just bok)
+      ownFrame _ _ _ _ _ _ _ live1 (_ ** eqb) False nh =
+        bindOkFromPtrBorrowUnheld {id} {pl} {nm} eqb live1 nh pc
+      ownFrame own oaA hit pm1 pn1 pa1 pEs live1 (_ ** eqb) True hd =
+        ownNuo (noOwnerHere (bindFrame ps (collectArgVals evEs))
+                  (bindParams fid ps ms) a) Refl
+        where
+          ownNuo : (b : Bool) ->
+                   noOwnerHere (bindFrame ps (collectArgVals evEs))
+                     (bindParams fid ps ms) a = b ->
+                   (bok : BindOk fid h1 (MkParam id pl nm Ptr :: ps) (m :: ms)
+                           (HVPtr a :: collectArgVals evEs) **
+                     bindOkFrom {fid} {h = h1} (MkParam id pl nm Ptr :: ps) (m :: ms)
+                       (HVPtr a :: collectArgVals evEs) = Just bok)
+          ownNuo True pno =
+            bindOkFromPtrBorrowHeld {id} {pl} {nm} eqb live1 hd pno pc
+          ownNuo False pno =
+            void (ownerFrameVoid {funs} {ctx} {fid} {ps} {es} {ms} {a}
+                    own oaA hit pn1 pa1 pm1 pEs evEs pno)
+      ownerGo : (sc1 : Scopes) ->
+                (pE : checkExpr ctx sc e = Right sc1) ->
+                (pEs : checkArgsModes ctx sc1 callee es ms = Right sc') ->
+                (pm1 : mixedAlias es ms = False) ->
+                (pn1 : nestedMixed ctx es ms = False) ->
+                (pa1 : assignAlias es ms = False) ->
+                (evs : HEvalExprs {funs} envA hA es (HROk HVNone env1 h1)) ->
+                noOwnerHere envA sc1 a = False ->
+                OverApprox envA hA sc1 ->
+                cell hA a = Just Live ->
+                (bok : BindOk fid h1 (MkParam id pl nm Ptr :: ps) (m :: ms)
+                        (HVPtr a :: collectArgVals evEs) **
+                  bindOkFrom {fid} {h = h1} (MkParam id pl nm Ptr :: ps) (m :: ms)
+                    (HVPtr a :: collectArgVals evEs) = Just bok)
+      ownerGo sc1 pE pEs pm1 pn1 pa1 evs pnoF oaA liveA =
+        argsGo envA hA es env1 h1 evs Refl Refl Refl Refl Refl pEs pm1 pn1 pa1
+        where
+          ||| `es = []` makes `collectArgVals` empty. The cons arm is
+          ||| `consNotNil`; the equality is not matched as `Refl`.
+          collectNil : {funs : List Fun} ->
+                       (es1 : List Expr) -> (env0 : HEnv) -> (h0 : Heap) ->
+                       (envR : HEnv) -> (hR : Heap) ->
+                       (ev : HEvalExprs {funs} env0 h0 es1 (HROk HVNone envR hR)) ->
+                       es1 = [] ->
+                       collectArgVals ev = []
+          collectNil [] env0 h0 env0 h0 HEArgsNil _ = Refl
+          collectNil (_ :: _) env0 h0 envR hR (HEArgsCons _ _ _ _ _) eqEs =
+            void (consNotNil eqEs)
+          argsGo : (env0 : HEnv) -> (h0 : Heap) -> (es1 : List Expr) ->
+                   (envR : HEnv) -> (hR : Heap) ->
+                   (ev0 : HEvalExprs {funs} env0 h0 es1 (HROk HVNone envR hR)) ->
+                   env0 = envA -> h0 = hA -> es1 = es -> envR = env1 -> hR = h1 ->
+                   checkArgsModes ctx sc1 callee es1 ms = Right sc' ->
+                   mixedAlias es1 ms = False ->
+                   nestedMixed ctx es1 ms = False ->
+                   assignAlias es1 ms = False ->
+                   (bok : BindOk fid h1 (MkParam id pl nm Ptr :: ps) (m :: ms)
+                           (HVPtr a :: collectArgVals evEs) **
+                     bindOkFrom {fid} {h = h1} (MkParam id pl nm Ptr :: ps) (m :: ms)
+                       (HVPtr a :: collectArgVals evEs) = Just bok)
+          argsGo env0 h0 [] env0 h0 HEArgsNil _ eqH eqEs _ eqHR pNil pmNil pnNil paNil =
+            let pO = replace {p = \xs => checkArgsModes ctx sc1 callee xs ms = Right sc'}
+                       eqEs pNil
+                pmO = replace {p = \xs => mixedAlias xs ms = False} eqEs pmNil
+                pnO = replace {p = \xs => nestedMixed ctx xs ms = False} eqEs pnNil
+                paO = replace {p = \xs => assignAlias xs ms = False} eqEs paNil
+                (_ ** eqb) = tailBok sc1 pO pmO pnO paO oaA
+                live1 = replace {p = \hh => cell hh a = Just Live}
+                          (trans (sym eqH) eqHR) liveA
+                vsEq = collectNil es envA hA env1 h1 evEs (sym eqEs)
+                nh = replace {p = \vs => heldPtr (bindFrame ps vs) a = False}
+                       (sym vsEq) (bindFrameUnheld ps [] a VNNil)
+            in bindOkFromPtrBorrowUnheld {id} {pl} {nm} eqb live1 nh pc
+          argsGo env0 h0 (_ :: _) envR hR (HEArgsCons w envB hB ev1 evRest)
+              _ _ eqEs _ _ pCons pmCons pnCons paCons =
+            let pO = replace {p = \xs => checkArgsModes ctx sc1 callee xs ms = Right sc'}
+                       eqEs pCons
+                pmO = replace {p = \xs => mixedAlias xs ms = False} eqEs pmCons
+                pnO = replace {p = \xs => nestedMixed ctx xs ms = False} eqEs pnCons
+                paO = replace {p = \xs => assignAlias xs ms = False} eqEs paCons
+                (q ** st ** (look, lp, safe, has, nb)) =
+                  ownerHereWitness (exprUK uk evE) oaA pnoF
+                own = MkOwn q st look lp safe has nb
+                pin = headNamesOwner {funs} own oaA pE evE
+                hit = borrowPlaceQuietTail {e} pc pin pn
+                live1 = heldOwnerCell {funs} {ctx} own oaA hit pnO paO pmO pO evEs
+                rec = tailBok sc1 pO pmO pnO paO oaA
+            in ownFrame own oaA hit pmO pnO paO pO live1 rec
+                 (heldPtr (bindFrame ps (collectArgVals evEs)) a) Refl
+      nEnv : (sc1 : Scopes) ->
+             (pE : checkExpr ctx sc e = Right sc1) ->
+             (pEs : checkArgsModes ctx sc1 callee es ms = Right sc') ->
+             (pm1 : mixedAlias es ms = False) ->
+             (pn1 : nestedMixed ctx es ms = False) ->
+             (pa1 : assignAlias es ms = False) ->
+             (b : Bool) -> noOwnerHere envA sc1 a = b ->
+             OverApprox envA hA sc1 ->
+             cell hA a = Just Live ->
+             (bok : BindOk fid h1 (MkParam id pl nm Ptr :: ps) (m :: ms)
+                     (HVPtr a :: collectArgVals evEs) **
+               bindOkFrom {fid} {h = h1} (MkParam id pl nm Ptr :: ps) (m :: ms)
+                 (HVPtr a :: collectArgVals evEs) = Just bok)
+      nEnv sc1 _ pEs pm1 pn1 pa1 True pno oaA liveA =
+        let ln = MkLN oaA (noOwnerSound envA sc1 a pno) liveA
+        in fr sc1 pEs pm1 pn1 pa1
+             (noOwnerHere (bindFrame ps (collectArgVals evEs))
+                (bindParams fid ps ms) a) Refl ln
+      nEnv sc1 pE pEs pm1 pn1 pa1 False pnoF oaA liveA =
+        ownerGo sc1 pE pEs pm1 pn1 pa1 evEs pnoF oaA liveA
+      hEnv : (sc1 : Scopes) ->
+             (pE : checkExpr ctx sc e = Right sc1) ->
+             (pEs : checkArgsModes ctx sc1 callee es ms = Right sc') ->
+             (pm1 : mixedAlias es ms = False) ->
+             (pn1 : nestedMixed ctx es ms = False) ->
+             (pa1 : assignAlias es ms = False) ->
+             (hd : Bool) -> heldPtr envA a = hd ->
+             OverApprox envA hA sc1 ->
+             cell hA a = Just Live ->
+             (bok : BindOk fid h1 (MkParam id pl nm Ptr :: ps) (m :: ms)
+                     (HVPtr a :: collectArgVals evEs) **
+               bindOkFrom {fid} {h = h1} (MkParam id pl nm Ptr :: ps) (m :: ms)
+                 (HVPtr a :: collectArgVals evEs) = Just bok)
+      hEnv sc1 _ pEs pm1 pn1 pa1 False nh oaA liveA =
+        let (k, vn) = exprsKeep {funs} oaA.wf evEs liveA nh
+            (rec ** eqb) = tailBok sc1 pEs pm1 pn1 pa1 oaA
+        in bindOkFromPtrBorrowUnheld {id} {pl} {nm} eqb k.live'
+             (bindFrameUnheld ps (collectArgVals evEs) a vn) pc
+      hEnv sc1 pE pEs pm1 pn1 pa1 True _ oaA liveA =
+        nEnv sc1 pE pEs pm1 pn1 pa1 (noOwnerHere envA sc1 a) Refl oaA liveA
 
   -- Unique-own restore of Freed (restoreHeldOwn) is not proved. Connecting
   -- BindOk unique consume of leftover `a` to leftover uniqueLive would need

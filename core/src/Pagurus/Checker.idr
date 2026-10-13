@@ -575,25 +575,45 @@ mutual
   nestStoreds [] = []
   nestStoreds (e :: es) = nestStored e ++ nestStoreds es
 
+||| Pointer destinations stored inside a call, malloc, or use.
+||| An assignment is walked through and its own destination is not
+||| added: `nestAssigns` and `valuePlaces` already name that. The
+||| source is not included, so `f(r = g(p), h(p))` stays accepted.
+public export
+nestBuried : Expr -> List Place
+nestBuried (EAssign _ _ _ _ rhs) = nestBuried rhs
+nestBuried (ECall _ _ args) = nestStoreds args
+nestBuried (EMalloc _ args) = nestStoreds args
+nestBuried (EUse _ args) = nestStoreds args
+nestBuried _ = []
+
 ||| Place a borrow argument still denotes: the variable, the
-||| destinations of a pointer assignment (`f(q = malloc(), …)`), or a
-||| destination stored inside a call, malloc, or use.
+||| destinations of a pointer assignment (`f(q = malloc(), …)`), a
+||| destination stored inside a call on that assignment's right-hand
+||| side (`f(r = g(q = p), h(q))`), or a destination stored inside a
+||| call, malloc, or use. The source is not included. `valuePlaces`
+||| of a call stays empty.
 public export
 nestPlace : Expr -> List Place
 nestPlace (EVar _ p _) = [p]
-nestPlace (EAssign id p nm Ptr rhs) = nestAssigns (EAssign id p nm Ptr rhs)
+nestPlace (EAssign id p nm Ptr rhs) =
+  nestAssigns (EAssign id p nm Ptr rhs) ++ nestBuried rhs
 -- Copy assignment uses the rhs; it does not move it. `valuePlaces`
 -- still denote that source, so `f(x = p, g(p))` is `nestedMixed`.
-nestPlace (EAssign _ _ _ Copy rhs) = valuePlaces rhs
+-- A destination stored inside a call on the rhs is appended, so
+-- `f(x = g(r = p), h(r))` is `nestedMixed` too.
+nestPlace (EAssign _ _ _ Copy rhs) = valuePlaces rhs ++ nestBuried rhs
 nestPlace (ECall _ _ args) = nestStoreds args
 nestPlace (EMalloc _ args) = nestStoreds args
 nestPlace (EUse _ args) = nestStoreds args
 nestPlace _ = []
 
-||| A pointer assignment's borrow places are its nested destinations.
+||| A pointer assignment's borrow places are its destinations, then any
+||| destination stored inside a call on the right-hand side.
 export
 nestPlaceAsgPtr : (id : Nat) -> (dest : Place) -> (nm : String) -> (rhs : Expr) ->
-  nestPlace (EAssign id dest nm Ptr rhs) = nestAssigns (EAssign id dest nm Ptr rhs)
+  nestPlace (EAssign id dest nm Ptr rhs) =
+    nestAssigns (EAssign id dest nm Ptr rhs) ++ nestBuried rhs
 nestPlaceAsgPtr _ _ _ _ = Refl
 
 ||| `g(r = p)` exposes the destination, not the source.
@@ -749,6 +769,174 @@ nestedCallNoFree :
     ]
     [Never, Never] = False
 nestedCallNoFree = Refl
+
+||| `r = g(q = p)` exposes `q`, not `r` and not the source.
+export
+nestPlaceAssignCallDest :
+  nestPlace (EAssign 0 1 "r" Ptr (ECall 2 "g" [EAssign 3 4 "q" Ptr (EVar 5 6 "p")])) = [4]
+nestPlaceAssignCallDest = Refl
+
+||| `r = p` is only the destination.
+export
+nestPlaceAssignVar :
+  nestPlace (EAssign 0 1 "r" Ptr (EVar 2 3 "p")) = [1]
+nestPlaceAssignVar = Refl
+
+||| `r = g(p)` names no stored destination.
+export
+nestPlaceAssignCallVar :
+  nestPlace (EAssign 0 1 "r" Ptr (ECall 2 "g" [EVar 3 4 "p"])) = []
+nestPlaceAssignCallVar = Refl
+
+||| `r = g(h(q = p))` still exposes the inner destination.
+export
+nestPlaceAssignCallNested :
+  nestPlace (EAssign 0 1 "r" Ptr
+    (ECall 2 "g" [ECall 3 "h" [EAssign 4 5 "q" Ptr (EVar 6 7 "p")]])) = [5]
+nestPlaceAssignCallNested = Refl
+
+||| `r = g(q = NULL)` stores nothing live.
+export
+nestPlaceAssignCallNull :
+  nestPlace (EAssign 0 1 "r" Ptr (ECall 2 "g" [EAssign 3 4 "q" Ptr (ENull 5)])) = []
+nestPlaceAssignCallNull = Refl
+
+||| `r = malloc(q = p)` keeps both the fresh destination and the inner one.
+export
+nestPlaceAssignMallocDest :
+  nestPlace (EAssign 0 1 "r" Ptr (EMalloc 2 [EAssign 3 4 "q" Ptr (EVar 5 6 "p")])) = [1, 4]
+nestPlaceAssignMallocDest = Refl
+
+||| `use` does not yield a live pointer, so only the inner destination remains.
+export
+nestPlaceAssignUseDest :
+  nestPlace (EAssign 0 1 "r" Ptr (EUse 2 [EAssign 3 4 "q" Ptr (EVar 5 6 "p")])) = [4]
+nestPlaceAssignUseDest = Refl
+
+||| `x = g(r = p)` exposes `r`.
+export
+nestPlaceCopyCallDest :
+  nestPlace (EAssign 0 1 "x" Copy (ECall 2 "g" [EAssign 3 4 "r" Ptr (EVar 5 6 "p")])) = [4]
+nestPlaceCopyCallDest = Refl
+
+||| `x = p` still denotes the source.
+export
+nestPlaceCopyVar :
+  nestPlace (EAssign 0 1 "x" Copy (EVar 2 3 "p")) = [3]
+nestPlaceCopyVar = Refl
+
+||| `x = (r = g(q = p))` exposes `q`.
+export
+nestPlaceCopyPtrCall :
+  nestPlace (EAssign 0 1 "x" Copy
+    (EAssign 2 3 "r" Ptr (ECall 4 "g" [EAssign 5 6 "q" Ptr (EVar 7 8 "p")]))) = [6]
+nestPlaceCopyPtrCall = Refl
+
+||| `f(r = g(q = p), h(q))`: `q` stays live after `g`, and `h` frees it.
+export
+nestedAssignCallFrees :
+  nestedMixed
+    (MkCtx [("g", [Never]), ("h", [Always])] ["g", "h"])
+    [ EAssign 0 1 "r" Ptr (ECall 2 "g" [EAssign 3 4 "q" Ptr (EVar 5 6 "p")])
+    , ECall 7 "h" [EVar 8 4 "q"]
+    ]
+    [Never, Always] = True
+nestedAssignCallFrees = Refl
+
+||| The same free under a Never-mode wrapper still counts.
+export
+nestedAssignCallWrapped :
+  nestedMixed
+    (MkCtx [("g", [Never]), ("k", [Never]), ("h", [Always])] ["g", "k", "h"])
+    [ EAssign 0 1 "r" Ptr (ECall 2 "g" [EAssign 3 4 "q" Ptr (EVar 5 6 "p")])
+    , ECall 7 "k" [ECall 8 "h" [EVar 9 4 "q"]]
+    ]
+    [Never, Never] = True
+nestedAssignCallWrapped = Refl
+
+||| `f(x = g(r = p), h(r))` frees the destination stored in the call.
+export
+nestedCopyCallFrees :
+  nestedMixed
+    (MkCtx [("g", [Never]), ("h", [Always])] ["g", "h"])
+    [ EAssign 0 1 "x" Copy (ECall 2 "g" [EAssign 3 4 "r" Ptr (EVar 5 6 "p")])
+    , ECall 7 "h" [EVar 8 4 "r"]
+    ]
+    [Never, Always] = True
+nestedCopyCallFrees = Refl
+
+||| `f(r = g(q = p), q)` moves `q`. It does not free it.
+export
+nestedAssignCallMove :
+  nestedMixed
+    (MkCtx [("g", [Never])] ["g"])
+    [ EAssign 0 1 "r" Ptr (ECall 2 "g" [EAssign 3 4 "q" Ptr (EVar 5 6 "p")])
+    , EVar 7 4 "q"
+    ]
+    [Never, Always] = False
+nestedAssignCallMove = Refl
+
+||| That move is not `assignAlias` (`valuePlaces` of the call is empty).
+export
+assignAliasAssignCallMove :
+  assignAlias
+    [ EAssign 0 1 "r" Ptr (ECall 2 "g" [EAssign 3 4 "q" Ptr (EVar 5 6 "p")])
+    , EVar 7 4 "q"
+    ]
+    [Never, Always] = False
+assignAliasAssignCallMove = Refl
+
+||| `f(x = g(r = p), r)` moves the stored destination and does not free it.
+export
+nestedCopyCallMove :
+  nestedMixed
+    (MkCtx [("g", [Never])] ["g"])
+    [ EAssign 0 1 "x" Copy (ECall 2 "g" [EAssign 3 4 "r" Ptr (EVar 5 6 "p")])
+    , EVar 7 4 "r"
+    ]
+    [Never, Always] = False
+nestedCopyCallMove = Refl
+
+export
+assignAliasCopyCallMove :
+  assignAlias
+    [ EAssign 0 1 "x" Copy (ECall 2 "g" [EAssign 3 4 "r" Ptr (EVar 5 6 "p")])
+    , EVar 7 4 "r"
+    ]
+    [Never, Always] = False
+assignAliasCopyCallMove = Refl
+
+||| `f(r = g(p), h(p))`: a bare argument is not a stored destination.
+export
+nestedAssignCallBare :
+  nestedMixed
+    (MkCtx [("g", [Never]), ("h", [Always])] ["g", "h"])
+    [ EAssign 0 1 "r" Ptr (ECall 2 "g" [EVar 3 4 "p"])
+    , ECall 5 "h" [EVar 6 4 "p"]
+    ]
+    [Never, Always] = False
+nestedAssignCallBare = Refl
+
+||| `f(r = g(q = p), h(p))` frees the source, which is not a borrow place.
+export
+nestedAssignCallSource :
+  nestedMixed
+    (MkCtx [("g", [Never]), ("h", [Always])] ["g", "h"])
+    [ EAssign 0 1 "r" Ptr (ECall 2 "g" [EAssign 3 4 "q" Ptr (EVar 5 6 "p")])
+    , ECall 7 "h" [EVar 8 6 "p"]
+    ]
+    [Never, Always] = False
+nestedAssignCallSource = Refl
+
+||| `f(r = g(q = p))`: nothing later frees `q`.
+export
+nestedAssignCallNoFree :
+  nestedMixed
+    (MkCtx [("g", [Never])] ["g"])
+    [ EAssign 0 1 "r" Ptr (ECall 2 "g" [EAssign 3 4 "q" Ptr (EVar 5 6 "p")])
+    ]
+    [Never] = False
+nestedAssignCallNoFree = Refl
 
 ||| `use(r = p)` hides the same store as a call.
 export

@@ -580,6 +580,45 @@ borrowPlaceQuietTail {ctx} {q} {e} pc pin pn =
                  pinAll pnGo
   in argsHitTail {e} {es} hitAll
 
+||| `aliasBorrowPlaces` on a borrow head. Copied here: the Checker
+||| lemma is not exported.
+aliasBorrowBorrowR : {e : Expr} -> {es : List Expr} ->
+                     {m : Consume} -> {ms : List Consume} ->
+                     doesConsume m = False ->
+                     aliasBorrowPlaces (e :: es) (m :: ms) =
+                       valuePlaces e ++ aliasBorrowPlaces es ms
+aliasBorrowBorrowR {m = Never} _ = Refl
+aliasBorrowBorrowR {m = May} prf = void (trueNotFalse prf)
+aliasBorrowBorrowR {m = Always} prf = void (trueNotFalse prf)
+
+||| `aliasConsumePlaces` on a borrow head drops that head.
+aliasConsumeBorrowR : {e : Expr} -> {es : List Expr} ->
+                      {m : Consume} -> {ms : List Consume} ->
+                      doesConsume m = False ->
+                      aliasConsumePlaces (e :: es) (m :: ms) = aliasConsumePlaces es ms
+aliasConsumeBorrowR {m = Never} _ = Refl
+aliasConsumeBorrowR {m = May} prf = void (trueNotFalse prf)
+aliasConsumeBorrowR {m = Always} prf = void (trueNotFalse prf)
+
+||| A borrow head whose value sits in `q` is not consumed later.
+||| `valuePlaces`, not `nestPlace`: a call can name a stored destination
+||| that `valuePlaces` leaves empty, and that destination is not the
+||| owner of this head's pointer.
+consumeQuietTail : {q : Place} -> {e : Expr} -> {es : List Expr} ->
+                   {m : Consume} -> {ms : List Consume} ->
+                   doesConsume m = False ->
+                   placeIn q (valuePlaces e) = True ->
+                   assignAlias (e :: es) (m :: ms) = False ->
+                   placeIn q (aliasConsumePlaces es ms) = False
+consumeQuietTail {q} {e} {es} {ms} pc pin pa =
+  let bs = aliasBorrowBorrowR {e} {es} {ms} pc
+      pinB = placeInAppendL {xs = valuePlaces e}
+               {ys = aliasBorrowPlaces es ms} pin
+      pinAll = replace {p = \ps => placeIn q ps = True} (sym bs) pinB
+      miss = overlapMiss pinAll pa
+      cs = aliasConsumeBorrowR {e} {es} {ms} pc
+  in replace {p = \ps => placeIn q ps = False} cs miss
+
 ||| Use-safe unique owner of `a`. `oaLive` reads the cell off this.
 public export
 record Own (env : HEnv) (sc : Scopes) (a : Addr) where
@@ -690,7 +729,8 @@ mutual
 
 ||| `nestAssigns` only names destinations of a pointer assignment, and each
 ||| of those is a `valuePlaces` entry. A call, malloc, or use can name a
-||| destination that `valuePlaces` leaves empty.
+||| destination that `valuePlaces` leaves empty. `nestPlace` of an
+||| assignment appends those (`nestBuried`); this lemma does not.
 placeInTail : {p, q : Place} -> {qs : List Place} ->
   placeIn p qs = True -> placeIn p (q :: qs) = True
 placeInTail {p} {q} pin = rewrite pin in orTrueRight (p == q)
@@ -1213,6 +1253,106 @@ headNamesOwner own oa eq ev oa0 = resGo e ev Refl eq
     livePtrOf (EUse _ _) (HEUse _ _ _) veq = void (hvNoneNotPtrF veq)
     livePtrOf (EUnsupported _ _) HEUnsup veq = void (hvNoneNotPtrF veq)
 
+    ||| The owner named by a pointer assignment is a `nestAssigns`
+    ||| destination. A store inside a call is an extra `nestPlace`
+    ||| entry and is not this owner.
+    assignNestOwner :
+      (nid : Nat) -> (n : Place) -> (nm : String) -> (rhs : Expr) ->
+      {v : HVal} -> {env1 : HEnv} -> {h1 : Heap} ->
+      (evR : HEvalExpr {funs} env h rhs (HROk v env1 h1)) ->
+      (prf : HROk v (setH n v env1) h1 = HROk (HVPtr a) env' h') ->
+      (pChk : checkExpr ctx sc (EAssign nid n nm Ptr rhs) = Right sc') ->
+      placeIn own.ownQ (nestAssigns (EAssign nid n nm Ptr rhs)) = True
+    assignNestOwner nid n nm rhs evR prf pChk =
+      let pm = livePtrOf rhs evR (hrOkValEq prf)
+      in asgGo (takeOwner ctx sc rhs) Refl pm
+      where
+        asgGo : (res : Either Diag (Scopes, Flag)) ->
+                takeOwner ctx sc rhs = res ->
+                maybeLivePtr rhs = True ->
+                placeIn own.ownQ (nestAssigns (EAssign nid n nm Ptr rhs)) = True
+        asgGo (Left d) pT _ =
+          void (leftNotRight (trans (sym (checkExprAsgPtrLeft nid n nm (ghostCopyLeakFalseChk pChk) pT)) pChk))
+        asgGo (Right (scT, Null)) pT _ =
+          void (hvNoneNotPtrF (trans (sym
+            (nullTakenNone (htTaken (ihs.takeIH evR sc scT Null pT oa0))))
+            (hrOkValEq prf)))
+        asgGo (Right (scT, Owner)) pT pm =
+          ownerGo (ownerTakenSplit (htTaken (ihs.takeIH evR sc scT Owner pT oa0)))
+          where
+            ownerGo : Either (v = HVNone) (a2 ** v = HVPtr a2) ->
+                      placeIn own.ownQ (nestAssigns (EAssign nid n nm Ptr rhs)) = True
+            ownerGo (Left vw) =
+              void (hvNoneNotPtrF (trans (sym vw) (hrOkValEq prf)))
+            ownerGo (Right _) =
+              useGo (usePlace (setPlace n (Pagurus.Status.singleton AOwned) scT) n nid nm) Refl
+              where
+                pL : lookupPlace n (setPlace n (Pagurus.Status.singleton AOwned) scT) =
+                       Just (Pagurus.Status.singleton AOwned)
+                pL = lookupPlaceSetHit n (Pagurus.Status.singleton AOwned) scT
+                useGo : (r : Either Diag Scopes) ->
+                        usePlace (setPlace n (Pagurus.Status.singleton AOwned) scT) n nid nm = r ->
+                        placeIn own.ownQ (nestAssigns (EAssign nid n nm Ptr rhs)) = True
+                useGo (Left d) pU =
+                  void (leftNotRight (trans (sym (checkExprAsgPtrUseFail (ghostCopyLeakFalseChk pChk) pT pU)) pChk))
+                useGo (Right sc2) pU =
+                  stepGo (stepStatus (Pagurus.Status.singleton AOwned) Use nid) Refl
+                  where
+                    stepGo : (r : Either Diag Status) ->
+                             stepStatus (Pagurus.Status.singleton AOwned) Use nid = r ->
+                             placeIn own.ownQ (nestAssigns (EAssign nid n nm Ptr rhs)) = True
+                    stepGo (Left d) pS =
+                      void (leftNotRight (trans (sym (usePlaceJustL pL pS)) pU))
+                    stepGo (Right stN) pS =
+                      let pUse = usePlaceJust pL pS
+                          sc2Eq = rightInj (trans (sym pUse) pU)
+                          scEq = trans sc2Eq
+                                   (rightInj (trans (sym (checkExprAsgPtrOwner (ghostCopyLeakFalseChk pChk) pT pU)) pChk))
+                          lpN = replace {p = \s => lookupPlace n s = Just stN} scEq
+                                  (lookupPlaceSetHit n stN
+                                     (setPlace n (Pagurus.Status.singleton AOwned) scT))
+                          safeN = stepUseResultSafe (Pagurus.Status.singleton AOwned) nid stN pS
+                                    ownedSafeUse
+                          lookN = replace {p = \en => lookupH n en = Just (HVPtr a)}
+                                    (hrOkEnvEq prf)
+                                    (replace {p = \x => lookupH n (setH n v env1) = Just x}
+                                       (hrOkValEq prf) (lookupHSetHit n v env1))
+                      in destGo (own.ownQ == n) Refl lookN lpN safeN
+                      where
+                        destGo : (eqb : Bool) -> own.ownQ == n = eqb ->
+                                 lookupH n env' = Just (HVPtr a) ->
+                                 lookupPlace n sc' = Just stN ->
+                                 unsafeUse stN = False ->
+                                 placeIn own.ownQ (nestAssigns (EAssign nid n nm Ptr rhs)) = True
+                        destGo True pq _ _ _ =
+                          rewrite pm in
+                            replace {p = \q => placeIn q (n :: nestAssigns rhs) = True}
+                              (sym (eqNatTrue own.ownQ n pq))
+                              (placeInHead n (nestAssigns rhs))
+                        destGo False pq lookN lpN safeN =
+                          void (trueNotFalse (trans (sym
+                            (oa.uniqueLive own.ownQ n a pq own.ownLook lookN
+                               (ownLive oa own)
+                               own.ownSt own.ownLp stN lpN
+                               own.ownSafe own.ownHas own.ownNb)) safeN))
+        asgGo (Right (scT, Ghost)) pT _ =
+          let leak = ghostCopyLeakFalseChk pChk
+              scEq = sym (rightInj (trans
+                       (sym (checkExprAsgPtrGhost nid n nm leak pT)) pChk))
+              envEq = hrOkEnvEq prf
+          in void (ghostDest (own.ownQ == n) Refl scEq envEq leak)
+          where
+            ghostDest : (eqb : Bool) -> own.ownQ == n = eqb ->
+                        sc' = setPlace n (Pagurus.Status.singleton AEmpty) scT ->
+                        setH n v env1 = env' ->
+                        ghostCopyLeak rhs = False ->
+                        Void
+            ghostDest True pq scHere _ _ =
+              emptyDestFrom own scHere (eqNatTrue own.ownQ n pq)
+            ghostDest False pq scHere envHere leakR =
+              ghostSrcVoid {funs} rhs evR leakR pT (hrOkValEq prf)
+                (ownBesideEmpty own envHere scHere pq) oa0
+
     ||| `e1` is a parameter so each constructor can refine it.
     resGo : (e1 : Expr) -> {v : HVal} -> {envR : HEnv} -> {hR : Heap} ->
             HEvalExpr {funs} env h e1 (HROk v envR hR) ->
@@ -1288,11 +1428,12 @@ headNamesOwner own oa eq ev oa0 = resGo e ev Refl eq
       in void (freshOwnerVoid oaPre ownF)
     resGo (EAssign nid n nm Copy rhs) (HEAsgCopy _ _ _ evR) prf pChk =
       let pR = trans (sym (checkExprAsgCopy nid n nm)) pChk
-      in copyGo rhs evR prf pR
+      in placeInAppendL {ys = nestBuried rhs} (copyGo rhs evR prf pR)
       where
-        ||| `nestPlace` of a variable or assignment is a `valuePlaces` entry.
-        ||| A call, malloc, or use may name a destination `valuePlaces` omits,
-        ||| and none of those yield this owner (fresh `alloc`, or not a pointer).
+        ||| `valuePlaces` of the copied expression. A call, malloc, or use
+        ||| may name a destination `valuePlaces` omits; the caller appends
+        ||| those, and none of them yield this owner (fresh `alloc`, or
+        ||| not a pointer).
         copyGo : (e1 : Expr) -> {v : HVal} -> {envR : HEnv} -> {hR : Heap} ->
                  HEvalExpr {funs} env h e1 (HROk v envR hR) ->
                  HROk v envR hR = HROk (HVPtr a) env' h' ->
@@ -1303,13 +1444,12 @@ headNamesOwner own oa eq ev oa0 = resGo e ev Refl eq
         copyGo (ENull i) ev prf0 p0 = resGo (ENull i) ev prf0 p0
         copyGo (EUnsupported i reason) ev prf0 p0 =
           resGo (EUnsupported i reason) ev prf0 p0
-        copyGo (EAssign i q nm1 Copy rhs1) ev prf0 p0 =
-          resGo (EAssign i q nm1 Copy rhs1) ev prf0 p0
-        copyGo (EAssign i q nm1 Ptr rhs1) ev prf0 p0 =
+        copyGo (EAssign i q nm1 Copy rhs1) (HEAsgCopy _ _ _ evR) prf0 p0 =
+          let pR = trans (sym (checkExprAsgCopy i q nm1)) p0
+          in copyGo rhs1 evR prf0 pR
+        copyGo (EAssign i q nm1 Ptr rhs1) (HEAsgPtr v env1 h1 evR) prf0 p0 =
           nestAssignsInValue (EAssign i q nm1 Ptr rhs1) own.ownQ
-            (replace {p = \ps => placeIn own.ownQ ps = True}
-               (nestPlaceAsgPtr i q nm1 rhs1)
-               (resGo (EAssign i q nm1 Ptr rhs1) ev prf0 p0))
+            (assignNestOwner i q nm1 rhs1 evR prf0 p0)
         copyGo (ECall i callee args) ev prf0 p0 = callVoid ev prf0 p0
           where
             callVoid : {v : HVal} -> {envR : HEnv} -> {hR : Heap} ->
@@ -1344,94 +1484,8 @@ headNamesOwner own oa eq ev oa0 = resGo e ev Refl eq
         copyGo (EUse _ _) (HEUse _ _ _) prf0 _ =
           void (hvNoneNotPtrF (hrOkValEq prf0))
     resGo (EAssign nid n nm Ptr rhs) (HEAsgPtr v env1 h1 evR) prf pChk =
-      let pm = livePtrOf rhs evR (hrOkValEq prf)
-      in asgGo (takeOwner ctx sc rhs) Refl pm
-      where
-        asgGo : (res : Either Diag (Scopes, Flag)) ->
-                takeOwner ctx sc rhs = res ->
-                maybeLivePtr rhs = True ->
-                placeIn own.ownQ (nestPlace (EAssign nid n nm Ptr rhs)) = True
-        asgGo (Left d) pT _ =
-          void (leftNotRight (trans (sym (checkExprAsgPtrLeft nid n nm (ghostCopyLeakFalseChk pChk) pT)) pChk))
-        asgGo (Right (scT, Null)) pT _ =
-          void (hvNoneNotPtrF (trans (sym
-            (nullTakenNone (htTaken (ihs.takeIH evR sc scT Null pT oa0))))
-            (hrOkValEq prf)))
-        asgGo (Right (scT, Owner)) pT pm =
-          ownerGo (ownerTakenSplit (htTaken (ihs.takeIH evR sc scT Owner pT oa0)))
-          where
-            ownerGo : Either (v = HVNone) (a2 ** v = HVPtr a2) ->
-                      placeIn own.ownQ (nestPlace (EAssign nid n nm Ptr rhs)) = True
-            ownerGo (Left vw) =
-              void (hvNoneNotPtrF (trans (sym vw) (hrOkValEq prf)))
-            ownerGo (Right _) =
-              useGo (usePlace (setPlace n (Pagurus.Status.singleton AOwned) scT) n nid nm) Refl
-              where
-                pL : lookupPlace n (setPlace n (Pagurus.Status.singleton AOwned) scT) =
-                       Just (Pagurus.Status.singleton AOwned)
-                pL = lookupPlaceSetHit n (Pagurus.Status.singleton AOwned) scT
-                useGo : (r : Either Diag Scopes) ->
-                        usePlace (setPlace n (Pagurus.Status.singleton AOwned) scT) n nid nm = r ->
-                        placeIn own.ownQ (nestPlace (EAssign nid n nm Ptr rhs)) = True
-                useGo (Left d) pU =
-                  void (leftNotRight (trans (sym (checkExprAsgPtrUseFail (ghostCopyLeakFalseChk pChk) pT pU)) pChk))
-                useGo (Right sc2) pU =
-                  stepGo (stepStatus (Pagurus.Status.singleton AOwned) Use nid) Refl
-                  where
-                    stepGo : (r : Either Diag Status) ->
-                             stepStatus (Pagurus.Status.singleton AOwned) Use nid = r ->
-                             placeIn own.ownQ (nestPlace (EAssign nid n nm Ptr rhs)) = True
-                    stepGo (Left d) pS =
-                      void (leftNotRight (trans (sym (usePlaceJustL pL pS)) pU))
-                    stepGo (Right stN) pS =
-                      let pUse = usePlaceJust pL pS
-                          sc2Eq = rightInj (trans (sym pUse) pU)
-                          scEq = trans sc2Eq
-                                   (rightInj (trans (sym (checkExprAsgPtrOwner (ghostCopyLeakFalseChk pChk) pT pU)) pChk))
-                          lpN = replace {p = \s => lookupPlace n s = Just stN} scEq
-                                  (lookupPlaceSetHit n stN
-                                     (setPlace n (Pagurus.Status.singleton AOwned) scT))
-                          safeN = stepUseResultSafe (Pagurus.Status.singleton AOwned) nid stN pS
-                                    ownedSafeUse
-                          lookN = replace {p = \en => lookupH n en = Just (HVPtr a)}
-                                    (hrOkEnvEq prf)
-                                    (replace {p = \x => lookupH n (setH n v env1) = Just x}
-                                       (hrOkValEq prf) (lookupHSetHit n v env1))
-                      in destGo (own.ownQ == n) Refl lookN lpN safeN
-                      where
-                        destGo : (eqb : Bool) -> own.ownQ == n = eqb ->
-                                 lookupH n env' = Just (HVPtr a) ->
-                                 lookupPlace n sc' = Just stN ->
-                                 unsafeUse stN = False ->
-                                 placeIn own.ownQ (nestPlace (EAssign nid n nm Ptr rhs)) = True
-                        destGo True pq _ _ _ =
-                          rewrite pm in
-                            replace {p = \q => placeIn q (n :: nestAssigns rhs) = True}
-                              (sym (eqNatTrue own.ownQ n pq))
-                              (placeInHead n (nestAssigns rhs))
-                        destGo False pq lookN lpN safeN =
-                          void (trueNotFalse (trans (sym
-                            (oa.uniqueLive own.ownQ n a pq own.ownLook lookN
-                               (ownLive oa own)
-                               own.ownSt own.ownLp stN lpN
-                               own.ownSafe own.ownHas own.ownNb)) safeN))
-        asgGo (Right (scT, Ghost)) pT _ =
-          let leak = ghostCopyLeakFalseChk pChk
-              scEq = sym (rightInj (trans
-                       (sym (checkExprAsgPtrGhost nid n nm leak pT)) pChk))
-              envEq = hrOkEnvEq prf
-          in void (ghostDest (own.ownQ == n) Refl scEq envEq leak)
-          where
-            ghostDest : (eqb : Bool) -> own.ownQ == n = eqb ->
-                        sc' = setPlace n (Pagurus.Status.singleton AEmpty) scT ->
-                        setH n v env1 = env' ->
-                        ghostCopyLeak rhs = False ->
-                        Void
-            ghostDest True pq scHere _ _ =
-              emptyDestFrom own scHere (eqNatTrue own.ownQ n pq)
-            ghostDest False pq scHere envHere leakR =
-              ghostSrcVoid {funs} rhs evR leakR pT (hrOkValEq prf)
-                (ownBesideEmpty own envHere scHere pq) oa0
+      placeInAppendL {ys = nestBuried rhs}
+        (assignNestOwner nid n nm rhs evR prf pChk)
     resGo (ECall id callee args) (HERealloc pName _ env1 h1 evs) prf pChk =
       let pCall = trans (sym (checkExprCall ctx sc id callee args)) pChk
           oaPre = reallocCallOA {id} {callee} {args} pName pCall evs oa0

@@ -5344,6 +5344,439 @@ quietConsumeAsgNestExtra {acc} {live} {oid} {iid} {vid} {od} {q} {p} {onm}
       alienConsumeAsgNestExtra {oid} {iid} {vid} {od} {q} {p} {onm} {qnm} {pnm}
         own oa ne look eq
 
+||| `readPlaces` follows every right-hand side, so `r = (s = (q = p))`
+||| reads `p`. A fourth assignment is not this lemma.
+readAssignNest3 : (oid, sid, iid, vid : Nat) -> (od, s, q, p : Place) ->
+                  (onm, snm, qnm, pnm : String) -> (oty, sty, ity : Ty) ->
+                  placeIn p (readPlaces
+                    (EAssign oid od onm oty
+                      (EAssign sid s snm sty
+                        (EAssign iid q qnm ity (EVar vid p pnm))))) = True
+readAssignNest3 _ _ _ _ _ _ _ p _ _ _ _ _ _ _ = placeInHere p
+
+||| The inner `s = (q = p)` is `alienTakeAsgNest`. A second holder of
+||| `a` makes that take void, so `r = (s = (q = p))` cannot be taken.
+||| All three stores are pointer assignments.
+alienAsgNest3Go : {ctx : Ctx} -> {sc, scA : Scopes} ->
+                  {env : HEnv} -> {h : Heap} -> {a : Addr} ->
+                  {oid, sid, iid, vid : Nat} -> {od, s, q, p : Place} ->
+                  {onm, snm, qnm, pnm : String} -> {fl : Flag} ->
+                  (own : Own env sc a) ->
+                  OverApprox env h sc ->
+                  own.ownQ == p = False ->
+                  lookupH p env = Just (HVPtr a) ->
+                  takeOwner ctx sc
+                    (EAssign oid od onm Ptr
+                      (EAssign sid s snm Ptr
+                        (EAssign iid q qnm Ptr (EVar vid p pnm)))) =
+                    Right (scA, fl) ->
+                  (r : Either Diag (Scopes, Flag)) ->
+                  takeOwner ctx sc
+                    (EAssign sid s snm Ptr
+                      (EAssign iid q qnm Ptr (EVar vid p pnm))) = r ->
+                  Void
+alienAsgNest3Go {oid} {od} {onm} {sid} {s} {iid} {q} own oa ne look pA
+    (Left d) pR =
+  void (leftNotRight (trans (sym (takeAsgPtrLeft oid od onm
+         {rhs = EAssign sid s snm Ptr
+                  (EAssign iid q qnm Ptr (EVar vid p pnm))}
+         (ghostCopyLeakFalseTake pA) pR)) pA))
+alienAsgNest3Go {sid} {iid} {vid} {s} {q} {p} {snm} {qnm} {pnm}
+    own oa ne look _ (Right (sc1, fl1)) pR =
+  alienTakeAsgNest {scA = sc1} {fl = fl1} {oid = sid} {iid} {vid}
+    {od = s} {q} {p} {onm = snm} {qnm} {pnm} own oa ne look pR
+
+alienTakeAsgNest3 : {ctx : Ctx} -> {sc, scA : Scopes} ->
+                    {env : HEnv} -> {h : Heap} -> {a : Addr} ->
+                    {oid, sid, iid, vid : Nat} -> {od, s, q, p : Place} ->
+                    {onm, snm, qnm, pnm : String} -> {fl : Flag} ->
+                    (own : Own env sc a) ->
+                    OverApprox env h sc ->
+                    own.ownQ == p = False ->
+                    lookupH p env = Just (HVPtr a) ->
+                    takeOwner ctx sc
+                      (EAssign oid od onm Ptr
+                        (EAssign sid s snm Ptr
+                          (EAssign iid q qnm Ptr (EVar vid p pnm)))) =
+                      Right (scA, fl) ->
+                    Void
+alienTakeAsgNest3 {ctx} {sc} {sid} {s} {iid} {q} {p} {snm} {qnm} {pnm} {vid}
+    own oa ne look pA =
+  alienAsgNest3Go own oa ne look pA
+    (takeOwner ctx sc
+       (EAssign sid s snm Ptr
+          (EAssign iid q qnm Ptr (EVar vid p pnm)))) Refl
+
+||| An accepted consume of `r = (s = (q = p))`, with `p` a second holder
+||| of `a`, is void.
+alienConsumeAsgNest3 : {ctx : Ctx} -> {sc, sc' : Scopes} ->
+                       {env : HEnv} -> {h : Heap} -> {a : Addr} ->
+                       {callee : String} ->
+                       {oid, sid, iid, vid : Nat} -> {od, s, q, p : Place} ->
+                       {onm, snm, qnm, pnm : String} ->
+                       {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+                       (own : Own env sc a) ->
+                       OverApprox env h sc ->
+                       own.ownQ == p = False ->
+                       lookupH p env = Just (HVPtr a) ->
+                       doesConsume m = True ->
+                       checkArgsModes ctx sc callee
+                         (EAssign oid od onm Ptr
+                           (EAssign sid s snm Ptr
+                             (EAssign iid q qnm Ptr (EVar vid p pnm))) :: es)
+                         (m :: ms) = Right sc' ->
+                       Void
+alienConsumeAsgNest3 {oid} {sid} {iid} {vid} {od} {s} {q} {p}
+    {onm} {snm} {qnm} {pnm} own oa ne look pc eq =
+  let (sc1 ** (fl ** (pT, _))) =
+        argsModesMoveSplit
+          {e = EAssign oid od onm Ptr
+                 (EAssign sid s snm Ptr
+                    (EAssign iid q qnm Ptr (EVar vid p pnm)))} pc eq
+  in alienTakeAsgNest3 {scA = sc1} {fl} {oid} {sid} {iid} {vid}
+       {od} {s} {q} {p} {onm} {snm} {qnm} {pnm} own oa ne look pT
+
+||| A missing mode is that same three-assignment consume.
+alienConsumeAsgNest3Extra : {ctx : Ctx} -> {sc, sc' : Scopes} ->
+                            {env : HEnv} -> {h : Heap} -> {a : Addr} ->
+                            {callee : String} ->
+                            {oid, sid, iid, vid : Nat} -> {od, s, q, p : Place} ->
+                            {onm, snm, qnm, pnm : String} ->
+                            {es : List Expr} ->
+                            (own : Own env sc a) ->
+                            OverApprox env h sc ->
+                            own.ownQ == p = False ->
+                            lookupH p env = Just (HVPtr a) ->
+                            checkArgsModes ctx sc callee
+                              (EAssign oid od onm Ptr
+                                (EAssign sid s snm Ptr
+                                  (EAssign iid q qnm Ptr (EVar vid p pnm))) :: es)
+                              [] = Right sc' ->
+                            Void
+alienConsumeAsgNest3Extra {oid} {sid} {iid} {vid} {od} {s} {q} {p}
+    {onm} {snm} {qnm} {pnm} own oa ne look eq =
+  let (sc1 ** (fl ** (pT, _))) =
+        argsModesExtraSplit
+          {e = EAssign oid od onm Ptr
+                 (EAssign sid s snm Ptr
+                    (EAssign iid q qnm Ptr (EVar vid p pnm)))} eq
+  in alienTakeAsgNest3 {scA = sc1} {fl} {oid} {sid} {iid} {vid}
+       {od} {s} {q} {p} {onm} {snm} {qnm} {pnm} own oa ne look pT
+
+||| A quiet accepted consume of `r = (s = (q = p))` is not a holder of `a`.
+||| The pin read is `p`. Any other holder is `alienConsumeAsgNest3`.
+quietConsumeAsgNest3 : {ctx : Ctx} -> {sc, sc' : Scopes} ->
+                       {env : HEnv} -> {h : Heap} -> {a : Addr} ->
+                       {callee : String} ->
+                       {acc : List (String, List Consume)} ->
+                       {live : List Place} ->
+                       {oid, sid, iid, vid : Nat} -> {od, s, q, p : Place} ->
+                       {onm, snm, qnm, pnm : String} ->
+                       {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+                       (own : Own env sc a) ->
+                       OverApprox env h sc ->
+                       placeIn own.ownQ live = True ->
+                       doesConsume m = True ->
+                       storedLiveGo acc live
+                         (EAssign oid od onm Ptr
+                           (EAssign sid s snm Ptr
+                             (EAssign iid q qnm Ptr (EVar vid p pnm))) :: es)
+                         (m :: ms) = False ->
+                       checkArgsModes ctx sc callee
+                         (EAssign oid od onm Ptr
+                           (EAssign sid s snm Ptr
+                             (EAssign iid q qnm Ptr (EVar vid p pnm))) :: es)
+                         (m :: ms) = Right sc' ->
+                       lookupH p env = Just (HVPtr a) ->
+                       Void
+quietConsumeAsgNest3 {acc} {live} {oid} {sid} {iid} {vid} {od} {s} {q} {p}
+    {onm} {snm} {qnm} {pnm} {es} {m} {ms} own oa pin pc quiet eq look =
+  case natEqDec own.ownQ p of
+    Left same =>
+      storedReadOwner {acc} {live} {p}
+        {e = EAssign oid od onm Ptr
+               (EAssign sid s snm Ptr
+                  (EAssign iid q qnm Ptr (EVar vid p pnm)))} {es} {m} {ms}
+        (readAssignNest3 oid sid iid vid od s q p onm snm qnm pnm Ptr Ptr Ptr)
+        (replace {p = \place => placeIn place live = True} same pin)
+        pc quiet
+    Right ne =>
+      alienConsumeAsgNest3 {oid} {sid} {iid} {vid} {od} {s} {q} {p}
+        {onm} {snm} {qnm} {pnm} own oa ne look pc eq
+
+||| A missing mode is still that consume of `r = (s = (q = p))`.
+quietConsumeAsgNest3Extra : {ctx : Ctx} -> {sc, sc' : Scopes} ->
+                            {env : HEnv} -> {h : Heap} -> {a : Addr} ->
+                            {callee : String} ->
+                            {acc : List (String, List Consume)} ->
+                            {live : List Place} ->
+                            {oid, sid, iid, vid : Nat} -> {od, s, q, p : Place} ->
+                            {onm, snm, qnm, pnm : String} ->
+                            {es : List Expr} ->
+                            (own : Own env sc a) ->
+                            OverApprox env h sc ->
+                            placeIn own.ownQ live = True ->
+                            storedLiveGo acc live
+                              (EAssign oid od onm Ptr
+                                (EAssign sid s snm Ptr
+                                  (EAssign iid q qnm Ptr (EVar vid p pnm))) :: es)
+                              [] = False ->
+                            checkArgsModes ctx sc callee
+                              (EAssign oid od onm Ptr
+                                (EAssign sid s snm Ptr
+                                  (EAssign iid q qnm Ptr (EVar vid p pnm))) :: es)
+                              [] = Right sc' ->
+                            lookupH p env = Just (HVPtr a) ->
+                            Void
+quietConsumeAsgNest3Extra {acc} {live} {oid} {sid} {iid} {vid} {od} {s} {q} {p}
+    {onm} {snm} {qnm} {pnm} {es} own oa pin quiet eq look =
+  case natEqDec own.ownQ p of
+    Left same =>
+      storedReadExtra {acc} {live} {p}
+        {e = EAssign oid od onm Ptr
+               (EAssign sid s snm Ptr
+                  (EAssign iid q qnm Ptr (EVar vid p pnm)))} {es}
+        (readAssignNest3 oid sid iid vid od s q p onm snm qnm pnm Ptr Ptr Ptr)
+        (replace {p = \place => placeIn place live = True} same pin)
+        quiet
+    Right ne =>
+      alienConsumeAsgNest3Extra {oid} {sid} {iid} {vid} {od} {s} {q} {p}
+        {onm} {snm} {qnm} {pnm} own oa ne look eq
+
+||| `readPlaces` follows every right-hand side, so
+||| `r = (t = (s = (q = p)))` reads `p`. A fifth assignment is not
+||| this lemma.
+readAssignNest4 : (oid, tid, sid, iid, vid : Nat) ->
+                  (od, t, s, q, p : Place) ->
+                  (onm, tnm, snm, qnm, pnm : String) ->
+                  (oty, tty, sty, ity : Ty) ->
+                  placeIn p (readPlaces
+                    (EAssign oid od onm oty
+                      (EAssign tid t tnm tty
+                        (EAssign sid s snm sty
+                          (EAssign iid q qnm ity (EVar vid p pnm)))))) = True
+readAssignNest4 _ _ _ _ _ _ _ _ _ p _ _ _ _ _ _ _ _ _ = placeInHere p
+
+||| The inner `t = (s = (q = p))` is `alienTakeAsgNest3`. A second
+||| holder of `a` makes that take void, so the outer store cannot be
+||| taken. All four stores are pointer assignments.
+alienAsgNest4Go : {ctx : Ctx} -> {sc, scA : Scopes} ->
+                  {env : HEnv} -> {h : Heap} -> {a : Addr} ->
+                  {oid, tid, sid, iid, vid : Nat} ->
+                  {od, t, s, q, p : Place} ->
+                  {onm, tnm, snm, qnm, pnm : String} -> {fl : Flag} ->
+                  (own : Own env sc a) ->
+                  OverApprox env h sc ->
+                  own.ownQ == p = False ->
+                  lookupH p env = Just (HVPtr a) ->
+                  takeOwner ctx sc
+                    (EAssign oid od onm Ptr
+                      (EAssign tid t tnm Ptr
+                        (EAssign sid s snm Ptr
+                          (EAssign iid q qnm Ptr (EVar vid p pnm))))) =
+                    Right (scA, fl) ->
+                  (r : Either Diag (Scopes, Flag)) ->
+                  takeOwner ctx sc
+                    (EAssign tid t tnm Ptr
+                      (EAssign sid s snm Ptr
+                        (EAssign iid q qnm Ptr (EVar vid p pnm)))) = r ->
+                  Void
+alienAsgNest4Go {oid} {od} {onm} {tid} {t} {sid} {s} {iid} {q}
+    own oa ne look pA (Left d) pR =
+  void (leftNotRight (trans (sym (takeAsgPtrLeft oid od onm
+         {rhs = EAssign tid t tnm Ptr
+                  (EAssign sid s snm Ptr
+                     (EAssign iid q qnm Ptr (EVar vid p pnm)))}
+         (ghostCopyLeakFalseTake pA) pR)) pA))
+alienAsgNest4Go {tid} {sid} {iid} {vid} {t} {s} {q} {p}
+    {tnm} {snm} {qnm} {pnm} own oa ne look _ (Right (sc1, fl1)) pR =
+  alienTakeAsgNest3 {scA = sc1} {fl = fl1} {oid = tid} {sid} {iid} {vid}
+    {od = t} {s} {q} {p} {onm = tnm} {snm} {qnm} {pnm} own oa ne look pR
+
+alienTakeAsgNest4 : {ctx : Ctx} -> {sc, scA : Scopes} ->
+                    {env : HEnv} -> {h : Heap} -> {a : Addr} ->
+                    {oid, tid, sid, iid, vid : Nat} ->
+                    {od, t, s, q, p : Place} ->
+                    {onm, tnm, snm, qnm, pnm : String} -> {fl : Flag} ->
+                    (own : Own env sc a) ->
+                    OverApprox env h sc ->
+                    own.ownQ == p = False ->
+                    lookupH p env = Just (HVPtr a) ->
+                    takeOwner ctx sc
+                      (EAssign oid od onm Ptr
+                        (EAssign tid t tnm Ptr
+                          (EAssign sid s snm Ptr
+                            (EAssign iid q qnm Ptr (EVar vid p pnm))))) =
+                      Right (scA, fl) ->
+                    Void
+alienTakeAsgNest4 {ctx} {sc} {tid} {t} {sid} {s} {iid} {q} {p}
+    {tnm} {snm} {qnm} {pnm} {vid} own oa ne look pA =
+  alienAsgNest4Go own oa ne look pA
+    (takeOwner ctx sc
+       (EAssign tid t tnm Ptr
+          (EAssign sid s snm Ptr
+             (EAssign iid q qnm Ptr (EVar vid p pnm))))) Refl
+
+||| An accepted consume of `r = (t = (s = (q = p)))`, with `p` a second
+||| holder of `a`, is void. Not `r = malloc()`.
+alienConsumeAsgNest4 : {ctx : Ctx} -> {sc, sc' : Scopes} ->
+                       {env : HEnv} -> {h : Heap} -> {a : Addr} ->
+                       {callee : String} ->
+                       {oid, tid, sid, iid, vid : Nat} ->
+                       {od, t, s, q, p : Place} ->
+                       {onm, tnm, snm, qnm, pnm : String} ->
+                       {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+                       (own : Own env sc a) ->
+                       OverApprox env h sc ->
+                       own.ownQ == p = False ->
+                       lookupH p env = Just (HVPtr a) ->
+                       doesConsume m = True ->
+                       checkArgsModes ctx sc callee
+                         (EAssign oid od onm Ptr
+                           (EAssign tid t tnm Ptr
+                             (EAssign sid s snm Ptr
+                               (EAssign iid q qnm Ptr (EVar vid p pnm)))) :: es)
+                         (m :: ms) = Right sc' ->
+                       Void
+alienConsumeAsgNest4 {oid} {tid} {sid} {iid} {vid} {od} {t} {s} {q} {p}
+    {onm} {tnm} {snm} {qnm} {pnm} own oa ne look pc eq =
+  let (sc1 ** (fl ** (pT, _))) =
+        argsModesMoveSplit
+          {e = EAssign oid od onm Ptr
+                 (EAssign tid t tnm Ptr
+                    (EAssign sid s snm Ptr
+                       (EAssign iid q qnm Ptr (EVar vid p pnm))))} pc eq
+  in alienTakeAsgNest4 {scA = sc1} {fl} {oid} {tid} {sid} {iid} {vid}
+       {od} {t} {s} {q} {p} {onm} {tnm} {snm} {qnm} {pnm} own oa ne look pT
+
+||| A missing mode is that same four-assignment consume.
+alienConsumeAsgNest4Extra : {ctx : Ctx} -> {sc, sc' : Scopes} ->
+                            {env : HEnv} -> {h : Heap} -> {a : Addr} ->
+                            {callee : String} ->
+                            {oid, tid, sid, iid, vid : Nat} ->
+                            {od, t, s, q, p : Place} ->
+                            {onm, tnm, snm, qnm, pnm : String} ->
+                            {es : List Expr} ->
+                            (own : Own env sc a) ->
+                            OverApprox env h sc ->
+                            own.ownQ == p = False ->
+                            lookupH p env = Just (HVPtr a) ->
+                            checkArgsModes ctx sc callee
+                              (EAssign oid od onm Ptr
+                                (EAssign tid t tnm Ptr
+                                  (EAssign sid s snm Ptr
+                                    (EAssign iid q qnm Ptr
+                                       (EVar vid p pnm)))) :: es)
+                              [] = Right sc' ->
+                            Void
+alienConsumeAsgNest4Extra {oid} {tid} {sid} {iid} {vid} {od} {t} {s} {q} {p}
+    {onm} {tnm} {snm} {qnm} {pnm} own oa ne look eq =
+  let (sc1 ** (fl ** (pT, _))) =
+        argsModesExtraSplit
+          {e = EAssign oid od onm Ptr
+                 (EAssign tid t tnm Ptr
+                    (EAssign sid s snm Ptr
+                       (EAssign iid q qnm Ptr (EVar vid p pnm))))} eq
+  in alienTakeAsgNest4 {scA = sc1} {fl} {oid} {tid} {sid} {iid} {vid}
+       {od} {t} {s} {q} {p} {onm} {tnm} {snm} {qnm} {pnm} own oa ne look pT
+
+||| A quiet accepted consume of `r = (t = (s = (q = p)))` is not a
+||| holder of `a`. The pin read is `p`. Any other holder is
+||| `alienConsumeAsgNest4`.
+quietConsumeAsgNest4 : {ctx : Ctx} -> {sc, sc' : Scopes} ->
+                       {env : HEnv} -> {h : Heap} -> {a : Addr} ->
+                       {callee : String} ->
+                       {acc : List (String, List Consume)} ->
+                       {live : List Place} ->
+                       {oid, tid, sid, iid, vid : Nat} ->
+                       {od, t, s, q, p : Place} ->
+                       {onm, tnm, snm, qnm, pnm : String} ->
+                       {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+                       (own : Own env sc a) ->
+                       OverApprox env h sc ->
+                       placeIn own.ownQ live = True ->
+                       doesConsume m = True ->
+                       storedLiveGo acc live
+                         (EAssign oid od onm Ptr
+                           (EAssign tid t tnm Ptr
+                             (EAssign sid s snm Ptr
+                               (EAssign iid q qnm Ptr (EVar vid p pnm)))) :: es)
+                         (m :: ms) = False ->
+                       checkArgsModes ctx sc callee
+                         (EAssign oid od onm Ptr
+                           (EAssign tid t tnm Ptr
+                             (EAssign sid s snm Ptr
+                               (EAssign iid q qnm Ptr (EVar vid p pnm)))) :: es)
+                         (m :: ms) = Right sc' ->
+                       lookupH p env = Just (HVPtr a) ->
+                       Void
+quietConsumeAsgNest4 {acc} {live} {oid} {tid} {sid} {iid} {vid}
+    {od} {t} {s} {q} {p} {onm} {tnm} {snm} {qnm} {pnm} {es} {m} {ms}
+    own oa pin pc quiet eq look =
+  case natEqDec own.ownQ p of
+    Left same =>
+      storedReadOwner {acc} {live} {p}
+        {e = EAssign oid od onm Ptr
+               (EAssign tid t tnm Ptr
+                  (EAssign sid s snm Ptr
+                     (EAssign iid q qnm Ptr (EVar vid p pnm))))} {es} {m} {ms}
+        (readAssignNest4 oid tid sid iid vid od t s q p
+           onm tnm snm qnm pnm Ptr Ptr Ptr Ptr)
+        (replace {p = \place => placeIn place live = True} same pin)
+        pc quiet
+    Right ne =>
+      alienConsumeAsgNest4 {oid} {tid} {sid} {iid} {vid}
+        {od} {t} {s} {q} {p} {onm} {tnm} {snm} {qnm} {pnm}
+        own oa ne look pc eq
+
+||| A missing mode is still that consume of `r = (t = (s = (q = p)))`.
+quietConsumeAsgNest4Extra : {ctx : Ctx} -> {sc, sc' : Scopes} ->
+                            {env : HEnv} -> {h : Heap} -> {a : Addr} ->
+                            {callee : String} ->
+                            {acc : List (String, List Consume)} ->
+                            {live : List Place} ->
+                            {oid, tid, sid, iid, vid : Nat} ->
+                            {od, t, s, q, p : Place} ->
+                            {onm, tnm, snm, qnm, pnm : String} ->
+                            {es : List Expr} ->
+                            (own : Own env sc a) ->
+                            OverApprox env h sc ->
+                            placeIn own.ownQ live = True ->
+                            storedLiveGo acc live
+                              (EAssign oid od onm Ptr
+                                (EAssign tid t tnm Ptr
+                                  (EAssign sid s snm Ptr
+                                    (EAssign iid q qnm Ptr
+                                       (EVar vid p pnm)))) :: es)
+                              [] = False ->
+                            checkArgsModes ctx sc callee
+                              (EAssign oid od onm Ptr
+                                (EAssign tid t tnm Ptr
+                                  (EAssign sid s snm Ptr
+                                    (EAssign iid q qnm Ptr
+                                       (EVar vid p pnm)))) :: es)
+                              [] = Right sc' ->
+                            lookupH p env = Just (HVPtr a) ->
+                            Void
+quietConsumeAsgNest4Extra {acc} {live} {oid} {tid} {sid} {iid} {vid}
+    {od} {t} {s} {q} {p} {onm} {tnm} {snm} {qnm} {pnm} {es}
+    own oa pin quiet eq look =
+  case natEqDec own.ownQ p of
+    Left same =>
+      storedReadExtra {acc} {live} {p}
+        {e = EAssign oid od onm Ptr
+               (EAssign tid t tnm Ptr
+                  (EAssign sid s snm Ptr
+                     (EAssign iid q qnm Ptr (EVar vid p pnm))))} {es}
+        (readAssignNest4 oid tid sid iid vid od t s q p
+           onm tnm snm qnm pnm Ptr Ptr Ptr Ptr)
+        (replace {p = \place => placeIn place live = True} same pin)
+        quiet
+    Right ne =>
+      alienConsumeAsgNest4Extra {oid} {tid} {sid} {iid} {vid}
+        {od} {t} {s} {q} {p} {onm} {tnm} {snm} {qnm} {pnm}
+        own oa ne look eq
+
 ||| `setPlace` of the borrowed status is what the next lookup sees.
 borrowedFromSet : {sc, sc' : Scopes} -> {fid : Nat} -> {n : Place} ->
                   setPlace n (Pagurus.Status.singleton (ABorrowed fid)) sc = sc' ->
@@ -6439,6 +6872,1143 @@ borrowedIfVarMissDrop : (k : Nat) -> (ctx : Ctx) -> {sc, sc' : Scopes} ->
 borrowedIfVarMissDrop k ctx {sc} {sc'} {fid} {iid} {qid} {nid} {n} {m}
                       {mnm} {dnm} {els} ne look eq =
   ifVarMissDropGo k ctx sc sc' fid iid qid nid n m mnm dnm els ne look
+    (checkExpr ctx sc (EVar qid m mnm)) Refl eq
+
+||| The else-branch is checked at the post-condition scope, the same
+||| scope as the then-branch. A `Right` if therefore requires this drop
+||| to succeed there. The then-branch may be any list.
+ifElseDropAt : (k : Nat) -> (ctx : Ctx) -> (sc, sc0, sc' : Scopes) ->
+               (fid, iid, nid : Nat) -> (n : Place) -> (dnm : String) ->
+               (cond : Expr) -> (thn : List Stmt) ->
+               lookupPlace n sc0 =
+                 Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+               checkExpr ctx sc cond = Right sc0 ->
+               (t : Either Diag Scopes) ->
+               checkStmts (S (S k)) ctx sc0 thn = t ->
+               (e : Either Diag Scopes) ->
+               checkStmts (S (S k)) ctx sc0 [SDrop nid n dnm] = e ->
+               checkStmt (S (S (S k))) ctx sc
+                 (SIf iid cond thn [SDrop nid n dnm]) = Right sc' ->
+               Void
+ifElseDropAt k ctx sc sc0 _ fid iid nid n dnm cond thn look0 pC
+    (Left d) pT _ _ eq =
+  void (leftNotRight
+    (trans (sym (ifThenLeft {fuel = S (S k)} {ctx} {sc} {sc0}
+               {cond} {thn} iid [SDrop nid n dnm] pC pT)) eq))
+ifElseDropAt k ctx sc sc0 _ fid iid nid n dnm cond thn _ pC
+    (Right scT) pT (Left d) pE eq =
+  void (leftNotRight
+    (trans (sym (ifElseLeft {fuel = S (S k)} {ctx} {sc} {sc0} {scT}
+               {cond} {thn} {els = [SDrop nid n dnm]} iid pC pT pE)) eq))
+ifElseDropAt k ctx _ sc0 _ fid _ nid n dnm _ _ look0 _
+    (Right _) _ (Right scE) pE _ =
+  dropAfterUse k ctx sc0 scE fid nid n dnm look0
+    (checkStmt (S k) ctx sc0 (SDrop nid n dnm)) Refl pE
+
+||| `if (lit) <then> else free(p)` is rejected. The condition leaves
+||| the scope unchanged.
+borrowedIfLitElseDrop : (k : Nat) -> (ctx : Ctx) -> {sc, sc' : Scopes} ->
+                        {fid, iid, lid, nid : Nat} -> {n : Place} ->
+                        {dnm : String} -> {thn : List Stmt} ->
+                        lookupPlace n sc =
+                          Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                        checkStmt (S (S (S k))) ctx sc
+                          (SIf iid (ELit lid) thn [SDrop nid n dnm]) =
+                          Right sc' ->
+                        Void
+borrowedIfLitElseDrop k ctx {sc} {sc'} {fid} {iid} {lid} {nid} {n} {dnm} {thn}
+    look eq =
+  ifElseDropAt k ctx sc sc sc' fid iid nid n dnm (ELit lid) thn look
+    (checkExprLit ctx sc lid)
+    (checkStmts (S (S k)) ctx sc thn) Refl
+    (checkStmts (S (S k)) ctx sc [SDrop nid n dnm]) Refl eq
+
+||| `if (NULL) <then> else free(p)` is the same rejection.
+borrowedIfNullElseDrop : (k : Nat) -> (ctx : Ctx) -> {sc, sc' : Scopes} ->
+                         {fid, iid, lid, nid : Nat} -> {n : Place} ->
+                         {dnm : String} -> {thn : List Stmt} ->
+                         lookupPlace n sc =
+                           Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                         checkStmt (S (S (S k))) ctx sc
+                           (SIf iid (ENull lid) thn [SDrop nid n dnm]) =
+                           Right sc' ->
+                         Void
+borrowedIfNullElseDrop k ctx {sc} {sc'} {fid} {iid} {lid} {nid} {n} {dnm} {thn}
+    look eq =
+  ifElseDropAt k ctx sc sc sc' fid iid nid n dnm (ENull lid) thn look
+    (checkExprNull ctx sc lid)
+    (checkStmts (S (S k)) ctx sc thn) Refl
+    (checkStmts (S (S k)) ctx sc [SDrop nid n dnm]) Refl eq
+
+||| `use()` with no arguments does not change scopes, so
+||| `if (use()) free(p)` is the literal-condition drop.
+borrowedIfUseNilDrop : (k : Nat) -> (ctx : Ctx) -> {sc, sc' : Scopes} ->
+                       {fid, iid, uid, nid : Nat} -> {n : Place} ->
+                       {dnm : String} -> {els : List Stmt} ->
+                       lookupPlace n sc =
+                         Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                       checkStmt (S (S (S k))) ctx sc
+                         (SIf iid (EUse uid []) [SDrop nid n dnm] els) =
+                         Right sc' ->
+                       Void
+borrowedIfUseNilDrop k ctx {sc} {sc'} {fid} {iid} {uid} {nid} {n} {dnm} {els}
+    look eq =
+  ifThenDropGo k ctx sc sc' fid iid nid n dnm (EUse uid []) els look
+    (trans (checkExprUse ctx sc uid []) (checkArgsBorrowNil ctx sc))
+    (checkStmts (S (S k)) ctx sc [SDrop nid n dnm]) Refl eq
+
+||| `if (use()) <then> else free(p)` with `use()` taking no arguments.
+borrowedIfUseNilElseDrop : (k : Nat) -> (ctx : Ctx) -> {sc, sc' : Scopes} ->
+                           {fid, iid, uid, nid : Nat} -> {n : Place} ->
+                           {dnm : String} -> {thn : List Stmt} ->
+                           lookupPlace n sc =
+                             Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                           checkStmt (S (S (S k))) ctx sc
+                             (SIf iid (EUse uid []) thn [SDrop nid n dnm]) =
+                             Right sc' ->
+                           Void
+borrowedIfUseNilElseDrop k ctx {sc} {sc'} {fid} {iid} {uid} {nid} {n} {dnm} {thn}
+    look eq =
+  ifElseDropAt k ctx sc sc sc' fid iid nid n dnm (EUse uid []) thn look
+    (trans (checkExprUse ctx sc uid []) (checkArgsBorrowNil ctx sc))
+    (checkStmts (S (S k)) ctx sc thn) Refl
+    (checkStmts (S (S k)) ctx sc [SDrop nid n dnm]) Refl eq
+
+||| `malloc()` with no arguments does not change scopes.
+borrowedIfMallocNilDrop : (k : Nat) -> (ctx : Ctx) -> {sc, sc' : Scopes} ->
+                          {fid, iid, mid, nid : Nat} -> {n : Place} ->
+                          {dnm : String} -> {els : List Stmt} ->
+                          lookupPlace n sc =
+                            Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                          checkStmt (S (S (S k))) ctx sc
+                            (SIf iid (EMalloc mid []) [SDrop nid n dnm] els) =
+                            Right sc' ->
+                          Void
+borrowedIfMallocNilDrop k ctx {sc} {sc'} {fid} {iid} {mid} {nid} {n} {dnm} {els}
+    look eq =
+  ifThenDropGo k ctx sc sc' fid iid nid n dnm (EMalloc mid []) els look
+    (trans (checkExprMalloc ctx sc mid []) (checkArgsBorrowNil ctx sc))
+    (checkStmts (S (S k)) ctx sc [SDrop nid n dnm]) Refl eq
+
+||| `if (malloc()) <then> else free(p)` with `malloc()` taking no arguments.
+borrowedIfMallocNilElseDrop : (k : Nat) -> (ctx : Ctx) ->
+                              {sc, sc' : Scopes} ->
+                              {fid, iid, mid, nid : Nat} -> {n : Place} ->
+                              {dnm : String} -> {thn : List Stmt} ->
+                              lookupPlace n sc =
+                                Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                              checkStmt (S (S (S k))) ctx sc
+                                (SIf iid (EMalloc mid []) thn [SDrop nid n dnm]) =
+                                Right sc' ->
+                              Void
+borrowedIfMallocNilElseDrop k ctx {sc} {sc'} {fid} {iid} {mid} {nid}
+                            {n} {dnm} {thn} look eq =
+  ifElseDropAt k ctx sc sc sc' fid iid nid n dnm (EMalloc mid []) thn look
+    (trans (checkExprMalloc ctx sc mid []) (checkArgsBorrowNil ctx sc))
+    (checkStmts (S (S k)) ctx sc thn) Refl
+    (checkStmts (S (S k)) ctx sc [SDrop nid n dnm]) Refl eq
+
+||| `if (p) <then> else free(p)`. The condition writes the borrowed
+||| status back, and the else-branch drops that place.
+ifElseUseGo : (k : Nat) -> (ctx : Ctx) -> (sc, sc' : Scopes) ->
+              (fid, iid, id, nid : Nat) -> (n : Place) ->
+              (nm, dnm : String) -> (thn : List Stmt) ->
+              lookupPlace n sc =
+                Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+              (c : Either Diag Scopes) ->
+              checkExpr ctx sc (EVar id n nm) = c ->
+              checkStmt (S (S (S k))) ctx sc
+                (SIf iid (EVar id n nm) thn [SDrop nid n dnm]) = Right sc' ->
+              Void
+ifElseUseGo k ctx sc _ fid iid id nid n nm dnm thn look (Left d) pC eq =
+  void (leftNotRight
+    (trans (sym (ifExprLeft (S (S k)) iid thn [SDrop nid n dnm]
+               {ctx} {sc} {cond = EVar id n nm} pC)) eq))
+ifElseUseGo k ctx sc sc' fid iid id nid n nm dnm thn look (Right sc0) pC eq =
+  ifElseDropAt k ctx sc sc0 sc' fid iid nid n dnm (EVar id n nm) thn
+    (borrowedUseLookup {ctx} {sc} {sc' = sc0} {fid} {id} {n} {nm} look pC)
+    pC
+    (checkStmts (S (S k)) ctx sc0 thn) Refl
+    (checkStmts (S (S k)) ctx sc0 [SDrop nid n dnm]) Refl eq
+
+||| `if (p) <then> else free(p)` is rejected.
+borrowedIfUseElseDrop : (k : Nat) -> (ctx : Ctx) -> {sc, sc' : Scopes} ->
+                        {fid, iid, id, nid : Nat} -> {n : Place} ->
+                        {nm, dnm : String} -> {thn : List Stmt} ->
+                        lookupPlace n sc =
+                          Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                        checkStmt (S (S (S k))) ctx sc
+                          (SIf iid (EVar id n nm) thn [SDrop nid n dnm]) =
+                          Right sc' ->
+                        Void
+borrowedIfUseElseDrop k ctx {sc} {sc'} {fid} {iid} {id} {nid} {n} {nm} {dnm}
+                      {thn} look eq =
+  ifElseUseGo k ctx sc sc' fid iid id nid n nm dnm thn look
+    (checkExpr ctx sc (EVar id n nm)) Refl eq
+
+||| `if (q) <then> else free(p)` with `q /= p`. Using `q` leaves `p`.
+ifElseVarMissGo : (k : Nat) -> (ctx : Ctx) -> (sc, sc' : Scopes) ->
+                  (fid, iid, qid, nid : Nat) -> (n, m : Place) ->
+                  (mnm, dnm : String) -> (thn : List Stmt) ->
+                  n == m = False ->
+                  lookupPlace n sc =
+                    Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                  (c : Either Diag Scopes) ->
+                  checkExpr ctx sc (EVar qid m mnm) = c ->
+                  checkStmt (S (S (S k))) ctx sc
+                    (SIf iid (EVar qid m mnm) thn [SDrop nid n dnm]) =
+                    Right sc' ->
+                  Void
+ifElseVarMissGo k ctx sc _ fid iid qid nid n m mnm dnm thn ne look
+    (Left d) pC eq =
+  void (leftNotRight
+    (trans (sym (ifExprLeft (S (S k)) iid thn [SDrop nid n dnm]
+               {ctx} {sc} {cond = EVar qid m mnm} pC)) eq))
+ifElseVarMissGo k ctx sc sc' fid iid qid nid n m mnm dnm thn ne look
+    (Right sc0) pC eq =
+  ifElseDropAt k ctx sc sc0 sc' fid iid nid n dnm (EVar qid m mnm) thn
+    (borrowedUseMiss {sc} {sc' = sc0} {fid} {qid} {n} {m} {mnm} ne look
+       (trans (sym (checkExprVar ctx sc qid m mnm)) pC))
+    pC
+    (checkStmts (S (S k)) ctx sc0 thn) Refl
+    (checkStmts (S (S k)) ctx sc0 [SDrop nid n dnm]) Refl eq
+
+||| `if (q) <then> else free(p)` with `q /= p` is rejected.
+borrowedIfVarMissElseDrop : (k : Nat) -> (ctx : Ctx) -> {sc, sc' : Scopes} ->
+                            {fid, iid, qid, nid : Nat} -> {n, m : Place} ->
+                            {mnm, dnm : String} -> {thn : List Stmt} ->
+                            n == m = False ->
+                            lookupPlace n sc =
+                              Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                            checkStmt (S (S (S k))) ctx sc
+                              (SIf iid (EVar qid m mnm) thn [SDrop nid n dnm]) =
+                              Right sc' ->
+                            Void
+borrowedIfVarMissElseDrop k ctx {sc} {sc'} {fid} {iid} {qid} {nid} {n} {m}
+                          {mnm} {dnm} {thn} ne look eq =
+  ifElseVarMissGo k ctx sc sc' fid iid qid nid n m mnm dnm thn ne look
+    (checkExpr ctx sc (EVar qid m mnm)) Refl eq
+
+||| `loopFix (S _)` checks the body at the incoming scope. A `Left`
+||| body makes the loop `Left`. This is one unfolding: `loopFixFalse`
+||| is reached only after that body check succeeds.
+loopDropGo : (k : Nat) -> (ctx : Ctx) -> (sc, sc' : Scopes) ->
+             (fid, lid, nid : Nat) -> (n : Place) -> (nm : String) ->
+             lookupPlace n sc =
+               Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+             (t : Either Diag Scopes) ->
+             checkStmts (S (S k)) ctx sc [SDrop nid n nm] = t ->
+             checkStmt (S (S (S (S k)))) ctx sc
+               (SLoop lid [SDrop nid n nm]) = Right sc' ->
+             Void
+loopDropGo k ctx sc _ fid lid nid n nm look (Left d) pT eq =
+  void (leftNotRight
+    (trans (sym (loopFixLeft {k = S (S k)} {ctx} {sc}
+               {bod = [SDrop nid n nm]} lid pT))
+      (trans (sym (checkStmtLoop (S (S (S k))) ctx sc lid
+                 [SDrop nid n nm])) eq)))
+loopDropGo k ctx sc _ fid _ nid n nm look (Right scB) pT _ =
+  dropAfterUse k ctx sc scB fid nid n nm look
+    (checkStmt (S k) ctx sc (SDrop nid n nm)) Refl pT
+
+||| `while (...) { free(p); }` is rejected when `p` is borrowed on entry.
+borrowedLoopDrop : (k : Nat) -> (ctx : Ctx) -> {sc, sc' : Scopes} ->
+                   {fid, lid, nid : Nat} -> {n : Place} -> {nm : String} ->
+                   lookupPlace n sc =
+                     Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                   checkStmt (S (S (S (S k)))) ctx sc
+                     (SLoop lid [SDrop nid n nm]) = Right sc' ->
+                   Void
+borrowedLoopDrop k ctx {sc} {sc'} {fid} {lid} {nid} {n} {nm} look eq =
+  loopDropGo k ctx sc sc' fid lid nid n nm look
+    (checkStmts (S (S k)) ctx sc [SDrop nid n nm]) Refl eq
+
+||| The body `use(p); free(p)` is rejected at the scope the loop starts from.
+loopUseDropGo : (k : Nat) -> (ctx : Ctx) -> (sc, sc' : Scopes) ->
+                (fid, lid, eid, id, nid : Nat) -> (n : Place) ->
+                (nm, dnm : String) ->
+                lookupPlace n sc =
+                  Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                (t : Either Diag Scopes) ->
+                checkStmts (S (S (S k))) ctx sc
+                  [SExpr eid (EVar id n nm), SDrop nid n dnm] = t ->
+                checkStmt (S (S (S (S (S k))))) ctx sc
+                  (SLoop lid [SExpr eid (EVar id n nm), SDrop nid n dnm]) =
+                  Right sc' ->
+                Void
+loopUseDropGo k ctx sc _ fid lid eid id nid n nm dnm look (Left d) pT eq =
+  void (leftNotRight
+    (trans (sym (loopFixLeft {k = S (S (S k))} {ctx} {sc}
+               {bod = [SExpr eid (EVar id n nm), SDrop nid n dnm]} lid pT))
+      (trans (sym (checkStmtLoop (S (S (S (S k)))) ctx sc lid
+                 [SExpr eid (EVar id n nm), SDrop nid n dnm])) eq)))
+loopUseDropGo k ctx sc _ fid _ eid id nid n nm dnm look (Right scB) pT _ =
+  borrowedUseDropStmts k ctx {sc} {sc' = scB} {fid} {eid} {id} {nid}
+    {n} {nm} {dnm} look pT
+
+||| `while (...) { use(p); free(p); }` is rejected.
+borrowedLoopUseDrop : (k : Nat) -> (ctx : Ctx) -> {sc, sc' : Scopes} ->
+                      {fid, lid, eid, id, nid : Nat} -> {n : Place} ->
+                      {nm, dnm : String} ->
+                      lookupPlace n sc =
+                        Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                      checkStmt (S (S (S (S (S k))))) ctx sc
+                        (SLoop lid [SExpr eid (EVar id n nm),
+                                    SDrop nid n dnm]) = Right sc' ->
+                      Void
+borrowedLoopUseDrop k ctx {sc} {sc'} {fid} {lid} {eid} {id} {nid}
+                     {n} {nm} {dnm} look eq =
+  loopUseDropGo k ctx sc sc' fid lid eid id nid n nm dnm look
+    (checkStmts (S (S (S k))) ctx sc
+       [SExpr eid (EVar id n nm), SDrop nid n dnm]) Refl eq
+
+||| A one-statement body that is `{ free(p); }` is that same drop.
+blockInLoop : (k : Nat) -> (ctx : Ctx) -> (sc, sc' : Scopes) ->
+              (fid, bid, nid : Nat) -> (n : Place) -> (nm : String) ->
+              lookupPlace n sc =
+                Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+              (r : Either Diag Scopes) ->
+              checkStmt (S (S (S k))) ctx sc
+                (SBlock bid [SDrop nid n nm]) = r ->
+              checkStmts (S (S (S (S k)))) ctx sc
+                [SBlock bid [SDrop nid n nm]] = Right sc' ->
+              Void
+blockInLoop k ctx sc _ fid bid nid n nm look (Left d) pB eq =
+  void (leftNotRight
+    (trans (sym (stmtsConsLeft {fuel = S (S (S k))} {ctx} {sc}
+               {s = SBlock bid [SDrop nid n nm]} [] pB)) eq))
+blockInLoop k ctx sc _ fid bid nid n nm look (Right sc1) pB _ =
+  borrowedBlockDrop k ctx {sc} {sc' = sc1} {fid} {bid} {nid} {n} {nm} look pB
+
+loopBlockGo : (k : Nat) -> (ctx : Ctx) -> (sc, sc' : Scopes) ->
+              (fid, lid, bid, nid : Nat) -> (n : Place) -> (nm : String) ->
+              lookupPlace n sc =
+                Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+              (t : Either Diag Scopes) ->
+              checkStmts (S (S (S (S k)))) ctx sc
+                [SBlock bid [SDrop nid n nm]] = t ->
+              checkStmt (S (S (S (S (S (S k)))))) ctx sc
+                (SLoop lid [SBlock bid [SDrop nid n nm]]) = Right sc' ->
+              Void
+loopBlockGo k ctx sc _ fid lid bid nid n nm look (Left d) pT eq =
+  void (leftNotRight
+    (trans (sym (loopFixLeft {k = S (S (S (S k)))} {ctx} {sc}
+               {bod = [SBlock bid [SDrop nid n nm]]} lid pT))
+      (trans (sym (checkStmtLoop (S (S (S (S (S k))))) ctx sc lid
+                 [SBlock bid [SDrop nid n nm]])) eq)))
+loopBlockGo k ctx sc _ fid _ bid nid n nm look (Right scB) pT _ =
+  blockInLoop k ctx sc scB fid bid nid n nm look
+    (checkStmt (S (S (S k))) ctx sc (SBlock bid [SDrop nid n nm])) Refl pT
+
+||| `while (...) { { free(p); } }` is rejected.
+borrowedLoopBlockDrop : (k : Nat) -> (ctx : Ctx) -> {sc, sc' : Scopes} ->
+                        {fid, lid, bid, nid : Nat} -> {n : Place} ->
+                        {nm : String} ->
+                        lookupPlace n sc =
+                          Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                        checkStmt (S (S (S (S (S (S k)))))) ctx sc
+                          (SLoop lid [SBlock bid [SDrop nid n nm]]) =
+                          Right sc' ->
+                        Void
+borrowedLoopBlockDrop k ctx {sc} {sc'} {fid} {lid} {bid} {nid} {n} {nm}
+    look eq =
+  loopBlockGo k ctx sc sc' fid lid bid nid n nm look
+    (checkStmts (S (S (S (S k)))) ctx sc
+       [SBlock bid [SDrop nid n nm]]) Refl eq
+
+||| `use(q)` with one argument ends at the scope of that use. The empty
+||| tail does not change it again. `q /= p` leaves `p` borrowed.
+useArgMissLook : (ctx : Ctx) -> {sc, sc0 : Scopes} ->
+                 {fid, uid, qid : Nat} -> {n, m : Place} -> {mnm : String} ->
+                 n == m = False ->
+                 lookupPlace n sc =
+                   Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                 checkExpr ctx sc (EUse uid [EVar qid m mnm]) = Right sc0 ->
+                 lookupPlace n sc0 =
+                   Just (Pagurus.Status.singleton (ABorrowed fid))
+useArgMissLook ctx {sc} {fid} {uid} {qid} {n} {m} {mnm} ne look eq =
+  let pB = trans (sym (checkExprUse ctx sc uid [EVar qid m mnm])) eq
+      (sc1 ** (pE, pTail)) =
+        argsBorrowSplit {ctx} {sc} {sc' = sc0}
+          {e = EVar qid m mnm} {es = []} pB
+      scEq = rightInj (trans (sym (checkArgsBorrowNil ctx sc1)) pTail)
+  in replace {p = \s => lookupPlace n s =
+                         Just (Pagurus.Status.singleton (ABorrowed fid))}
+       scEq
+       (borrowedUseMiss {sc} {sc' = sc1} {fid} {qid} {n} {m} {mnm} ne look
+          (trans (sym (checkExprVar ctx sc qid m mnm)) pE))
+
+||| `use(p)` with one argument writes the borrowed status back.
+useArgOwnLook : (ctx : Ctx) -> {sc, sc0 : Scopes} ->
+                {fid, uid, id : Nat} -> {n : Place} -> {nm : String} ->
+                lookupPlace n sc =
+                  Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                checkExpr ctx sc (EUse uid [EVar id n nm]) = Right sc0 ->
+                lookupPlace n sc0 =
+                  Just (Pagurus.Status.singleton (ABorrowed fid))
+useArgOwnLook ctx {sc} {fid} {uid} {id} {n} {nm} look eq =
+  let pB = trans (sym (checkExprUse ctx sc uid [EVar id n nm])) eq
+      (sc1 ** (pE, pTail)) =
+        argsBorrowSplit {ctx} {sc} {sc' = sc0}
+          {e = EVar id n nm} {es = []} pB
+      scEq = rightInj (trans (sym (checkArgsBorrowNil ctx sc1)) pTail)
+  in replace {p = \s => lookupPlace n s =
+                         Just (Pagurus.Status.singleton (ABorrowed fid))}
+       scEq
+       (borrowedUseLookup {ctx} {sc} {sc' = sc1} {fid} {id} {n} {nm} look pE)
+
+||| `if (use(q)) free(p)` with `q /= p`. One `use` argument.
+ifUseArgMissGo : (k : Nat) -> (ctx : Ctx) -> (sc, sc' : Scopes) ->
+                 (fid, iid, uid, qid, nid : Nat) -> (n, m : Place) ->
+                 (mnm, dnm : String) -> (els : List Stmt) ->
+                 n == m = False ->
+                 lookupPlace n sc =
+                   Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                 (c : Either Diag Scopes) ->
+                 checkExpr ctx sc (EUse uid [EVar qid m mnm]) = c ->
+                 checkStmt (S (S (S k))) ctx sc
+                   (SIf iid (EUse uid [EVar qid m mnm]) [SDrop nid n dnm] els) =
+                   Right sc' ->
+                 Void
+ifUseArgMissGo k ctx sc _ fid iid uid qid nid n m mnm dnm els ne look
+    (Left d) pC eq =
+  void (leftNotRight
+    (trans (sym (ifExprLeft (S (S k)) iid [SDrop nid n dnm] els
+               {ctx} {sc} {cond = EUse uid [EVar qid m mnm]} pC)) eq))
+ifUseArgMissGo k ctx sc sc' fid iid uid qid nid n m mnm dnm els ne look
+    (Right sc0) pC eq =
+  ifDropAtGo k ctx sc sc0 sc' fid iid nid n dnm
+    (EUse uid [EVar qid m mnm]) els
+    (useArgMissLook ctx {sc} {sc0} {fid} {uid} {qid} {n} {m} {mnm} ne look pC)
+    pC
+    (checkStmts (S (S k)) ctx sc0 [SDrop nid n dnm]) Refl eq
+
+||| `if (use(q)) free(p); else ...` with `q /= p` is rejected.
+borrowedIfUseArgMissDrop : (k : Nat) -> (ctx : Ctx) -> {sc, sc' : Scopes} ->
+                           {fid, iid, uid, qid, nid : Nat} -> {n, m : Place} ->
+                           {mnm, dnm : String} -> {els : List Stmt} ->
+                           n == m = False ->
+                           lookupPlace n sc =
+                             Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                           checkStmt (S (S (S k))) ctx sc
+                             (SIf iid (EUse uid [EVar qid m mnm])
+                                [SDrop nid n dnm] els) = Right sc' ->
+                           Void
+borrowedIfUseArgMissDrop k ctx {sc} {sc'} {fid} {iid} {uid} {qid} {nid}
+                         {n} {m} {mnm} {dnm} {els} ne look eq =
+  ifUseArgMissGo k ctx sc sc' fid iid uid qid nid n m mnm dnm els ne look
+    (checkExpr ctx sc (EUse uid [EVar qid m mnm])) Refl eq
+
+||| `if (use(q)) <then> else free(p)` with `q /= p`.
+ifUseArgMissElseGo : (k : Nat) -> (ctx : Ctx) -> (sc, sc' : Scopes) ->
+                     (fid, iid, uid, qid, nid : Nat) -> (n, m : Place) ->
+                     (mnm, dnm : String) -> (thn : List Stmt) ->
+                     n == m = False ->
+                     lookupPlace n sc =
+                       Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                     (c : Either Diag Scopes) ->
+                     checkExpr ctx sc (EUse uid [EVar qid m mnm]) = c ->
+                     checkStmt (S (S (S k))) ctx sc
+                       (SIf iid (EUse uid [EVar qid m mnm]) thn
+                          [SDrop nid n dnm]) = Right sc' ->
+                     Void
+ifUseArgMissElseGo k ctx sc _ fid iid uid qid nid n m mnm dnm thn ne look
+    (Left d) pC eq =
+  void (leftNotRight
+    (trans (sym (ifExprLeft (S (S k)) iid thn [SDrop nid n dnm]
+               {ctx} {sc} {cond = EUse uid [EVar qid m mnm]} pC)) eq))
+ifUseArgMissElseGo k ctx sc sc' fid iid uid qid nid n m mnm dnm thn ne look
+    (Right sc0) pC eq =
+  ifElseDropAt k ctx sc sc0 sc' fid iid nid n dnm
+    (EUse uid [EVar qid m mnm]) thn
+    (useArgMissLook ctx {sc} {sc0} {fid} {uid} {qid} {n} {m} {mnm} ne look pC)
+    pC
+    (checkStmts (S (S k)) ctx sc0 thn) Refl
+    (checkStmts (S (S k)) ctx sc0 [SDrop nid n dnm]) Refl eq
+
+||| `if (use(q)) <then> else free(p)` with `q /= p` is rejected.
+borrowedIfUseArgMissElseDrop : (k : Nat) -> (ctx : Ctx) -> {sc, sc' : Scopes} ->
+                               {fid, iid, uid, qid, nid : Nat} ->
+                               {n, m : Place} -> {mnm, dnm : String} ->
+                               {thn : List Stmt} ->
+                               n == m = False ->
+                               lookupPlace n sc =
+                                 Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                               checkStmt (S (S (S k))) ctx sc
+                                 (SIf iid (EUse uid [EVar qid m mnm]) thn
+                                    [SDrop nid n dnm]) = Right sc' ->
+                               Void
+borrowedIfUseArgMissElseDrop k ctx {sc} {sc'} {fid} {iid} {uid} {qid} {nid}
+                             {n} {m} {mnm} {dnm} {thn} ne look eq =
+  ifUseArgMissElseGo k ctx sc sc' fid iid uid qid nid n m mnm dnm thn ne look
+    (checkExpr ctx sc (EUse uid [EVar qid m mnm])) Refl eq
+
+||| `if (use(p)) free(p)`. The argument use writes the borrowed status back.
+ifUseArgOwnGo : (k : Nat) -> (ctx : Ctx) -> (sc, sc' : Scopes) ->
+                (fid, iid, uid, id, nid : Nat) -> (n : Place) ->
+                (nm, dnm : String) -> (els : List Stmt) ->
+                lookupPlace n sc =
+                  Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                (c : Either Diag Scopes) ->
+                checkExpr ctx sc (EUse uid [EVar id n nm]) = c ->
+                checkStmt (S (S (S k))) ctx sc
+                  (SIf iid (EUse uid [EVar id n nm]) [SDrop nid n dnm] els) =
+                  Right sc' ->
+                Void
+ifUseArgOwnGo k ctx sc _ fid iid uid id nid n nm dnm els look (Left d) pC eq =
+  void (leftNotRight
+    (trans (sym (ifExprLeft (S (S k)) iid [SDrop nid n dnm] els
+               {ctx} {sc} {cond = EUse uid [EVar id n nm]} pC)) eq))
+ifUseArgOwnGo k ctx sc sc' fid iid uid id nid n nm dnm els look (Right sc0) pC eq =
+  ifDropAtGo k ctx sc sc0 sc' fid iid nid n dnm
+    (EUse uid [EVar id n nm]) els
+    (useArgOwnLook ctx {sc} {sc0} {fid} {uid} {id} {n} {nm} look pC)
+    pC
+    (checkStmts (S (S k)) ctx sc0 [SDrop nid n dnm]) Refl eq
+
+||| `if (use(p)) free(p); else ...` is rejected.
+borrowedIfUseArgDrop : (k : Nat) -> (ctx : Ctx) -> {sc, sc' : Scopes} ->
+                       {fid, iid, uid, id, nid : Nat} -> {n : Place} ->
+                       {nm, dnm : String} -> {els : List Stmt} ->
+                       lookupPlace n sc =
+                         Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                       checkStmt (S (S (S k))) ctx sc
+                         (SIf iid (EUse uid [EVar id n nm])
+                            [SDrop nid n dnm] els) = Right sc' ->
+                       Void
+borrowedIfUseArgDrop k ctx {sc} {sc'} {fid} {iid} {uid} {id} {nid}
+                     {n} {nm} {dnm} {els} look eq =
+  ifUseArgOwnGo k ctx sc sc' fid iid uid id nid n nm dnm els look
+    (checkExpr ctx sc (EUse uid [EVar id n nm])) Refl eq
+
+||| `if (use(p)) <then> else free(p)`.
+ifUseArgOwnElseGo : (k : Nat) -> (ctx : Ctx) -> (sc, sc' : Scopes) ->
+                    (fid, iid, uid, id, nid : Nat) -> (n : Place) ->
+                    (nm, dnm : String) -> (thn : List Stmt) ->
+                    lookupPlace n sc =
+                      Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                    (c : Either Diag Scopes) ->
+                    checkExpr ctx sc (EUse uid [EVar id n nm]) = c ->
+                    checkStmt (S (S (S k))) ctx sc
+                      (SIf iid (EUse uid [EVar id n nm]) thn [SDrop nid n dnm]) =
+                      Right sc' ->
+                    Void
+ifUseArgOwnElseGo k ctx sc _ fid iid uid id nid n nm dnm thn look (Left d) pC eq =
+  void (leftNotRight
+    (trans (sym (ifExprLeft (S (S k)) iid thn [SDrop nid n dnm]
+               {ctx} {sc} {cond = EUse uid [EVar id n nm]} pC)) eq))
+ifUseArgOwnElseGo k ctx sc sc' fid iid uid id nid n nm dnm thn look
+    (Right sc0) pC eq =
+  ifElseDropAt k ctx sc sc0 sc' fid iid nid n dnm
+    (EUse uid [EVar id n nm]) thn
+    (useArgOwnLook ctx {sc} {sc0} {fid} {uid} {id} {n} {nm} look pC)
+    pC
+    (checkStmts (S (S k)) ctx sc0 thn) Refl
+    (checkStmts (S (S k)) ctx sc0 [SDrop nid n dnm]) Refl eq
+
+||| `if (use(p)) <then> else free(p)` is rejected.
+borrowedIfUseArgElseDrop : (k : Nat) -> (ctx : Ctx) -> {sc, sc' : Scopes} ->
+                           {fid, iid, uid, id, nid : Nat} -> {n : Place} ->
+                           {nm, dnm : String} -> {thn : List Stmt} ->
+                           lookupPlace n sc =
+                             Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                           checkStmt (S (S (S k))) ctx sc
+                             (SIf iid (EUse uid [EVar id n nm]) thn
+                                [SDrop nid n dnm]) = Right sc' ->
+                           Void
+borrowedIfUseArgElseDrop k ctx {sc} {sc'} {fid} {iid} {uid} {id} {nid}
+                         {n} {nm} {dnm} {thn} look eq =
+  ifUseArgOwnElseGo k ctx sc sc' fid iid uid id nid n nm dnm thn look
+    (checkExpr ctx sc (EUse uid [EVar id n nm])) Refl eq
+
+||| A copy assignment of `q /= p` is a use of `q`.
+asgCopyMissLook : (ctx : Ctx) -> {sc, sc0 : Scopes} ->
+                  {fid, aid, qid : Nat} -> {dest, n, m : Place} ->
+                  {dnm, mnm : String} ->
+                  n == m = False ->
+                  lookupPlace n sc =
+                    Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                  checkExpr ctx sc
+                    (EAssign aid dest dnm Copy (EVar qid m mnm)) = Right sc0 ->
+                  lookupPlace n sc0 =
+                    Just (Pagurus.Status.singleton (ABorrowed fid))
+asgCopyMissLook ctx {sc} {fid} {aid} {qid} {dest} {n} {m} {dnm} {mnm} ne look eq =
+  borrowedUseMiss {sc} {sc' = sc0} {fid} {qid} {n} {m} {mnm} ne look
+    (trans (sym (checkExprVar ctx sc qid m mnm))
+      (trans (sym (checkExprAsgCopy aid dest dnm
+                    {ctx} {sc} {rhs = EVar qid m mnm})) eq))
+
+||| A copy assignment of `p` writes the borrowed status back.
+asgCopyOwnLook : (ctx : Ctx) -> {sc, sc0 : Scopes} ->
+                 {fid, aid, id : Nat} -> {dest, n : Place} ->
+                 {dnm, nm : String} ->
+                 lookupPlace n sc =
+                   Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                 checkExpr ctx sc
+                   (EAssign aid dest dnm Copy (EVar id n nm)) = Right sc0 ->
+                 lookupPlace n sc0 =
+                   Just (Pagurus.Status.singleton (ABorrowed fid))
+asgCopyOwnLook ctx {sc} {fid} {aid} {id} {dest} {n} {dnm} {nm} look eq =
+  borrowedUseLookup {ctx} {sc} {sc' = sc0} {fid} {id} {n} {nm} look
+    (trans (sym (checkExprAsgCopy aid dest dnm
+                  {ctx} {sc} {rhs = EVar id n nm})) eq)
+
+||| `if (x = q) free(p)` with the condition a copy and `q /= p`.
+ifAsgCopyMissGo : (k : Nat) -> (ctx : Ctx) -> (sc, sc' : Scopes) ->
+                  (fid, iid, aid, qid, nid : Nat) -> (dest, n, m : Place) ->
+                  (dnm, mnm, dropNm : String) -> (els : List Stmt) ->
+                  n == m = False ->
+                  lookupPlace n sc =
+                    Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                  (c : Either Diag Scopes) ->
+                  checkExpr ctx sc
+                    (EAssign aid dest dnm Copy (EVar qid m mnm)) = c ->
+                  checkStmt (S (S (S k))) ctx sc
+                    (SIf iid (EAssign aid dest dnm Copy (EVar qid m mnm))
+                       [SDrop nid n dropNm] els) = Right sc' ->
+                  Void
+ifAsgCopyMissGo k ctx sc _ fid iid aid qid nid dest n m dnm mnm dropNm els
+    ne look (Left d) pC eq =
+  void (leftNotRight
+    (trans (sym (ifExprLeft (S (S k)) iid [SDrop nid n dropNm] els
+               {ctx} {sc}
+               {cond = EAssign aid dest dnm Copy (EVar qid m mnm)} pC)) eq))
+ifAsgCopyMissGo k ctx sc sc' fid iid aid qid nid dest n m dnm mnm dropNm els
+    ne look (Right sc0) pC eq =
+  ifDropAtGo k ctx sc sc0 sc' fid iid nid n dropNm
+    (EAssign aid dest dnm Copy (EVar qid m mnm)) els
+    (asgCopyMissLook ctx {sc} {sc0} {fid} {aid} {qid} {dest} {n} {m}
+       {dnm} {mnm} ne look pC)
+    pC
+    (checkStmts (S (S k)) ctx sc0 [SDrop nid n dropNm]) Refl eq
+
+||| `if (x = q) free(p); else ...` with `q /= p` is rejected.
+borrowedIfAsgCopyMissDrop : (k : Nat) -> (ctx : Ctx) -> {sc, sc' : Scopes} ->
+                            {fid, iid, aid, qid, nid : Nat} ->
+                            {dest, n, m : Place} ->
+                            {dnm, mnm, dropNm : String} -> {els : List Stmt} ->
+                            n == m = False ->
+                            lookupPlace n sc =
+                              Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                            checkStmt (S (S (S k))) ctx sc
+                              (SIf iid (EAssign aid dest dnm Copy (EVar qid m mnm))
+                                 [SDrop nid n dropNm] els) = Right sc' ->
+                            Void
+borrowedIfAsgCopyMissDrop k ctx {sc} {sc'} {fid} {iid} {aid} {qid} {nid}
+                          {dest} {n} {m} {dnm} {mnm} {dropNm} {els} ne look eq =
+  ifAsgCopyMissGo k ctx sc sc' fid iid aid qid nid dest n m dnm mnm dropNm els
+    ne look
+    (checkExpr ctx sc (EAssign aid dest dnm Copy (EVar qid m mnm))) Refl eq
+
+||| `if (x = q) <then> else free(p)` with `q /= p`.
+ifAsgCopyMissElseGo : (k : Nat) -> (ctx : Ctx) -> (sc, sc' : Scopes) ->
+                      (fid, iid, aid, qid, nid : Nat) ->
+                      (dest, n, m : Place) ->
+                      (dnm, mnm, dropNm : String) -> (thn : List Stmt) ->
+                      n == m = False ->
+                      lookupPlace n sc =
+                        Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                      (c : Either Diag Scopes) ->
+                      checkExpr ctx sc
+                        (EAssign aid dest dnm Copy (EVar qid m mnm)) = c ->
+                      checkStmt (S (S (S k))) ctx sc
+                        (SIf iid (EAssign aid dest dnm Copy (EVar qid m mnm))
+                           thn [SDrop nid n dropNm]) = Right sc' ->
+                      Void
+ifAsgCopyMissElseGo k ctx sc _ fid iid aid qid nid dest n m dnm mnm dropNm thn
+    ne look (Left d) pC eq =
+  void (leftNotRight
+    (trans (sym (ifExprLeft (S (S k)) iid thn [SDrop nid n dropNm]
+               {ctx} {sc}
+               {cond = EAssign aid dest dnm Copy (EVar qid m mnm)} pC)) eq))
+ifAsgCopyMissElseGo k ctx sc sc' fid iid aid qid nid dest n m dnm mnm dropNm
+    thn ne look (Right sc0) pC eq =
+  ifElseDropAt k ctx sc sc0 sc' fid iid nid n dropNm
+    (EAssign aid dest dnm Copy (EVar qid m mnm)) thn
+    (asgCopyMissLook ctx {sc} {sc0} {fid} {aid} {qid} {dest} {n} {m}
+       {dnm} {mnm} ne look pC)
+    pC
+    (checkStmts (S (S k)) ctx sc0 thn) Refl
+    (checkStmts (S (S k)) ctx sc0 [SDrop nid n dropNm]) Refl eq
+
+||| `if (x = q) <then> else free(p)` with `q /= p` is rejected.
+borrowedIfAsgCopyMissElseDrop : (k : Nat) -> (ctx : Ctx) ->
+                                {sc, sc' : Scopes} ->
+                                {fid, iid, aid, qid, nid : Nat} ->
+                                {dest, n, m : Place} ->
+                                {dnm, mnm, dropNm : String} ->
+                                {thn : List Stmt} ->
+                                n == m = False ->
+                                lookupPlace n sc =
+                                  Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                                checkStmt (S (S (S k))) ctx sc
+                                  (SIf iid
+                                     (EAssign aid dest dnm Copy (EVar qid m mnm))
+                                     thn [SDrop nid n dropNm]) = Right sc' ->
+                                Void
+borrowedIfAsgCopyMissElseDrop k ctx {sc} {sc'} {fid} {iid} {aid} {qid} {nid}
+    {dest} {n} {m} {dnm} {mnm} {dropNm} {thn} ne look eq =
+  ifAsgCopyMissElseGo k ctx sc sc' fid iid aid qid nid dest n m dnm mnm dropNm
+    thn ne look
+    (checkExpr ctx sc (EAssign aid dest dnm Copy (EVar qid m mnm))) Refl eq
+
+||| `if (x = p) free(p)`. The condition is a copy of the borrowed place.
+ifAsgCopyOwnGo : (k : Nat) -> (ctx : Ctx) -> (sc, sc' : Scopes) ->
+                 (fid, iid, aid, id, nid : Nat) -> (dest, n : Place) ->
+                 (dnm, nm, dropNm : String) -> (els : List Stmt) ->
+                 lookupPlace n sc =
+                   Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                 (c : Either Diag Scopes) ->
+                 checkExpr ctx sc
+                   (EAssign aid dest dnm Copy (EVar id n nm)) = c ->
+                 checkStmt (S (S (S k))) ctx sc
+                   (SIf iid (EAssign aid dest dnm Copy (EVar id n nm))
+                      [SDrop nid n dropNm] els) = Right sc' ->
+                 Void
+ifAsgCopyOwnGo k ctx sc _ fid iid aid id nid dest n dnm nm dropNm els look
+    (Left d) pC eq =
+  void (leftNotRight
+    (trans (sym (ifExprLeft (S (S k)) iid [SDrop nid n dropNm] els
+               {ctx} {sc}
+               {cond = EAssign aid dest dnm Copy (EVar id n nm)} pC)) eq))
+ifAsgCopyOwnGo k ctx sc sc' fid iid aid id nid dest n dnm nm dropNm els look
+    (Right sc0) pC eq =
+  ifDropAtGo k ctx sc sc0 sc' fid iid nid n dropNm
+    (EAssign aid dest dnm Copy (EVar id n nm)) els
+    (asgCopyOwnLook ctx {sc} {sc0} {fid} {aid} {id} {dest} {n} {dnm} {nm} look pC)
+    pC
+    (checkStmts (S (S k)) ctx sc0 [SDrop nid n dropNm]) Refl eq
+
+||| `if (x = p) free(p); else ...` is rejected.
+borrowedIfAsgCopyDrop : (k : Nat) -> (ctx : Ctx) -> {sc, sc' : Scopes} ->
+                        {fid, iid, aid, id, nid : Nat} -> {dest, n : Place} ->
+                        {dnm, nm, dropNm : String} -> {els : List Stmt} ->
+                        lookupPlace n sc =
+                          Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                        checkStmt (S (S (S k))) ctx sc
+                          (SIf iid (EAssign aid dest dnm Copy (EVar id n nm))
+                             [SDrop nid n dropNm] els) = Right sc' ->
+                        Void
+borrowedIfAsgCopyDrop k ctx {sc} {sc'} {fid} {iid} {aid} {id} {nid}
+                      {dest} {n} {dnm} {nm} {dropNm} {els} look eq =
+  ifAsgCopyOwnGo k ctx sc sc' fid iid aid id nid dest n dnm nm dropNm els look
+    (checkExpr ctx sc (EAssign aid dest dnm Copy (EVar id n nm))) Refl eq
+
+||| `if (x = p) <then> else free(p)`.
+ifAsgCopyOwnElseGo : (k : Nat) -> (ctx : Ctx) -> (sc, sc' : Scopes) ->
+                     (fid, iid, aid, id, nid : Nat) -> (dest, n : Place) ->
+                     (dnm, nm, dropNm : String) -> (thn : List Stmt) ->
+                     lookupPlace n sc =
+                       Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                     (c : Either Diag Scopes) ->
+                     checkExpr ctx sc
+                       (EAssign aid dest dnm Copy (EVar id n nm)) = c ->
+                     checkStmt (S (S (S k))) ctx sc
+                       (SIf iid (EAssign aid dest dnm Copy (EVar id n nm))
+                          thn [SDrop nid n dropNm]) = Right sc' ->
+                     Void
+ifAsgCopyOwnElseGo k ctx sc _ fid iid aid id nid dest n dnm nm dropNm thn look
+    (Left d) pC eq =
+  void (leftNotRight
+    (trans (sym (ifExprLeft (S (S k)) iid thn [SDrop nid n dropNm]
+               {ctx} {sc}
+               {cond = EAssign aid dest dnm Copy (EVar id n nm)} pC)) eq))
+ifAsgCopyOwnElseGo k ctx sc sc' fid iid aid id nid dest n dnm nm dropNm thn look
+    (Right sc0) pC eq =
+  ifElseDropAt k ctx sc sc0 sc' fid iid nid n dropNm
+    (EAssign aid dest dnm Copy (EVar id n nm)) thn
+    (asgCopyOwnLook ctx {sc} {sc0} {fid} {aid} {id} {dest} {n} {dnm} {nm} look pC)
+    pC
+    (checkStmts (S (S k)) ctx sc0 thn) Refl
+    (checkStmts (S (S k)) ctx sc0 [SDrop nid n dropNm]) Refl eq
+
+||| `if (x = p) <then> else free(p)` is rejected.
+borrowedIfAsgCopyElseDrop : (k : Nat) -> (ctx : Ctx) -> {sc, sc' : Scopes} ->
+                            {fid, iid, aid, id, nid : Nat} ->
+                            {dest, n : Place} ->
+                            {dnm, nm, dropNm : String} -> {thn : List Stmt} ->
+                            lookupPlace n sc =
+                              Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                            checkStmt (S (S (S k))) ctx sc
+                              (SIf iid (EAssign aid dest dnm Copy (EVar id n nm))
+                                 thn [SDrop nid n dropNm]) = Right sc' ->
+                            Void
+borrowedIfAsgCopyElseDrop k ctx {sc} {sc'} {fid} {iid} {aid} {id} {nid}
+                          {dest} {n} {dnm} {nm} {dropNm} {thn} look eq =
+  ifAsgCopyOwnElseGo k ctx sc sc' fid iid aid id nid dest n dnm nm dropNm thn
+    look
+    (checkExpr ctx sc (EAssign aid dest dnm Copy (EVar id n nm))) Refl eq
+
+||| The then-branch is one block, `{ free(p); }`. That block is the
+||| borrowed drop. The else-branch is not the drop. A nested block
+||| inside the block is not this lemma.
+ifBlockDropAt : (k : Nat) -> (ctx : Ctx) -> (sc, sc0, sc' : Scopes) ->
+                (fid, iid, bid, nid : Nat) -> (n : Place) -> (nm : String) ->
+                (cond : Expr) -> (els : List Stmt) ->
+                lookupPlace n sc0 =
+                  Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                checkExpr ctx sc cond = Right sc0 ->
+                (t : Either Diag Scopes) ->
+                checkStmts (S (S (S (S k)))) ctx sc0
+                  [SBlock bid [SDrop nid n nm]] = t ->
+                checkStmt (S (S (S (S (S k))))) ctx sc
+                  (SIf iid cond [SBlock bid [SDrop nid n nm]] els) =
+                  Right sc' ->
+                Void
+ifBlockDropAt k ctx sc sc0 _ fid iid bid nid n nm cond els look0 pC
+    (Left d) pT eq =
+  void (leftNotRight
+    (trans (sym (ifThenLeft {fuel = S (S (S (S k)))} {ctx} {sc} {sc0}
+               {cond} {thn = [SBlock bid [SDrop nid n nm]]} iid els pC pT)) eq))
+ifBlockDropAt k ctx _ sc0 _ fid _ bid nid n nm _ _ look0 _
+    (Right scT) pT _ =
+  blockInLoop k ctx sc0 scT fid bid nid n nm look0
+    (checkStmt (S (S (S k))) ctx sc0 (SBlock bid [SDrop nid n nm])) Refl pT
+
+||| `if (lit) { free(p); } else ...` is rejected.
+borrowedIfLitBlockDrop : (k : Nat) -> (ctx : Ctx) -> {sc, sc' : Scopes} ->
+                         {fid, iid, lid, bid, nid : Nat} -> {n : Place} ->
+                         {nm : String} -> {els : List Stmt} ->
+                         lookupPlace n sc =
+                           Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                         checkStmt (S (S (S (S (S k))))) ctx sc
+                           (SIf iid (ELit lid) [SBlock bid [SDrop nid n nm]] els) =
+                           Right sc' ->
+                         Void
+borrowedIfLitBlockDrop k ctx {sc} {sc'} {fid} {iid} {lid} {bid} {nid}
+                       {n} {nm} {els} look eq =
+  ifBlockDropAt k ctx sc sc sc' fid iid bid nid n nm (ELit lid) els look
+    (checkExprLit ctx sc lid)
+    (checkStmts (S (S (S (S k)))) ctx sc [SBlock bid [SDrop nid n nm]]) Refl eq
+
+||| `if (NULL) { free(p); } else ...` is the same rejection.
+borrowedIfNullBlockDrop : (k : Nat) -> (ctx : Ctx) -> {sc, sc' : Scopes} ->
+                          {fid, iid, lid, bid, nid : Nat} -> {n : Place} ->
+                          {nm : String} -> {els : List Stmt} ->
+                          lookupPlace n sc =
+                            Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                          checkStmt (S (S (S (S (S k))))) ctx sc
+                            (SIf iid (ENull lid)
+                               [SBlock bid [SDrop nid n nm]] els) = Right sc' ->
+                          Void
+borrowedIfNullBlockDrop k ctx {sc} {sc'} {fid} {iid} {lid} {bid} {nid}
+                        {n} {nm} {els} look eq =
+  ifBlockDropAt k ctx sc sc sc' fid iid bid nid n nm (ENull lid) els look
+    (checkExprNull ctx sc lid)
+    (checkStmts (S (S (S (S k)))) ctx sc [SBlock bid [SDrop nid n nm]]) Refl eq
+
+||| `if (use()) { free(p); }` with `use` taking no arguments.
+borrowedIfUseNilBlockDrop : (k : Nat) -> (ctx : Ctx) -> {sc, sc' : Scopes} ->
+                            {fid, iid, uid, bid, nid : Nat} -> {n : Place} ->
+                            {nm : String} -> {els : List Stmt} ->
+                            lookupPlace n sc =
+                              Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                            checkStmt (S (S (S (S (S k))))) ctx sc
+                              (SIf iid (EUse uid [])
+                                 [SBlock bid [SDrop nid n nm]] els) =
+                              Right sc' ->
+                            Void
+borrowedIfUseNilBlockDrop k ctx {sc} {sc'} {fid} {iid} {uid} {bid} {nid}
+                          {n} {nm} {els} look eq =
+  ifBlockDropAt k ctx sc sc sc' fid iid bid nid n nm (EUse uid []) els look
+    (trans (checkExprUse ctx sc uid []) (checkArgsBorrowNil ctx sc))
+    (checkStmts (S (S (S (S k)))) ctx sc [SBlock bid [SDrop nid n nm]]) Refl eq
+
+||| `if (malloc()) { free(p); }` with `malloc` taking no arguments.
+borrowedIfMallocNilBlockDrop : (k : Nat) -> (ctx : Ctx) -> {sc, sc' : Scopes} ->
+                               {fid, iid, mid, bid, nid : Nat} ->
+                               {n : Place} -> {nm : String} ->
+                               {els : List Stmt} ->
+                               lookupPlace n sc =
+                                 Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                               checkStmt (S (S (S (S (S k))))) ctx sc
+                                 (SIf iid (EMalloc mid [])
+                                    [SBlock bid [SDrop nid n nm]] els) =
+                                 Right sc' ->
+                               Void
+borrowedIfMallocNilBlockDrop k ctx {sc} {sc'} {fid} {iid} {mid} {bid} {nid}
+                             {n} {nm} {els} look eq =
+  ifBlockDropAt k ctx sc sc sc' fid iid bid nid n nm (EMalloc mid []) els look
+    (trans (checkExprMalloc ctx sc mid []) (checkArgsBorrowNil ctx sc))
+    (checkStmts (S (S (S (S k)))) ctx sc [SBlock bid [SDrop nid n nm]]) Refl eq
+
+||| `if (p) { free(p); }`. The condition writes the borrowed status back.
+ifBlockUseGo : (k : Nat) -> (ctx : Ctx) -> (sc, sc' : Scopes) ->
+               (fid, iid, id, bid, nid : Nat) -> (n : Place) ->
+               (nm, dnm : String) -> (els : List Stmt) ->
+               lookupPlace n sc =
+                 Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+               (c : Either Diag Scopes) ->
+               checkExpr ctx sc (EVar id n nm) = c ->
+               checkStmt (S (S (S (S (S k))))) ctx sc
+                 (SIf iid (EVar id n nm) [SBlock bid [SDrop nid n dnm]] els) =
+                 Right sc' ->
+               Void
+ifBlockUseGo k ctx sc _ fid iid id bid nid n nm dnm els look (Left d) pC eq =
+  void (leftNotRight
+    (trans (sym (ifExprLeft (S (S (S (S k)))) iid
+               [SBlock bid [SDrop nid n dnm]] els
+               {ctx} {sc} {cond = EVar id n nm} pC)) eq))
+ifBlockUseGo k ctx sc sc' fid iid id bid nid n nm dnm els look (Right sc0) pC eq =
+  ifBlockDropAt k ctx sc sc0 sc' fid iid bid nid n dnm (EVar id n nm) els
+    (borrowedUseLookup {ctx} {sc} {sc' = sc0} {fid} {id} {n} {nm} look pC)
+    pC
+    (checkStmts (S (S (S (S k)))) ctx sc0 [SBlock bid [SDrop nid n dnm]]) Refl eq
+
+||| `if (p) { free(p); } else ...` is rejected.
+borrowedIfUseBlockDrop : (k : Nat) -> (ctx : Ctx) -> {sc, sc' : Scopes} ->
+                         {fid, iid, id, bid, nid : Nat} -> {n : Place} ->
+                         {nm, dnm : String} -> {els : List Stmt} ->
+                         lookupPlace n sc =
+                           Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                         checkStmt (S (S (S (S (S k))))) ctx sc
+                           (SIf iid (EVar id n nm)
+                              [SBlock bid [SDrop nid n dnm]] els) = Right sc' ->
+                         Void
+borrowedIfUseBlockDrop k ctx {sc} {sc'} {fid} {iid} {id} {bid} {nid}
+                       {n} {nm} {dnm} {els} look eq =
+  ifBlockUseGo k ctx sc sc' fid iid id bid nid n nm dnm els look
+    (checkExpr ctx sc (EVar id n nm)) Refl eq
+
+||| `if (q) { free(p); }` with `q /= p`. Using `q` does not rewrite `p`.
+ifBlockVarMissGo : (k : Nat) -> (ctx : Ctx) -> (sc, sc' : Scopes) ->
+                   (fid, iid, qid, bid, nid : Nat) -> (n, m : Place) ->
+                   (mnm, dnm : String) -> (els : List Stmt) ->
+                   n == m = False ->
+                   lookupPlace n sc =
+                     Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                   (c : Either Diag Scopes) ->
+                   checkExpr ctx sc (EVar qid m mnm) = c ->
+                   checkStmt (S (S (S (S (S k))))) ctx sc
+                     (SIf iid (EVar qid m mnm)
+                        [SBlock bid [SDrop nid n dnm]] els) = Right sc' ->
+                   Void
+ifBlockVarMissGo k ctx sc _ fid iid qid bid nid n m mnm dnm els ne look
+    (Left d) pC eq =
+  void (leftNotRight
+    (trans (sym (ifExprLeft (S (S (S (S k)))) iid
+               [SBlock bid [SDrop nid n dnm]] els
+               {ctx} {sc} {cond = EVar qid m mnm} pC)) eq))
+ifBlockVarMissGo k ctx sc sc' fid iid qid bid nid n m mnm dnm els ne look
+    (Right sc0) pC eq =
+  ifBlockDropAt k ctx sc sc0 sc' fid iid bid nid n dnm (EVar qid m mnm) els
+    (borrowedUseMiss {sc} {sc' = sc0} {fid} {qid} {n} {m} {mnm} ne look
+       (trans (sym (checkExprVar ctx sc qid m mnm)) pC))
+    pC
+    (checkStmts (S (S (S (S k)))) ctx sc0 [SBlock bid [SDrop nid n dnm]]) Refl eq
+
+||| `if (q) { free(p); } else ...` with `q /= p` is rejected.
+borrowedIfVarMissBlockDrop : (k : Nat) -> (ctx : Ctx) -> {sc, sc' : Scopes} ->
+                             {fid, iid, qid, bid, nid : Nat} ->
+                             {n, m : Place} -> {mnm, dnm : String} ->
+                             {els : List Stmt} ->
+                             n == m = False ->
+                             lookupPlace n sc =
+                               Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                             checkStmt (S (S (S (S (S k))))) ctx sc
+                               (SIf iid (EVar qid m mnm)
+                                  [SBlock bid [SDrop nid n dnm]] els) =
+                               Right sc' ->
+                             Void
+borrowedIfVarMissBlockDrop k ctx {sc} {sc'} {fid} {iid} {qid} {bid} {nid}
+                           {n} {m} {mnm} {dnm} {els} ne look eq =
+  ifBlockVarMissGo k ctx sc sc' fid iid qid bid nid n m mnm dnm els ne look
+    (checkExpr ctx sc (EVar qid m mnm)) Refl eq
+
+||| The else-branch is one block, `{ free(p); }`, checked at the
+||| post-condition scope. The then-branch may be any list. A nested
+||| block inside that block is not this lemma.
+ifElseBlockDrop : (k : Nat) -> (ctx : Ctx) -> (sc, sc0, sc' : Scopes) ->
+                  (fid, iid, bid, nid : Nat) -> (n : Place) -> (nm : String) ->
+                  (cond : Expr) -> (thn : List Stmt) ->
+                  lookupPlace n sc0 =
+                    Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                  checkExpr ctx sc cond = Right sc0 ->
+                  (t : Either Diag Scopes) ->
+                  checkStmts (S (S (S (S k)))) ctx sc0 thn = t ->
+                  (e : Either Diag Scopes) ->
+                  checkStmts (S (S (S (S k)))) ctx sc0
+                    [SBlock bid [SDrop nid n nm]] = e ->
+                  checkStmt (S (S (S (S (S k))))) ctx sc
+                    (SIf iid cond thn [SBlock bid [SDrop nid n nm]]) =
+                    Right sc' ->
+                  Void
+ifElseBlockDrop k ctx sc sc0 _ fid iid bid nid n nm cond thn look0 pC
+    (Left d) pT _ _ eq =
+  void (leftNotRight
+    (trans (sym (ifThenLeft {fuel = S (S (S (S k)))} {ctx} {sc} {sc0}
+               {cond} {thn} iid [SBlock bid [SDrop nid n nm]] pC pT)) eq))
+ifElseBlockDrop k ctx sc sc0 _ fid iid bid nid n nm cond thn _ pC
+    (Right scT) pT (Left d) pE eq =
+  void (leftNotRight
+    (trans (sym (ifElseLeft {fuel = S (S (S (S k)))} {ctx} {sc} {sc0} {scT}
+               {cond} {thn} {els = [SBlock bid [SDrop nid n nm]]}
+               iid pC pT pE)) eq))
+ifElseBlockDrop k ctx _ sc0 _ fid _ bid nid n nm _ _ look0 _
+    (Right _) _ (Right scE) pE _ =
+  blockInLoop k ctx sc0 scE fid bid nid n nm look0
+    (checkStmt (S (S (S k))) ctx sc0 (SBlock bid [SDrop nid n nm])) Refl pE
+
+||| `if (lit) <then> else { free(p); }` is rejected.
+borrowedIfLitElseBlockDrop : (k : Nat) -> (ctx : Ctx) -> {sc, sc' : Scopes} ->
+                             {fid, iid, lid, bid, nid : Nat} -> {n : Place} ->
+                             {nm : String} -> {thn : List Stmt} ->
+                             lookupPlace n sc =
+                               Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                             checkStmt (S (S (S (S (S k))))) ctx sc
+                               (SIf iid (ELit lid) thn
+                                  [SBlock bid [SDrop nid n nm]]) = Right sc' ->
+                             Void
+borrowedIfLitElseBlockDrop k ctx {sc} {sc'} {fid} {iid} {lid} {bid} {nid}
+                           {n} {nm} {thn} look eq =
+  ifElseBlockDrop k ctx sc sc sc' fid iid bid nid n nm (ELit lid) thn look
+    (checkExprLit ctx sc lid)
+    (checkStmts (S (S (S (S k)))) ctx sc thn) Refl
+    (checkStmts (S (S (S (S k)))) ctx sc [SBlock bid [SDrop nid n nm]]) Refl eq
+
+||| `if (NULL) <then> else { free(p); }` is the same rejection.
+borrowedIfNullElseBlockDrop : (k : Nat) -> (ctx : Ctx) -> {sc, sc' : Scopes} ->
+                              {fid, iid, lid, bid, nid : Nat} ->
+                              {n : Place} -> {nm : String} ->
+                              {thn : List Stmt} ->
+                              lookupPlace n sc =
+                                Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                              checkStmt (S (S (S (S (S k))))) ctx sc
+                                (SIf iid (ENull lid) thn
+                                   [SBlock bid [SDrop nid n nm]]) = Right sc' ->
+                              Void
+borrowedIfNullElseBlockDrop k ctx {sc} {sc'} {fid} {iid} {lid} {bid} {nid}
+                            {n} {nm} {thn} look eq =
+  ifElseBlockDrop k ctx sc sc sc' fid iid bid nid n nm (ENull lid) thn look
+    (checkExprNull ctx sc lid)
+    (checkStmts (S (S (S (S k)))) ctx sc thn) Refl
+    (checkStmts (S (S (S (S k)))) ctx sc [SBlock bid [SDrop nid n nm]]) Refl eq
+
+||| `if (use()) <then> else { free(p); }` with `use` taking no arguments.
+borrowedIfUseNilElseBlockDrop : (k : Nat) -> (ctx : Ctx) ->
+                                {sc, sc' : Scopes} ->
+                                {fid, iid, uid, bid, nid : Nat} ->
+                                {n : Place} -> {nm : String} ->
+                                {thn : List Stmt} ->
+                                lookupPlace n sc =
+                                  Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                                checkStmt (S (S (S (S (S k))))) ctx sc
+                                  (SIf iid (EUse uid []) thn
+                                     [SBlock bid [SDrop nid n nm]]) =
+                                  Right sc' ->
+                                Void
+borrowedIfUseNilElseBlockDrop k ctx {sc} {sc'} {fid} {iid} {uid} {bid} {nid}
+                              {n} {nm} {thn} look eq =
+  ifElseBlockDrop k ctx sc sc sc' fid iid bid nid n nm (EUse uid []) thn look
+    (trans (checkExprUse ctx sc uid []) (checkArgsBorrowNil ctx sc))
+    (checkStmts (S (S (S (S k)))) ctx sc thn) Refl
+    (checkStmts (S (S (S (S k)))) ctx sc [SBlock bid [SDrop nid n nm]]) Refl eq
+
+||| `if (malloc()) <then> else { free(p); }` with `malloc` taking no arguments.
+borrowedIfMallocNilElseBlockDrop : (k : Nat) -> (ctx : Ctx) ->
+                                   {sc, sc' : Scopes} ->
+                                   {fid, iid, mid, bid, nid : Nat} ->
+                                   {n : Place} -> {nm : String} ->
+                                   {thn : List Stmt} ->
+                                   lookupPlace n sc =
+                                     Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                                   checkStmt (S (S (S (S (S k))))) ctx sc
+                                     (SIf iid (EMalloc mid []) thn
+                                        [SBlock bid [SDrop nid n nm]]) =
+                                     Right sc' ->
+                                   Void
+borrowedIfMallocNilElseBlockDrop k ctx {sc} {sc'} {fid} {iid} {mid} {bid} {nid}
+                                 {n} {nm} {thn} look eq =
+  ifElseBlockDrop k ctx sc sc sc' fid iid bid nid n nm (EMalloc mid []) thn look
+    (trans (checkExprMalloc ctx sc mid []) (checkArgsBorrowNil ctx sc))
+    (checkStmts (S (S (S (S k)))) ctx sc thn) Refl
+    (checkStmts (S (S (S (S k)))) ctx sc [SBlock bid [SDrop nid n nm]]) Refl eq
+
+||| `if (p) <then> else { free(p); }`. The condition writes the status back.
+ifElseBlockUseGo : (k : Nat) -> (ctx : Ctx) -> (sc, sc' : Scopes) ->
+                   (fid, iid, id, bid, nid : Nat) -> (n : Place) ->
+                   (nm, dnm : String) -> (thn : List Stmt) ->
+                   lookupPlace n sc =
+                     Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                   (c : Either Diag Scopes) ->
+                   checkExpr ctx sc (EVar id n nm) = c ->
+                   checkStmt (S (S (S (S (S k))))) ctx sc
+                     (SIf iid (EVar id n nm) thn
+                        [SBlock bid [SDrop nid n dnm]]) = Right sc' ->
+                   Void
+ifElseBlockUseGo k ctx sc _ fid iid id bid nid n nm dnm thn look (Left d) pC eq =
+  void (leftNotRight
+    (trans (sym (ifExprLeft (S (S (S (S k)))) iid thn
+               [SBlock bid [SDrop nid n dnm]]
+               {ctx} {sc} {cond = EVar id n nm} pC)) eq))
+ifElseBlockUseGo k ctx sc sc' fid iid id bid nid n nm dnm thn look
+    (Right sc0) pC eq =
+  ifElseBlockDrop k ctx sc sc0 sc' fid iid bid nid n dnm (EVar id n nm) thn
+    (borrowedUseLookup {ctx} {sc} {sc' = sc0} {fid} {id} {n} {nm} look pC)
+    pC
+    (checkStmts (S (S (S (S k)))) ctx sc0 thn) Refl
+    (checkStmts (S (S (S (S k)))) ctx sc0 [SBlock bid [SDrop nid n dnm]]) Refl eq
+
+||| `if (p) <then> else { free(p); }` is rejected.
+borrowedIfUseElseBlockDrop : (k : Nat) -> (ctx : Ctx) -> {sc, sc' : Scopes} ->
+                             {fid, iid, id, bid, nid : Nat} -> {n : Place} ->
+                             {nm, dnm : String} -> {thn : List Stmt} ->
+                             lookupPlace n sc =
+                               Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                             checkStmt (S (S (S (S (S k))))) ctx sc
+                               (SIf iid (EVar id n nm) thn
+                                  [SBlock bid [SDrop nid n dnm]]) = Right sc' ->
+                             Void
+borrowedIfUseElseBlockDrop k ctx {sc} {sc'} {fid} {iid} {id} {bid} {nid}
+                           {n} {nm} {dnm} {thn} look eq =
+  ifElseBlockUseGo k ctx sc sc' fid iid id bid nid n nm dnm thn look
+    (checkExpr ctx sc (EVar id n nm)) Refl eq
+
+||| `if (q) <then> else { free(p); }` with `q /= p`.
+ifElseBlockVarMissGo : (k : Nat) -> (ctx : Ctx) -> (sc, sc' : Scopes) ->
+                       (fid, iid, qid, bid, nid : Nat) -> (n, m : Place) ->
+                       (mnm, dnm : String) -> (thn : List Stmt) ->
+                       n == m = False ->
+                       lookupPlace n sc =
+                         Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                       (c : Either Diag Scopes) ->
+                       checkExpr ctx sc (EVar qid m mnm) = c ->
+                       checkStmt (S (S (S (S (S k))))) ctx sc
+                         (SIf iid (EVar qid m mnm) thn
+                            [SBlock bid [SDrop nid n dnm]]) = Right sc' ->
+                       Void
+ifElseBlockVarMissGo k ctx sc _ fid iid qid bid nid n m mnm dnm thn ne look
+    (Left d) pC eq =
+  void (leftNotRight
+    (trans (sym (ifExprLeft (S (S (S (S k)))) iid thn
+               [SBlock bid [SDrop nid n dnm]]
+               {ctx} {sc} {cond = EVar qid m mnm} pC)) eq))
+ifElseBlockVarMissGo k ctx sc sc' fid iid qid bid nid n m mnm dnm thn ne look
+    (Right sc0) pC eq =
+  ifElseBlockDrop k ctx sc sc0 sc' fid iid bid nid n dnm (EVar qid m mnm) thn
+    (borrowedUseMiss {sc} {sc' = sc0} {fid} {qid} {n} {m} {mnm} ne look
+       (trans (sym (checkExprVar ctx sc qid m mnm)) pC))
+    pC
+    (checkStmts (S (S (S (S k)))) ctx sc0 thn) Refl
+    (checkStmts (S (S (S (S k)))) ctx sc0 [SBlock bid [SDrop nid n dnm]]) Refl eq
+
+||| `if (q) <then> else { free(p); }` with `q /= p` is rejected.
+borrowedIfVarMissElseBlockDrop : (k : Nat) -> (ctx : Ctx) ->
+                                 {sc, sc' : Scopes} ->
+                                 {fid, iid, qid, bid, nid : Nat} ->
+                                 {n, m : Place} -> {mnm, dnm : String} ->
+                                 {thn : List Stmt} ->
+                                 n == m = False ->
+                                 lookupPlace n sc =
+                                   Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                                 checkStmt (S (S (S (S (S k))))) ctx sc
+                                   (SIf iid (EVar qid m mnm) thn
+                                      [SBlock bid [SDrop nid n dnm]]) =
+                                   Right sc' ->
+                                 Void
+borrowedIfVarMissElseBlockDrop k ctx {sc} {sc'} {fid} {iid} {qid} {bid} {nid}
+                               {n} {m} {mnm} {dnm} {thn} ne look eq =
+  ifElseBlockVarMissGo k ctx sc sc' fid iid qid bid nid n m mnm dnm thn ne look
     (checkExpr ctx sc (EVar qid m mnm)) Refl eq
 
 ||| Under `InHand`, every holder is unsafe, so none of them moves.

@@ -1039,14 +1039,106 @@ nestedUseFreesDest :
     [Never, Never, Always] = True
 nestedUseFreesDest = Refl
 
+||| Places the value of `e` is read from. A pointer assignment yields its
+||| right-hand side, so the destination is not one of them: `r = malloc()`
+||| yields the fresh cell, not whatever `r` held before.
+public export
+readPlaces : Expr -> List Place
+readPlaces (EVar _ p _) = [p]
+readPlaces (EAssign _ _ _ _ rhs) = readPlaces rhs
+readPlaces _ = []
+
+||| Drop every copy of `p`. An overwrite with a non-captured value must
+||| not leave the old destination live.
+public export
+forgetPlace : Place -> List Place -> List Place
+forgetPlace _ [] = []
+forgetPlace p (q :: qs) = if p == q then forgetPlace p qs else q :: forgetPlace p qs
+
+||| Keep `d` when `cap` says the right-hand side read a captured place.
+public export
+placeAfter : Place -> List Place -> Bool -> List Place
+placeAfter d live True = d :: live
+placeAfter d live False = forgetPlace d live
+
+mutual
+  ||| Places that hold an address already captured by an earlier borrow,
+  ||| after evaluating `e`. A store from a captured place makes the
+  ||| destination captured. A store from anywhere else overwrites it.
+  public export
+  xferLive : List Place -> Expr -> List Place
+  xferLive live (EAssign _ d _ Ptr rhs) =
+    placeAfter d (xferLive live rhs)
+      (placesOverlap (readPlaces rhs) (xferLive live rhs))
+  xferLive live (EAssign _ _ _ Copy rhs) = xferLive live rhs
+  xferLive live (ECall _ _ args) = xferArgs live args
+  xferLive live (EMalloc _ args) = xferArgs live args
+  xferLive live (EUse _ args) = xferArgs live args
+  xferLive live _ = live
+
+  public export
+  xferArgs : List Place -> List Expr -> List Place
+  xferArgs live [] = live
+  xferArgs live (e :: es) = xferArgs (xferLive live e) es
+
+mutual
+  ||| Overlap flag for one consume. `True` means this argument reads a
+  ||| captured place. `False` continues with that argument's stores only.
+  public export
+  storedOn : List (String, List Consume) -> Bool -> List Place -> Expr ->
+             List Expr -> List Consume -> Bool
+  storedOn _ True _ _ _ _ = True
+  storedOn acc False live e es ms = storedLiveGo acc (xferLive live e) es ms
+
+  ||| Non-consume head. `True` means this argument frees a place `live`
+  ||| still holds. `False` continues with the places this head captured.
+  public export
+  storedFree : List (String, List Consume) -> Bool -> List Place -> Expr ->
+               List Expr -> List Consume -> Bool
+  storedFree _ True _ _ _ _ = True
+  storedFree acc False live e es ms =
+    storedLiveGo acc (valuePlaces e ++ xferLive live e) es ms
+
+  ||| `True` when a consume reads a place that holds an address captured by
+  ||| an earlier borrow, or a non-consume argument frees a place the running
+  ||| live set still holds. `live` is empty at the start of a call. Borrow
+  ||| arguments add `valuePlaces` (the address just captured, including a
+  ||| fresh `q = malloc()`) and any destination a nested store copied a
+  ||| captured address into. `f(g(r = p), r)` stays accepted: nothing before
+  ||| `g` captured `p`, so `r` is not live when it is consumed. Overwriting
+  ||| with `r = malloc()` drops `r`, so a later free of that name is the
+  ||| fresh cell. `f(r = p, malloc(s = r), g(s))` is rejected: after the
+  ||| malloc, `s` is still live and `g` frees it.
+  public export
+  storedLiveGo : List (String, List Consume) -> List Place -> List Expr ->
+                 List Consume -> Bool
+  storedLiveGo _ _ [] _ = False
+  storedLiveGo acc live (e :: es) [] =
+    storedOn acc (placesOverlap (readPlaces e) live) live e es []
+  storedLiveGo acc live (e :: es) (m :: ms) =
+    case doesConsume m of
+      False =>
+        storedFree acc (nestedGo acc live [e]) live e es ms
+      True =>
+        storedOn acc (placesOverlap (readPlaces e) live) live e es ms
+
+||| `storedLiveGo` from an empty capture set. `acc` is the callee summaries
+||| `argFrees` reads; a missing name is all-Never.
+public export
+storedBorrowConsume : List (String, List Consume) -> List Expr -> List Consume -> Bool
+storedBorrowConsume acc es ms = storedLiveGo acc [] es ms
+
 ||| True when the call aliases a borrow with a consume, including nested
-||| callees in later arguments and a pointer assignment used as a borrow.
+||| callees in later arguments, a pointer assignment used as a borrow,
+||| and a later consume of a destination copied from an earlier borrow
+||| (`f(p, g(r = p), r)`).
 public export
 aliasBad : Ctx -> List Expr -> String -> Bool
 aliasBad ctx args callee =
   mixedAlias args (funModes ctx callee)
     || nestedMixed ctx args (funModes ctx callee)
     || assignAlias args (funModes ctx callee)
+    || storedBorrowConsume ctx.summaries args (funModes ctx callee)
 
 ||| `f(p, malloc(r = p, g(r)))` with modes `[Never, Always]`. The outer
 ||| flags stay false: `g` frees `r`, not `p`, and a consume argument is
@@ -1074,6 +1166,176 @@ nullAssignNotAlias :
     ]
     "g" = False
 nullAssignNotAlias = Refl
+
+||| `f(p, g(r = p), r)`: an earlier borrow captured `p`, `g` copies it into
+||| `r`, and the last argument consumes `r`. The frame would hold that
+||| address twice.
+export
+storedBorrowConsumeCopy :
+  storedBorrowConsume []
+    [ EVar 0 1 "p"
+    , ECall 2 "g" [EAssign 3 4 "r" Ptr (EVar 5 1 "p")]
+    , EVar 6 4 "r"
+    ]
+    [Never, Never, Always] = True
+storedBorrowConsumeCopy = Refl
+
+export
+storedBorrowAlias :
+  aliasBad
+    (MkCtx [("f", [Never, Never, Always]), ("g", [Never])] ["f", "g"])
+    [ EVar 0 1 "p"
+    , ECall 2 "g" [EAssign 3 4 "r" Ptr (EVar 5 1 "p")]
+    , EVar 6 4 "r"
+    ]
+    "f" = True
+storedBorrowAlias = Refl
+
+||| The copy can sit in a consume-position argument. The frame still
+||| borrows `p` and then owns `r`.
+export
+storedBorrowConsumeMid :
+  storedBorrowConsume []
+    [ EVar 0 1 "p"
+    , ECall 2 "g" [EAssign 3 4 "r" Ptr (EVar 5 1 "p")]
+    , EVar 6 4 "r"
+    ]
+    [Never, Always, Always] = True
+storedBorrowConsumeMid = Refl
+
+||| `f(p, malloc(r = p), r)` is the same copy when `malloc` is borrowed.
+export
+storedBorrowMallocBorrow :
+  storedBorrowConsume []
+    [ EVar 0 1 "p"
+    , EMalloc 2 [EAssign 3 4 "r" Ptr (EVar 5 1 "p")]
+    , EVar 6 4 "r"
+    ]
+    [Never, Never, Always] = True
+storedBorrowMallocBorrow = Refl
+
+||| `f(q = p, g(r = q), r)`: the first borrow's destination holds `p`.
+export
+storedBorrowViaDest :
+  storedBorrowConsume []
+    [ EAssign 0 1 "q" Ptr (EVar 2 3 "p")
+    , ECall 4 "g" [EAssign 5 6 "r" Ptr (EVar 7 1 "q")]
+    , EVar 8 6 "r"
+    ]
+    [Never, Never, Always] = True
+storedBorrowViaDest = Refl
+
+||| `f(g(r = p), r)`: no earlier borrow captured `p`. The only frame copy
+||| of that address is the consume.
+export
+storedBorrowMoveDest :
+  storedBorrowConsume []
+    [ ECall 0 "g" [EAssign 1 2 "r" Ptr (EVar 3 4 "p")]
+    , EVar 5 2 "r"
+    ]
+    [Never, Always] = False
+storedBorrowMoveDest = Refl
+
+export
+storedBorrowMoveAlias :
+  aliasBad
+    (MkCtx [("f", [Never, Always]), ("g", [Never])] ["f", "g"])
+    [ ECall 0 "g" [EAssign 1 2 "r" Ptr (EVar 3 4 "p")]
+    , EVar 5 2 "r"
+    ]
+    "f" = False
+storedBorrowMoveAlias = Refl
+
+||| `f(malloc(r = p), r)`: `malloc` returns a fresh cell, not `p`.
+export
+storedBorrowMallocOnly :
+  storedBorrowConsume []
+    [ EMalloc 0 [EAssign 1 2 "r" Ptr (EVar 3 4 "p")]
+    , EVar 5 2 "r"
+    ]
+    [Never, Always] = False
+storedBorrowMallocOnly = Refl
+
+||| Nothing later consumes the copy.
+export
+storedBorrowNoConsume :
+  storedBorrowConsume []
+    [ EVar 0 1 "p"
+    , ECall 2 "g" [EAssign 3 4 "r" Ptr (EVar 5 1 "p")]
+    ]
+    [Never, Never] = False
+storedBorrowNoConsume = Refl
+
+||| `r = malloc()` overwrites the copy. A later consume of `r` is the
+||| fresh cell.
+export
+storedBorrowOverwrite :
+  storedBorrowConsume []
+    [ EVar 0 1 "p"
+    , ECall 2 "g" [EAssign 3 4 "r" Ptr (EVar 5 1 "p")]
+    , EAssign 6 4 "r" Ptr (EMalloc 7 [])
+    ]
+    [Never, Never, Always] = False
+storedBorrowOverwrite = Refl
+
+||| `p = NULL` drops `p` from the captured set.
+export
+storedBorrowNull :
+  storedBorrowConsume []
+    [ EVar 0 1 "p"
+    , EAssign 2 1 "p" Ptr (ENull 3)
+    ]
+    [Never, Never] = False
+storedBorrowNull = Refl
+
+||| `f(r = p, malloc(s = r), g(s))` with `f` at `[Never, Always, Never]`
+||| and `g` at `[Always]`. `s` receives the address held in `r`, and `g`
+||| frees `s` while the arguments are still being evaluated.
+export
+storedLiveFreesAlias :
+  aliasBad
+    (MkCtx [("f", [Never, Always, Never]), ("g", [Always])] ["f", "g"])
+    [ EAssign 1 4 "r" Ptr (EVar 2 1 "p")
+    , EMalloc 3 [EAssign 4 8 "s" Ptr (EVar 5 4 "r")]
+    , ECall 6 "g" [EVar 7 8 "s"]
+    ]
+    "f" = True
+storedLiveFreesAlias = Refl
+
+||| `f(r = p, r = malloc(), g(r))`. Both stores are consumes, so `r` is
+||| not a borrow place. `r = malloc()` overwrites `r` with a fresh cell
+||| and `xferLive` forgets the name before `g` frees it. `p`'s cell stays
+||| live. `borrowHeldFrees` is still true: `nestHeld` keeps the name `r`.
+export
+storedLiveOverwriteAlias :
+  aliasBad
+    (MkCtx [("f", [Always, Always, Never]), ("g", [Always])] ["f", "g"])
+    [ EAssign 1 4 "r" Ptr (EVar 2 1 "p")
+    , EAssign 3 4 "r" Ptr (EMalloc 5 [])
+    , ECall 6 "g" [EVar 7 4 "r"]
+    ]
+    "f" = False
+storedLiveOverwriteAlias = Refl
+
+||| The same overwrite, starting from the live set `r = p` captured.
+||| The consume drops `r` before the free.
+export
+storedLiveOverwriteForget :
+  storedLiveGo [("g", [Always])] [4, 1]
+    [ EAssign 3 4 "r" Ptr (EMalloc 5 [])
+    , ECall 6 "g" [EVar 7 4 "r"]
+    ]
+    [Always, Never] = False
+storedLiveOverwriteForget = Refl
+
+export
+storedLiveOverwriteHeld :
+  borrowHeldFrees [("g", [Always])]
+    [ EAssign 1 4 "r" Ptr (EVar 2 1 "p")
+    , EAssign 3 4 "r" Ptr (EMalloc 5 [])
+    , ECall 6 "g" [EVar 7 4 "r"]
+    ] = True
+storedLiveOverwriteHeld = Refl
 
 public export
 paramStatus : Consume -> Nat -> Status
@@ -1647,6 +1909,43 @@ export
 assignAliasNilModes : (es : List Expr) -> assignAlias es [] = False
 assignAliasNilModes es = rewrite aliasBorrowNil es in Refl
 
+placesOverlapNil : (ps : List Place) -> placesOverlap ps [] = False
+placesOverlapNil [] = Refl
+placesOverlapNil (_ :: ps) = placesOverlapNil ps
+
+mutual
+  xferEmpty : (e : Expr) -> xferLive [] e = []
+  xferEmpty (ELit _) = Refl
+  xferEmpty (ENull _) = Refl
+  xferEmpty (EVar _ _ _) = Refl
+  xferEmpty (EUnsupported _ _) = Refl
+  xferEmpty (EAssign _ _ _ Ptr rhs) =
+    rewrite xferEmpty rhs in
+      rewrite placesOverlapNil (readPlaces rhs) in
+        Refl
+  xferEmpty (EAssign _ _ _ Copy rhs) = xferEmpty rhs
+  xferEmpty (ECall _ _ args) = xferArgsEmpty args
+  xferEmpty (EMalloc _ args) = xferArgsEmpty args
+  xferEmpty (EUse _ args) = xferArgsEmpty args
+
+  xferArgsEmpty : (es : List Expr) -> xferArgs [] es = []
+  xferArgsEmpty [] = Refl
+  xferArgsEmpty (e :: es) =
+    rewrite xferEmpty e in xferArgsEmpty es
+
+storedLiveGoNil : (acc : List (String, List Consume)) -> (es : List Expr) ->
+  storedLiveGo acc [] es [] = False
+storedLiveGoNil _ [] = Refl
+storedLiveGoNil acc (e :: es) =
+  rewrite placesOverlapNil (readPlaces e) in
+    rewrite xferEmpty e in
+      storedLiveGoNil acc es
+
+export
+storedBorrowConsumeNil : (acc : List (String, List Consume)) -> (es : List Expr) ->
+  storedBorrowConsume acc es [] = False
+storedBorrowConsumeNil acc es = storedLiveGoNil acc es
+
 export
 aliasBadNilModes :
   {ctx : Ctx} -> {callee : String} -> {args : List Expr} ->
@@ -1656,7 +1955,8 @@ aliasBadNilModes {ctx} {callee} {args} prf =
   rewrite prf in
     rewrite mixedAliasNilModes args in
       rewrite nestedMixedNilModes ctx args in
-        rewrite assignAliasNilModes args in Refl
+        rewrite assignAliasNilModes args in
+          rewrite storedBorrowConsumeNil ctx.summaries args in Refl
 
 trueNotFalseC : Not (True = False)
 trueNotFalseC Refl impossible
@@ -1667,6 +1967,82 @@ orFalseC True _ prf = void (trueNotFalseC prf)
 
 orFalseIntro : {x, y : Bool} -> x = False -> y = False -> x || y = False
 orFalseIntro Refl Refl = Refl
+
+||| A borrow head with `storedLiveGo` false leaves the tail quiet for the
+||| places captured so far, including this head. The head did not free a
+||| place the running live set still holds.
+export
+storedLiveBorrow :
+  {acc : List (String, List Consume)} ->
+  {live : List Place} -> {e : Expr} -> {es : List Expr} ->
+  {m : Consume} -> {ms : List Consume} ->
+  doesConsume m = False ->
+  storedLiveGo acc live (e :: es) (m :: ms) = False ->
+  storedLiveGo acc (valuePlaces e ++ xferLive live e) es ms = False
+storedLiveBorrow {m = Never} {acc} {live} {e} {es} {ms} _ prf =
+  freeGo (nestedGo acc live [e]) Refl prf
+  where
+    freeGo : (b : Bool) -> nestedGo acc live [e] = b ->
+             storedFree acc b live e es ms = False ->
+             storedLiveGo acc (valuePlaces e ++ xferLive live e) es ms = False
+    freeGo False _ pr0 = pr0
+    freeGo True _ pr0 = void (trueNotFalseC pr0)
+storedLiveBorrow {m = May} pc _ = void (trueNotFalseC pc)
+storedLiveBorrow {m = Always} pc _ = void (trueNotFalseC pc)
+
+||| `storedLiveBorrow` from an empty capture set.
+export
+storedLiveBorrowTail :
+  {acc : List (String, List Consume)} ->
+  {e : Expr} -> {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+  doesConsume m = False ->
+  storedBorrowConsume acc (e :: es) (m :: ms) = False ->
+  storedLiveGo acc (valuePlaces e ++ xferLive [] e) es ms = False
+storedLiveBorrowTail pc prf = storedLiveBorrow {live = []} pc prf
+
+||| A consume head that is not itself a captured read leaves the tail
+||| quiet after that head's stores.
+export
+storedLiveConsume :
+  {acc : List (String, List Consume)} ->
+  {live : List Place} -> {e : Expr} -> {es : List Expr} ->
+  {m : Consume} -> {ms : List Consume} ->
+  doesConsume m = True ->
+  storedLiveGo acc live (e :: es) (m :: ms) = False ->
+  storedLiveGo acc (xferLive live e) es ms = False
+storedLiveConsume {m = Never} pc _ = void (trueNotFalseC (sym pc))
+storedLiveConsume {m = May} {acc} {live} {e} {es} {ms} _ prf =
+  go (placesOverlap (readPlaces e) live) Refl prf
+  where
+    go : (b : Bool) -> placesOverlap (readPlaces e) live = b ->
+         storedOn acc b live e es ms = False ->
+         storedLiveGo acc (xferLive live e) es ms = False
+    go False _ pr0 = pr0
+    go True _ pr0 = void (trueNotFalseC pr0)
+storedLiveConsume {m = Always} {acc} {live} {e} {es} {ms} _ prf =
+  go (placesOverlap (readPlaces e) live) Refl prf
+  where
+    go : (b : Bool) -> placesOverlap (readPlaces e) live = b ->
+         storedOn acc b live e es ms = False ->
+         storedLiveGo acc (xferLive live e) es ms = False
+    go False _ pr0 = pr0
+    go True _ pr0 = void (trueNotFalseC pr0)
+
+||| Empty modes are consumes. The same split as `storedLiveConsume`.
+export
+storedLiveExtra :
+  {acc : List (String, List Consume)} ->
+  {live : List Place} -> {e : Expr} -> {es : List Expr} ->
+  storedLiveGo acc live (e :: es) [] = False ->
+  storedLiveGo acc (xferLive live e) es [] = False
+storedLiveExtra {acc} {live} {e} {es} prf =
+  go (placesOverlap (readPlaces e) live) Refl prf
+  where
+    go : (b : Bool) -> placesOverlap (readPlaces e) live = b ->
+         storedOn acc b live e es [] = False ->
+         storedLiveGo acc (xferLive live e) es [] = False
+    go False _ pr0 = pr0
+    go True _ pr0 = void (trueNotFalseC pr0)
 
 placeInAppendR : {p : Place} -> {xs, ys : List Place} ->
   placeIn p (xs ++ ys) = False -> placeIn p ys = False
@@ -1777,6 +2153,32 @@ argsHitTail : {acc : List (String, List Consume)} -> {p : Place} ->
   {e : Expr} -> {es : List Expr} ->
   argsHit acc p (e :: es) = False -> argsHit acc p es = False
 argsHitTail prf = snd (orFalseC _ _ prf)
+
+||| `nestedGo` does not reduce outside Checker.
+export
+nestedGoHead :
+  {acc : List (String, List Consume)} -> {p : Place} -> {ps : List Place} ->
+  {es : List Expr} ->
+  nestedGo acc (p :: ps) es = False -> argsHit acc p es = False
+nestedGoHead prf = fst (orFalseC _ _ prf)
+
+export
+nestedGoTail :
+  {acc : List (String, List Consume)} -> {p : Place} -> {ps : List Place} ->
+  {es : List Expr} ->
+  nestedGo acc (p :: ps) es = False -> nestedGo acc ps es = False
+nestedGoTail prf = snd (orFalseC _ _ prf)
+
+||| Drop one argument from every protected place.
+export
+nestedGoExprTail :
+  {acc : List (String, List Consume)} -> {ps : List Place} ->
+  {e : Expr} -> {es : List Expr} ->
+  nestedGo acc ps (e :: es) = False -> nestedGo acc ps es = False
+nestedGoExprTail {ps = []} _ = Refl
+nestedGoExprTail {ps = _ :: ps} prf =
+  let (hd, tl) = orFalseC _ _ prf
+  in orFalseIntro (argsHitTail hd) (nestedGoExprTail {ps} tl)
 
 ||| `argsHit` does not reduce outside Checker. The head `argFrees` is the
 ||| other half of `argsHitTail`.
@@ -3518,3 +3920,856 @@ consumePlacesExtraVar (EMalloc _ _) _ _ prf = void (nothingNotJustChk prf)
 consumePlacesExtraVar (ECall _ _ _) _ _ prf = void (nothingNotJustChk prf)
 consumePlacesExtraVar (EUse _ _) _ _ prf = void (nothingNotJustChk prf)
 consumePlacesExtraVar (EUnsupported _ _) _ _ prf = void (nothingNotJustChk prf)
+
+||| `ms` has a mode for every argument. The empty tail, where
+||| `consumeHead` and `sumHead` disagree, is `False`.
+public export
+modesCover : List Consume -> List a -> Bool
+modesCover _ [] = True
+modesCover [] (_ :: _) = False
+modesCover (_ :: ms) (_ :: es) = modesCover ms es
+
+||| Every place of `xs` occurs in `ys`.
+placeSub : List Place -> List Place -> Bool
+placeSub [] _ = True
+placeSub (p :: ps) ys = placeIn p ys && placeSub ps ys
+
+andTrueC : (x, y : Bool) -> x && y = True -> (x = True, y = True)
+andTrueC True True Refl = (Refl, Refl)
+andTrueC False _ prf = void (trueNotFalseC (sym prf))
+andTrueC True False prf = void (trueNotFalseC (sym prf))
+
+andIntro : {x, y : Bool} -> x = True -> y = True -> x && y = True
+andIntro Refl Refl = Refl
+
+orTrueLeft : (y : Bool) -> True || y = True
+orTrueLeft _ = Refl
+
+orFalseRightEq : {x : Bool} -> x || False = False -> x = False
+orFalseRightEq {x = True} prf = void (trueNotFalseC prf)
+orFalseRightEq {x = False} prf = Refl
+
+appendAssoc : (xs, ys, zs : List a) -> (xs ++ ys) ++ zs = xs ++ (ys ++ zs)
+appendAssoc [] _ _ = Refl
+appendAssoc (x :: xs) ys zs = cong (x ::) (appendAssoc xs ys zs)
+
+placeInHere : (p : Place) -> (ps : List Place) -> placeIn p (p :: ps) = True
+placeInHere p ps = rewrite eqNatRefl p in Refl
+
+placeInTail : {p, q : Place} -> {qs : List Place} ->
+              placeIn p qs = True -> placeIn p (q :: qs) = True
+placeInTail pin = rewrite pin in orTrueRight (p == q)
+
+placeInAppendL : {p : Place} -> {xs, ys : List Place} ->
+                 placeIn p xs = True -> placeIn p (xs ++ ys) = True
+placeInAppendL {xs = []} pin = void (trueNotFalseC (sym pin))
+placeInAppendL {p} {xs = q :: qs} {ys} pin = appGo (p == q) Refl pin
+  where
+    appGo : (b : Bool) -> p == q = b -> placeIn p (q :: qs) = True ->
+            placeIn p ((q :: qs) ++ ys) = True
+    appGo True pq _ = rewrite sym (eqNatTrue p q pq) in placeInHere p (qs ++ ys)
+    appGo False pq pin =
+      let pinq = replace {p = \b => (b || Delay (placeIn p qs)) = True} pq pin
+      in placeInTail (placeInAppendL {p} {xs = qs} {ys} pinq)
+
+placeInJoinR : {p : Place} -> {xs, ys : List Place} ->
+               placeIn p ys = True -> placeIn p (xs ++ ys) = True
+placeInJoinR {xs = []} prf = prf
+placeInJoinR {p} {xs = q :: qs} {ys} prf =
+  placeInTail {p} {q} {qs = qs ++ ys} (placeInJoinR {p} {xs = qs} {ys} prf)
+
+inAppend : {p : Place} -> {xs, ys : List Place} ->
+           placeIn p (xs ++ ys) = True ->
+           Either (placeIn p xs = True) (placeIn p ys = True)
+inAppend {xs = []} pin = Right pin
+inAppend {xs = q :: qs} pin = appGo (p == q) Refl pin
+  where
+    appGo : (b : Bool) -> p == q = b -> placeIn p ((q :: qs) ++ ys) = True ->
+            Either (placeIn p (q :: qs) = True) (placeIn p ys = True)
+    appGo True pq _ = Left (rewrite sym (eqNatTrue p q pq) in placeInHere p qs)
+    appGo False pq pin =
+      let pinq = replace {p = \b => (b || Delay (placeIn p (qs ++ ys))) = True} pq pin
+      in case inAppend {xs = qs} pinq of
+           Left rest => Left (placeInTail rest)
+           Right rest => Right rest
+
+subIn : {p : Place} -> {xs, ys : List Place} ->
+        placeSub xs ys = True -> placeIn p xs = True -> placeIn p ys = True
+subIn {xs = []} _ pin = void (trueNotFalseC (sym pin))
+subIn {xs = q :: qs} psub pin = subGo (p == q) Refl psub pin
+  where
+    subGo : (b : Bool) -> p == q = b -> placeSub (q :: qs) ys = True ->
+            placeIn p (q :: qs) = True -> placeIn p ys = True
+    subGo True pq psub _ =
+      let (hd, _) = andTrueC _ _ psub
+      in replace {p = \n => placeIn n ys = True} (sym (eqNatTrue p q pq)) hd
+    subGo False pq psub pin =
+      let (_, tl) = andTrueC _ _ psub
+          pinq = replace {p = \b => (b || Delay (placeIn p qs)) = True} pq pin
+      in subIn tl pinq
+
+subFrom : {xs, ys : List Place} ->
+          ((p : Place) -> placeIn p xs = True -> placeIn p ys = True) ->
+          placeSub xs ys = True
+subFrom {xs = []} _ = Refl
+subFrom {xs = q :: qs} f =
+  andIntro (f q (placeInHere q qs))
+           (subFrom (\p, pin => f p (placeInTail pin)))
+
+subTail : {p : Place} -> {ps, ys : List Place} ->
+          placeSub (p :: ps) ys = True -> placeSub ps ys = True
+subTail prf = snd (andTrueC _ _ prf)
+
+subAppend : {xs, ys, zs : List Place} ->
+            placeSub (xs ++ ys) zs = True ->
+            (placeSub xs zs = True, placeSub ys zs = True)
+subAppend {xs = []} prf = (Refl, prf)
+subAppend {xs = p :: ps} prf =
+  let (hd, tl) = andTrueC _ _ prf
+      (psSub, ysSub) = subAppend {xs = ps} tl
+  in (andIntro hd psSub, ysSub)
+
+subJoinL : {xs, ys : List Place} -> placeSub xs (xs ++ ys) = True
+subJoinL = subFrom (\p, pin => placeInAppendL pin)
+
+subJoinR : {xs, ys : List Place} -> placeSub ys (xs ++ ys) = True
+subJoinR = subFrom (\p, pin => placeInJoinR pin)
+
+shiftIn : {p : Place} -> {xs, ys, zs : List Place} ->
+          placeIn p (ys ++ zs) = True ->
+          placeIn p ((xs ++ ys) ++ zs) = True
+shiftIn {xs} {ys} {zs} pin =
+  rewrite appendAssoc xs ys zs in placeInJoinR {xs} pin
+
+||| A place read by `e` is a place `movedInExpr` sees.
+readPlaceMoved : {p : Place} -> {e : Expr} ->
+                 placeIn p (readPlaces e) = True -> movedInExpr p e = True
+readPlaceMoved {e = EVar id q nm} pin = varGo (p == q) Refl pin
+  where
+    varGo : (b : Bool) -> p == q = b ->
+            placeIn p [q] = True -> movedInExpr p (EVar id q nm) = True
+    varGo True pq _ = pq
+    varGo False pq pin0 =
+      let pinq = replace {p = \b => (b || Delay (placeIn p [])) = True} pq pin0
+      in void (trueNotFalseC (sym pinq))
+readPlaceMoved {e = EAssign _ _ _ _ rhs} pin = readPlaceMoved {e = rhs} pin
+readPlaceMoved {e = ELit _} pin = void (trueNotFalseC (sym pin))
+readPlaceMoved {e = ENull _} pin = void (trueNotFalseC (sym pin))
+readPlaceMoved {e = EMalloc _ _} pin = void (trueNotFalseC (sym pin))
+readPlaceMoved {e = ECall _ _ _} pin = void (trueNotFalseC (sym pin))
+readPlaceMoved {e = EUse _ _} pin = void (trueNotFalseC (sym pin))
+readPlaceMoved {e = EUnsupported _ _} pin = void (trueNotFalseC (sym pin))
+
+||| A nonempty read is a variable, so the value can be a live pointer.
+readHasLive : {e : Expr} -> {qs : List Place} ->
+              placesOverlap (readPlaces e) qs = True -> maybeLivePtr e = True
+readHasLive {e = EVar _ _ _} _ = Refl
+readHasLive {e = EAssign _ _ _ _ rhs} prf = readHasLive {e = rhs} prf
+readHasLive {e = ELit _} prf = void (trueNotFalseC (sym prf))
+readHasLive {e = ENull _} prf = void (trueNotFalseC (sym prf))
+readHasLive {e = EMalloc _ _} prf = void (trueNotFalseC (sym prf))
+readHasLive {e = ECall _ _ _} prf = void (trueNotFalseC (sym prf))
+readHasLive {e = EUse _ _} prf = void (trueNotFalseC (sym prf))
+readHasLive {e = EUnsupported _ _} prf = void (trueNotFalseC (sym prf))
+
+forgetCons : {d, q : Place} -> {qs : List Place} ->
+             (b : Bool) -> d == q = b ->
+             forgetPlace d (q :: qs) =
+               if b then forgetPlace d qs else q :: forgetPlace d qs
+forgetCons True eq = rewrite eq in Refl
+forgetCons False eq = rewrite eq in Refl
+
+forgetMiss : {p, d : Place} -> {xs : List Place} ->
+             placeIn p (forgetPlace d xs) = True -> placeIn p xs = True
+forgetMiss {xs = []} pin = void (trueNotFalseC (sym pin))
+forgetMiss {p} {d} {xs = q :: qs} pin = missGo (d == q) Refl pin
+  where
+    missGo : (b : Bool) -> d == q = b ->
+             placeIn p (forgetPlace d (q :: qs)) = True -> placeIn p (q :: qs) = True
+    missGo True eq pin =
+      placeInTail
+        (forgetMiss {p} {d} {xs = qs}
+          (replace {p = \xs => placeIn p xs = True} (forgetCons True eq) pin))
+    missGo False eq pin =
+      keepGo (p == q) Refl
+        (replace {p = \xs => placeIn p xs = True} (forgetCons False eq) pin)
+      where
+        keepGo : (c : Bool) -> p == q = c ->
+                 placeIn p (q :: forgetPlace d qs) = True ->
+                 placeIn p (q :: qs) = True
+        keepGo True pq _ = rewrite sym (eqNatTrue p q pq) in placeInHere p qs
+        keepGo False pq pin =
+          let pinq = replace {p = \b => (b || Delay (placeIn p (forgetPlace d qs))) = True} pq pin
+          in placeInTail (forgetMiss {p} {d} {xs = qs} pinq)
+
+forgetNotDest : {d : Place} -> {xs : List Place} ->
+                placeIn d (forgetPlace d xs) = False
+forgetNotDest {xs = []} = Refl
+forgetNotDest {xs = q :: qs} = notGo (d == q) Refl
+  where
+    notGo : (b : Bool) -> d == q = b ->
+            placeIn d (forgetPlace d (q :: qs)) = False
+    notGo True eq = rewrite eq in forgetNotDest {xs = qs}
+    notGo False eq =
+      rewrite eq in orFalseIntro eq (forgetNotDest {xs = qs})
+
+forgetKeep : {p, d : Place} -> {xs : List Place} ->
+             p == d = False -> placeIn p xs = True ->
+             placeIn p (forgetPlace d xs) = True
+forgetKeep {xs = []} _ pin = void (trueNotFalseC (sym pin))
+forgetKeep {p} {d} {xs = q :: qs} pd pin =
+  keepGo (d == q) Refl (p == q) Refl pd pin
+  where
+    keepGo : (bd : Bool) -> d == q = bd -> (bp : Bool) -> p == q = bp ->
+             p == d = False -> placeIn p (q :: qs) = True ->
+             placeIn p (forgetPlace d (q :: qs)) = True
+    keepGo True ed True ep pd _ =
+      void (eqNatFalse p d pd (trans (eqNatTrue p q ep) (sym (eqNatTrue d q ed))))
+    keepGo True ed False ep pd pin =
+      let pinq = replace {p = \b => (b || Delay (placeIn p qs)) = True} ep pin
+      in rewrite ed in forgetKeep {p} {d} {xs = qs} pd pinq
+    keepGo False ed True ep _ _ =
+      rewrite ed in rewrite sym (eqNatTrue p q ep) in placeInHere p (forgetPlace d qs)
+    keepGo False ed False ep pd pin =
+      let pinq = replace {p = \b => (b || Delay (placeIn p qs)) = True} ep pin
+      in rewrite ed in placeInTail (forgetKeep {p} {d} {xs = qs} pd pinq)
+
+||| Places a covering consume actually moves. An empty mode tail is
+||| `False`: `consumeInArgs` does not see it (`sumHead []` is `Never`).
+movedConsume : Place -> List Expr -> List Consume -> Bool
+movedConsume _ [] _ = False
+movedConsume _ (_ :: _) [] = False
+movedConsume p (e :: es) (m :: ms) =
+  (doesConsume m && movedInExpr p e) || movedConsume p es ms
+
+consumeQuiet : List Place -> List Expr -> List Consume -> Bool
+consumeQuiet [] _ _ = False
+consumeQuiet (p :: ps) es ms = movedConsume p es ms || consumeQuiet ps es ms
+
+movedFromGo : {p : Place} -> {es : List Expr} -> {ms : List Consume} ->
+              consumeInArgsGo p es ms = Never -> movedConsume p es ms = False
+movedFromGo {es = []} _ = Refl
+movedFromGo {es = _ :: _} {ms = []} _ = Refl
+movedFromGo {es = e :: es} {ms = Never :: ms} prf = movedFromGo prf
+movedFromGo {es = e :: es} {ms = May :: ms} prf = mayGo (movedInExpr p e) Refl prf
+  where
+    mayGo : (b : Bool) -> movedInExpr p e = b ->
+            consumeInArgsGo p (e :: es) (May :: ms) = Never ->
+            movedConsume p (e :: es) (May :: ms) = False
+    mayGo False pb eq =
+      rewrite pb in movedFromGo (replace {p = \c => c = Never} (consumeMaySkip pb) eq)
+    mayGo True pb eq =
+      void (trueNotFalseC (cong doesConsume (trans (sym (consumeMayHit pb)) eq)))
+movedFromGo {es = e :: es} {ms = Always :: ms} prf =
+  alwaysGo (movedInExpr p e) Refl prf
+  where
+    alwaysGo : (b : Bool) -> movedInExpr p e = b ->
+               consumeInArgsGo p (e :: es) (Always :: ms) = Never ->
+               movedConsume p (e :: es) (Always :: ms) = False
+    alwaysGo False pb eq =
+      rewrite pb in
+        movedFromGo (replace {p = \c => c = Never} (consumeAlwaysSkip pb) eq)
+    alwaysGo True pb eq =
+      void (trueNotFalseC (cong doesConsume (trans (sym (consumeAlwaysHit pb)) eq)))
+
+movedFromCall : {acc : List (String, List Consume)} -> {p : Place} ->
+                {id : Nat} -> {callee : String} -> {es : List Expr} ->
+                {ms : List Consume} ->
+                argFrees acc p (ECall id callee es) = False ->
+                calleeModes acc callee = ms ->
+                movedConsume p es ms = False
+movedFromCall {acc} {p} {id} {callee} {es} {ms} prf modes =
+  let (held, _) = argFreesCallSplit {acc} {p} {id} {callee} {args = es} prf
+  in movedFromGo {p} {es} {ms}
+       (replace {p = \c => consumeInArgsGo p es c = Never} modes
+          (doesConsumeNeverOnly held))
+
+quietMoves : {acc : List (String, List Consume)} -> {ps : List Place} ->
+             {id : Nat} -> {callee : String} -> {es : List Expr} ->
+             {ms : List Consume} ->
+             nestedGo acc ps [ECall id callee es] = False ->
+             calleeModes acc callee = ms ->
+             consumeQuiet ps es ms = False
+quietMoves {ps = []} _ _ = Refl
+quietMoves {acc} {id} {callee} {es} {ms} {ps = p :: ps} prf modes =
+  let (hd, tl) = orFalseC _ _ prf
+      one = orFalseRightEq hd
+  in orFalseIntro (movedFromCall {acc} {p} {id} {callee} {es} {ms} one modes)
+       (quietMoves {acc} {id} {callee} {es} {ms} {ps} tl modes)
+
+callOne : {acc : List (String, List Consume)} -> {p : Place} ->
+          {id : Nat} -> {callee : String} -> {es : List Expr} ->
+          argsHit acc p [ECall id callee es] = False ->
+          argsHit acc p es = False
+callOne {acc} {p} {id} {callee} {es} prf =
+  let freed = orFalseRightEq prf
+      (_, rest) = argFreesCallSplit {acc} {p} {id} {callee} {args = es} freed
+  in replace {p = \b => b = False} (argsFreeIsHit acc p es) rest
+
+callArgsQuiet : {acc : List (String, List Consume)} -> {ps : List Place} ->
+                {id : Nat} -> {callee : String} -> {es : List Expr} ->
+                nestedGo acc ps [ECall id callee es] = False ->
+                nestedGo acc ps es = False
+callArgsQuiet {ps = []} _ = Refl
+callArgsQuiet {acc} {id} {callee} {es} {ps = p :: ps} prf =
+  let (hd, tl) = orFalseC _ _ prf
+  in orFalseIntro (callOne {acc} {p} {id} {callee} {es} hd)
+       (callArgsQuiet {acc} {id} {callee} {es} {ps} tl)
+
+nestedGoAppendQuiet : {acc : List (String, List Consume)} ->
+                      {xs, ys : List Place} -> {es : List Expr} ->
+                      nestedGo acc xs es = False ->
+                      nestedGo acc ys es = False ->
+                      nestedGo acc (xs ++ ys) es = False
+nestedGoAppendQuiet {xs = []} _ pry = pry
+nestedGoAppendQuiet {xs = _ :: qs} prx pry =
+  let (hd, tl) = orFalseC _ _ prx
+  in orFalseIntro hd (nestedGoAppendQuiet {xs = qs} tl pry)
+
+consumeInQuiet : {p : Place} -> {ps : List Place} ->
+                 {es : List Expr} -> {ms : List Consume} ->
+                 placeIn p ps = True ->
+                 consumeQuiet ps es ms = False ->
+                 movedConsume p es ms = False
+consumeInQuiet {ps = []} pin _ = void (trueNotFalseC (sym pin))
+consumeInQuiet {ps = q :: qs} pin prf = qGo (p == q) Refl pin prf
+  where
+    qGo : (b : Bool) -> p == q = b ->
+          placeIn p (q :: qs) = True ->
+          consumeQuiet (q :: qs) es ms = False ->
+          movedConsume p es ms = False
+    qGo True pq _ prf0 =
+      replace {p = \n => movedConsume n es ms = False}
+        (sym (eqNatTrue p q pq)) (fst (orFalseC _ _ prf0))
+    qGo False pq pin0 prf0 =
+      consumeInQuiet {ps = qs}
+        (replace {p = \b => (b || Delay (placeIn p qs)) = True} pq pin0)
+        (snd (orFalseC _ _ prf0))
+
+peelMoved : {p : Place} -> {e : Expr} -> {es : List Expr} ->
+            {m : Consume} -> {ms : List Consume} ->
+            movedConsume p (e :: es) (m :: ms) = False ->
+            movedConsume p es ms = False
+peelMoved prf = snd (orFalseC _ _ prf)
+
+peelQuiet : {ps : List Place} -> {e : Expr} -> {es : List Expr} ->
+            {m : Consume} -> {ms : List Consume} ->
+            consumeQuiet ps (e :: es) (m :: ms) = False ->
+            consumeQuiet ps es ms = False
+peelQuiet {ps = []} _ = Refl
+peelQuiet {ps = _ :: qs} prf =
+  let (hd, tl) = orFalseC _ _ prf
+  in orFalseIntro (peelMoved hd) (peelQuiet {ps = qs} tl)
+
+movedHead : {p : Place} -> {e : Expr} -> {es : List Expr} ->
+            {m : Consume} -> {ms : List Consume} ->
+            doesConsume m = True -> movedInExpr p e = True ->
+            movedConsume p (e :: es) (m :: ms) = True
+movedHead pc pm = rewrite pc in rewrite pm in Refl
+
+overlapTail : {q : Place} -> {qs, ys : List Place} ->
+              placesOverlap qs ys = True -> placesOverlap (q :: qs) ys = True
+overlapTail prf = rewrite prf in orTrueRight (placeIn q ys)
+
+overlapBuild : {p : Place} -> {xs, ys : List Place} ->
+               placeIn p xs = True -> placeIn p ys = True ->
+               placesOverlap xs ys = True
+overlapBuild {xs = []} pin _ = void (trueNotFalseC (sym pin))
+overlapBuild {p} {xs = q :: qs} {ys} pin iny = ovGo (p == q) Refl pin
+  where
+    ovGo : (b : Bool) -> p == q = b -> placeIn p (q :: qs) = True ->
+           placesOverlap (q :: qs) ys = True
+    ovGo True pq _ =
+      rewrite sym (eqNatTrue p q pq) in rewrite iny in orTrueLeft (placesOverlap qs ys)
+    ovGo False pq pin =
+      let pinq = replace {p = \b => (b || Delay (placeIn p qs)) = True} pq pin
+      in overlapTail (overlapBuild {p} {xs = qs} {ys} pinq iny)
+
+hitTail : {acc : List (String, List Consume)} ->
+         {q : Place} -> {qs : List Place} -> {e : Expr} ->
+         nestedGo acc qs [e] = True -> nestedGo acc (q :: qs) [e] = True
+hitTail prf = rewrite prf in orTrueRight (argsHit acc q [e])
+
+hitOne : {acc : List (String, List Consume)} -> {p : Place} ->
+         {xs : List Place} -> {e : Expr} ->
+         placeIn p xs = True -> argFrees acc p e = True ->
+         nestedGo acc xs [e] = True
+hitOne {xs = []} pin _ = void (trueNotFalseC (sym pin))
+hitOne {acc} {p} {xs = q :: qs} {e} pin fr = hitGo (p == q) Refl pin
+  where
+    hitGo : (b : Bool) -> p == q = b -> placeIn p (q :: qs) = True ->
+            nestedGo acc (q :: qs) [e] = True
+    hitGo True pq _ =
+      rewrite sym (eqNatTrue p q pq) in rewrite fr in orTrueLeft (nestedGo acc qs [e])
+    hitGo False pq pin =
+      let pinq = replace {p = \b => (b || Delay (placeIn p qs)) = True} pq pin
+      in hitTail (hitOne {acc} {p} {xs = qs} {e} pinq fr)
+
+nestSkip : {acc : List (String, List Consume)} -> {p : Place} ->
+           {ps : List Place} -> {e : Expr} ->
+           argFrees acc p e = False ->
+           nestedGo acc (p :: ps) [e] = nestedGo acc ps [e]
+nestSkip af = rewrite af in Refl
+
+nestSkipTrue : {acc : List (String, List Consume)} ->
+               {p : Place} -> {ps : List Place} -> {e : Expr} ->
+               argFrees acc p e = False ->
+               nestedGo acc (p :: ps) [e] = True ->
+               nestedGo acc ps [e] = True
+nestSkipTrue af pr = replace {p = \b => b = True} (nestSkip af) pr
+
+storedHeadFree : {acc : List (String, List Consume)} ->
+                 {live : List Place} -> {e : Expr} -> {es : List Expr} ->
+                 {ms : List Consume} ->
+                 storedLiveGo acc live (e :: es) (Never :: ms) = False ->
+                 nestedGo acc live [e] = False
+storedHeadFree prf = go (nestedGo acc live [e]) Refl prf
+  where
+    go : (b : Bool) -> nestedGo acc live [e] = b ->
+         storedFree acc b live e es ms = False ->
+         nestedGo acc live [e] = False
+    go False eq _ = eq
+    go True _ pr0 = void (trueNotFalseC pr0)
+
+storedHeadOverlap : {acc : List (String, List Consume)} ->
+                    {live : List Place} -> {e : Expr} -> {es : List Expr} ->
+                    {m : Consume} -> {ms : List Consume} ->
+                    doesConsume m = True ->
+                    storedLiveGo acc live (e :: es) (m :: ms) = False ->
+                    placesOverlap (readPlaces e) live = False
+storedHeadOverlap {m = Never} pc _ = void (trueNotFalseC (sym pc))
+storedHeadOverlap {m = May} {acc} {live} {e} {es} {ms} _ prf =
+  go (placesOverlap (readPlaces e) live) Refl prf
+  where
+    go : (b : Bool) -> placesOverlap (readPlaces e) live = b ->
+         storedOn acc b live e es ms = False ->
+         placesOverlap (readPlaces e) live = False
+    go False eq _ = eq
+    go True _ pr0 = void (trueNotFalseC pr0)
+storedHeadOverlap {m = Always} {acc} {live} {e} {es} {ms} _ prf =
+  go (placesOverlap (readPlaces e) live) Refl prf
+  where
+    go : (b : Bool) -> placesOverlap (readPlaces e) live = b ->
+         storedOn acc b live e es ms = False ->
+         placesOverlap (readPlaces e) live = False
+    go False eq _ = eq
+    go True _ pr0 = void (trueNotFalseC pr0)
+
+||| Unfold one pointer-store. `rewrite` on `Refl` would rewrite both
+||| sides, so the right-hand side is the reduced `if`.
+nestStoredPtr : {id : Nat} -> {d : Place} -> {nm : String} -> {rhs : Expr} ->
+                (b : Bool) -> maybeLivePtr rhs = b ->
+                nestStored (EAssign id d nm Ptr rhs) =
+                  if b then d :: nestStored rhs else nestStored rhs
+nestStoredPtr True eq = rewrite eq in Refl
+nestStoredPtr False eq = rewrite eq in Refl
+
+rhsStored : {id : Nat} -> {d : Place} -> {nm : String} -> {rhs : Expr} ->
+            {prot : List Place} ->
+            placeSub (nestStored (EAssign id d nm Ptr rhs)) prot = True ->
+            placeSub (nestStored rhs) prot = True
+rhsStored {id} {d} {nm} {rhs} {prot} sub = liveGo (maybeLivePtr rhs) Refl sub
+  where
+    liveGo : (b : Bool) -> maybeLivePtr rhs = b ->
+             placeSub (nestStored (EAssign id d nm Ptr rhs)) prot = True ->
+             placeSub (nestStored rhs) prot = True
+    liveGo True eq sub0 =
+      snd (andTrueC _ _
+            (replace {p = \xs => placeSub xs prot = True} (nestStoredPtr True eq) sub0))
+    liveGo False eq sub0 =
+      replace {p = \xs => placeSub xs prot = True} (nestStoredPtr False eq) sub0
+
+||| `p` is not the destination, so it survives `placeAfter` on either flag.
+placeAfterIn : {p, d : Place} -> {xs, prot : List Place} ->
+               (b : Bool) -> p == d = False ->
+               placeIn p (xs ++ prot) = True ->
+               placeIn p (placeAfter d xs b ++ prot) = True
+placeAfterIn True _ pin = placeInTail pin
+placeAfterIn False neq pin =
+  case inAppend pin of
+    Left in0 => placeInAppendL (forgetKeep neq in0)
+    Right inP => placeInJoinR inP
+
+mutual
+  xferIn : {p : Place} -> {live0, live1, prot : List Place} -> {e : Expr} ->
+           placeIn p (xferLive live1 e) = True ->
+           placeSub live1 (live0 ++ prot) = True ->
+           placeSub (nestStored e) prot = True ->
+           placeIn p (xferLive live0 e ++ prot) = True
+  xferIn {e = EVar _ _ _} pin sub _ = subIn sub pin
+  xferIn {e = ELit _} pin sub _ = subIn sub pin
+  xferIn {e = ENull _} pin sub _ = subIn sub pin
+  xferIn {e = EUnsupported _ _} pin sub _ = subIn sub pin
+  xferIn {e = EAssign _ _ _ Copy rhs} pin sub ns = xferIn {e = rhs} pin sub ns
+  xferIn {e = EAssign id d nm Ptr rhs} pin sub ns =
+    flagGo (placesOverlap (readPlaces rhs) (xferLive live1 rhs)) Refl pin
+    where
+      flagGo : (b : Bool) ->
+               placesOverlap (readPlaces rhs) (xferLive live1 rhs) = b ->
+               placeIn p (placeAfter d (xferLive live1 rhs) b) = True ->
+               placeIn p (xferLive live0 (EAssign id d nm Ptr rhs) ++ prot) = True
+      flagGo True eq pin0 = onDest (p == d) Refl eq pin0
+        where
+          onDest : (c : Bool) -> p == d = c ->
+                   placesOverlap (readPlaces rhs) (xferLive live1 rhs) = True ->
+                   placeIn p (d :: xferLive live1 rhs) = True ->
+                   placeIn p (xferLive live0 (EAssign id d nm Ptr rhs) ++ prot) = True
+          onDest True pd eq _ =
+            let live = readHasLive {e = rhs} eq
+                (hd, _) = andTrueC _ _ (rhsHere live ns)
+            in placeInJoinR {xs = xferLive live0 (EAssign id d nm Ptr rhs)}
+                 (replace {p = \n => placeIn n prot = True} (sym (eqNatTrue p d pd)) hd)
+            where
+              rhsHere : maybeLivePtr rhs = True ->
+                        placeSub (nestStored (EAssign id d nm Ptr rhs)) prot = True ->
+                        placeSub (d :: nestStored rhs) prot = True
+              rhsHere lv sub0 =
+                replace {p = \xs => placeSub xs prot = True}
+                  (nestStoredPtr {id} {d} {nm} {rhs} True lv) sub0
+          onDest False pd eq pin1 =
+            let pinq = replace {p = \b => (b || Delay (placeIn p (xferLive live1 rhs))) = True} pd pin1
+                inRhs = xferIn {e = rhs} pinq sub (rhsStored ns)
+            in placeAfterIn
+                 (placesOverlap (readPlaces rhs) (xferLive live0 rhs)) pd inRhs
+      flagGo False eq pin0 =
+        let pin1 = forgetMiss pin0
+            neq = notDest (p == d) Refl eq pin0
+        in placeAfterIn
+             (placesOverlap (readPlaces rhs) (xferLive live0 rhs)) neq
+             (xferIn {e = rhs} pin1 sub (rhsStored ns))
+        where
+          notDest : (c : Bool) -> p == d = c ->
+                    placesOverlap (readPlaces rhs) (xferLive live1 rhs) = False ->
+                    placeIn p (forgetPlace d (xferLive live1 rhs)) = True ->
+                    p == d = False
+          notDest True pd _ pin1 =
+            void (trueNotFalseC
+              (trans (sym (replace {p = \n => placeIn n (forgetPlace d (xferLive live1 rhs)) = True}
+                              (eqNatTrue p d pd) pin1))
+                     (forgetNotDest {xs = xferLive live1 rhs})))
+          notDest False pd _ _ = pd
+  xferIn {e = ECall _ _ args} pin sub ns = xferArgsIn pin sub ns
+  xferIn {e = EMalloc _ args} pin sub ns = xferArgsIn pin sub ns
+  xferIn {e = EUse _ args} pin sub ns = xferArgsIn pin sub ns
+
+  xferArgsIn : {p : Place} -> {live0, live1, prot : List Place} ->
+               {es : List Expr} ->
+               placeIn p (xferArgs live1 es) = True ->
+               placeSub live1 (live0 ++ prot) = True ->
+               placeSub (nestStoreds es) prot = True ->
+               placeIn p (xferArgs live0 es ++ prot) = True
+  xferArgsIn {es = []} pin sub _ = subIn sub pin
+  xferArgsIn {es = e :: es} pin sub ns =
+    let (nHere, nTail) = subAppend ns
+        subX = subFrom (\q, qin => xferIn {e = e} qin sub nHere)
+    in xferArgsIn {live1 = xferLive live1 e} {live0 = xferLive live0 e} {es = es}
+         pin subX nTail
+
+freeContra : {acc : List (String, List Consume)} ->
+             {live0, live1, prot : List Place} -> {e : Expr} -> {es : List Expr} ->
+             placeSub live1 (live0 ++ prot) = True ->
+             nestedGo acc prot (e :: es) = False ->
+             nestedGo acc live0 [e] = False ->
+             nestedGo acc live1 [e] = True -> Void
+freeContra {live1 = []} _ _ _ pr = void (trueNotFalseC (sym pr))
+freeContra {acc} {live0} {prot} {live1 = p :: ps} {e} sub nq n0 pr =
+  arm (argFrees acc p e) Refl pr
+  where
+    arm : (b : Bool) -> argFrees acc p e = b ->
+          nestedGo acc (p :: ps) [e] = True -> Void
+    arm True af _ =
+      let mem = subIn {xs = p :: ps} {ys = live0 ++ prot} sub (placeInHere p ps)
+      in case inAppend mem of
+           Left in0 =>
+             void (trueNotFalseC (trans (sym (hitOne in0 af)) n0))
+           Right inP =>
+             void (trueNotFalseC (trans (sym af) (argsHitHead (argsHitIn inP nq))))
+    arm False af pr0 =
+      freeContra {live1 = ps} (subTail sub) nq n0 (nestSkipTrue af pr0)
+
+readContra : {live0, live1, prot : List Place} -> {e : Expr} ->
+             {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+             placeSub live1 (live0 ++ prot) = True ->
+             consumeQuiet prot (e :: es) (m :: ms) = False ->
+             placesOverlap (readPlaces e) live0 = False ->
+             doesConsume m = True ->
+             placesOverlap (readPlaces e) live1 = True -> Void
+readContra {live0} {live1} {prot} {e} sub cq ov0 pc ov =
+  overlapVoid (readPlaces e) ov (\q, pin => pin)
+  where
+    overlapVoid : (xs : List Place) ->
+                  placesOverlap xs live1 = True ->
+                  ((q : Place) -> placeIn q xs = True -> placeIn q (readPlaces e) = True) ->
+                  Void
+    overlapVoid [] ov1 _ = void (trueNotFalseC (sym ov1))
+    overlapVoid (q :: qs) ov1 embed = step (placeIn q live1) Refl ov1
+      where
+        step : (b : Bool) -> placeIn q live1 = b ->
+               placesOverlap (q :: qs) live1 = True -> Void
+        step True iq _ =
+          let inRead = embed q (placeInHere q qs)
+              mem = subIn {xs = live1} {ys = live0 ++ prot} sub iq
+          in case inAppend mem of
+               Left in0 =>
+                 void (trueNotFalseC (trans (sym (overlapBuild inRead in0)) ov0))
+               Right inP =>
+                 void (trueNotFalseC
+                   (trans (sym (movedHead pc (readPlaceMoved inRead)))
+                          (consumeInQuiet inP cq)))
+        step False iq ov2 =
+          overlapVoid qs
+            (replace {p = \b => (b || Delay (placesOverlap qs live1)) = True} iq ov2)
+            (\r, pin => embed r (placeInTail pin))
+
+neverSub : {live0, live1, prot : List Place} -> {e : Expr} ->
+           placeSub live1 (live0 ++ prot) = True ->
+           placeSub (nestStored e) prot = True ->
+           placeSub (valuePlaces e ++ xferLive live1 e)
+                    ((valuePlaces e ++ xferLive live0 e) ++ prot) = True
+neverSub {live0} {prot} {e} sub ns = subFrom one
+  where
+    one : (p : Place) ->
+          placeIn p (valuePlaces e ++ xferLive live1 e) = True ->
+          placeIn p ((valuePlaces e ++ xferLive live0 e) ++ prot) = True
+    one p pin = case inAppend pin of
+      Left inV => placeInAppendL (placeInAppendL inV)
+      Right inX => shiftIn {xs = valuePlaces e} {ys = xferLive live0 e} {zs = prot}
+                     (xferIn {live0} {live1} {prot} {e} inX sub ns)
+
+consumeSub : {live0, live1, prot : List Place} -> {e : Expr} ->
+             placeSub live1 (live0 ++ prot) = True ->
+             placeSub (nestStored e) prot = True ->
+             placeSub (xferLive live1 e) (xferLive live0 e ++ prot) = True
+consumeSub sub ns = subFrom (\p, pin => xferIn pin sub ns)
+
+mutual
+  covGo : {acc : List (String, List Consume)} ->
+          {live0, live1, prot : List Place} ->
+          {es : List Expr} -> {ms : List Consume} ->
+          modesCover ms es = True ->
+          consumeQuiet prot es ms = False ->
+          nestedGo acc prot es = False ->
+          storedLiveGo acc live0 es ms = False ->
+          placeSub live1 (live0 ++ prot) = True ->
+          placeSub (nestStoreds es) prot = True ->
+          storedLiveGo acc live1 es ms = False
+  covGo {es = []} _ _ _ _ _ _ = Refl
+  covGo {es = _ :: _} {ms = []} cov _ _ _ _ _ = void (trueNotFalseC (sym cov))
+  covGo {acc} {live0} {live1} {prot} {es = e :: es} {ms = Never :: ms}
+       cov cq nq s0 sub nsub =
+    covNever acc live0 live1 prot e es ms cov cq nq s0 sub nsub
+      (nestedGo acc live1 [e]) Refl
+  covGo {acc} {live0} {live1} {prot} {es = e :: es} {ms = May :: ms}
+       cov cq nq s0 sub nsub =
+    covMay acc live0 live1 prot e es ms cov cq nq s0 sub nsub
+      (placesOverlap (readPlaces e) live1) Refl
+  covGo {acc} {live0} {live1} {prot} {es = e :: es} {ms = Always :: ms}
+       cov cq nq s0 sub nsub =
+    covAlways acc live0 live1 prot e es ms cov cq nq s0 sub nsub
+      (placesOverlap (readPlaces e) live1) Refl
+
+  covNever : (acc : List (String, List Consume)) ->
+             (live0, live1, prot : List Place) ->
+             (e : Expr) -> (es : List Expr) -> (ms : List Consume) ->
+             modesCover (Never :: ms) (e :: es) = True ->
+             consumeQuiet prot (e :: es) (Never :: ms) = False ->
+             nestedGo acc prot (e :: es) = False ->
+             storedLiveGo acc live0 (e :: es) (Never :: ms) = False ->
+             placeSub live1 (live0 ++ prot) = True ->
+             placeSub (nestStoreds (e :: es)) prot = True ->
+             (b : Bool) -> nestedGo acc live1 [e] = b ->
+             storedLiveGo acc live1 (e :: es) (Never :: ms) = False
+  covNever acc live0 live1 prot e es ms cov cq nq s0 sub nsub True nb =
+    void (freeContra {acc} {live0} {live1} {prot} {e} {es} sub nq
+            (storedHeadFree s0) nb)
+  covNever acc live0 live1 prot e es ms cov cq nq s0 sub nsub False nb =
+    let (nHere, nTail) = subAppend nsub
+    in rewrite nb in
+       covGo {acc} {live0 = valuePlaces e ++ xferLive live0 e}
+             {live1 = valuePlaces e ++ xferLive live1 e} {prot} {es} {ms}
+             cov (peelQuiet cq) (nestedGoArgsTail nq)
+             (storedLiveBorrow {acc} {live = live0} {e} {es} {m = Never} {ms} Refl s0)
+             (neverSub {live0} {live1} {prot} {e} sub nHere) nTail
+
+  covMay : (acc : List (String, List Consume)) ->
+           (live0, live1, prot : List Place) ->
+           (e : Expr) -> (es : List Expr) -> (ms : List Consume) ->
+           modesCover (May :: ms) (e :: es) = True ->
+           consumeQuiet prot (e :: es) (May :: ms) = False ->
+           nestedGo acc prot (e :: es) = False ->
+           storedLiveGo acc live0 (e :: es) (May :: ms) = False ->
+           placeSub live1 (live0 ++ prot) = True ->
+           placeSub (nestStoreds (e :: es)) prot = True ->
+           (b : Bool) -> placesOverlap (readPlaces e) live1 = b ->
+           storedLiveGo acc live1 (e :: es) (May :: ms) = False
+  covMay acc live0 live1 prot e es ms cov cq nq s0 sub nsub True ob =
+    void (readContra {live0} {live1} {prot} {e} {es} {m = May} {ms}
+            sub cq (storedHeadOverlap {acc} {live = live0} {e} {es} {m = May} {ms} Refl s0)
+            Refl ob)
+  covMay acc live0 live1 prot e es ms cov cq nq s0 sub nsub False ob =
+    let (nHere, nTail) = subAppend nsub
+    in rewrite ob in
+       covGo {acc} {live0 = xferLive live0 e} {live1 = xferLive live1 e}
+             {prot} {es} {ms}
+             cov (peelQuiet cq) (nestedGoArgsTail nq)
+             (storedLiveConsume {acc} {live = live0} {e} {es} {m = May} {ms} Refl s0)
+             (consumeSub {live0} {live1} {prot} {e} sub nHere) nTail
+
+  covAlways : (acc : List (String, List Consume)) ->
+              (live0, live1, prot : List Place) ->
+              (e : Expr) -> (es : List Expr) -> (ms : List Consume) ->
+              modesCover (Always :: ms) (e :: es) = True ->
+              consumeQuiet prot (e :: es) (Always :: ms) = False ->
+              nestedGo acc prot (e :: es) = False ->
+              storedLiveGo acc live0 (e :: es) (Always :: ms) = False ->
+              placeSub live1 (live0 ++ prot) = True ->
+              placeSub (nestStoreds (e :: es)) prot = True ->
+              (b : Bool) -> placesOverlap (readPlaces e) live1 = b ->
+              storedLiveGo acc live1 (e :: es) (Always :: ms) = False
+  covAlways acc live0 live1 prot e es ms cov cq nq s0 sub nsub True ob =
+    void (readContra {live0} {live1} {prot} {e} {es} {m = Always} {ms}
+            sub cq
+            (storedHeadOverlap {acc} {live = live0} {e} {es} {m = Always} {ms} Refl s0)
+            Refl ob)
+  covAlways acc live0 live1 prot e es ms cov cq nq s0 sub nsub False ob =
+    let (nHere, nTail) = subAppend nsub
+    in rewrite ob in
+       covGo {acc} {live0 = xferLive live0 e} {live1 = xferLive live1 e}
+             {prot} {es} {ms}
+             cov (peelQuiet cq) (nestedGoArgsTail nq)
+             (storedLiveConsume {acc} {live = live0} {e} {es} {m = Always} {ms} Refl s0)
+             (consumeSub {live0} {live1} {prot} {e} sub nHere) nTail
+
+||| A call whose mode list covers every argument. `live` is the pin live
+||| at a `Never` argument, so the outer check only sees `argFrees`.
+||| Stored destinations are `nestStoreds`. The empty-start check is the
+||| `storedBorrowConsume` half of `aliasBad`. Together they force the
+||| pin-live check quiet. A missing mode is not covered: `h(f(p))` with
+||| `f` at `[]` is the counterexample to the statement without `modesCover`.
+export
+coveredStored : {acc : List (String, List Consume)} ->
+                {live : List Place} ->
+                {id : Nat} -> {callee : String} ->
+                {es : List Expr} -> {ms : List Consume} ->
+                modesCover ms es = True ->
+                calleeModes acc callee = ms ->
+                nestedGo acc live [ECall id callee es] = False ->
+                nestedGo acc (nestStoreds es) [ECall id callee es] = False ->
+                storedLiveGo acc [] es ms = False ->
+                storedLiveGo acc live es ms = False
+coveredStored {acc} {live} {es} {ms} cov modesEq nLive nNest s0 =
+  covGo {acc} {live0 = []} {live1 = live}
+       {prot = live ++ nestStoreds es} {es} {ms}
+       cov (quietMoves (nestedGoAppendQuiet nLive nNest) modesEq)
+       (callArgsQuiet (nestedGoAppendQuiet nLive nNest))
+       s0 subJoinL subJoinR
+
+||| `aliasBad` is the four-flag disjunction. Unfolding it lets `orFalseC`
+||| see the `||` chain; the function name alone does not.
+aliasBadOpen : (ctx : Ctx) -> (es : List Expr) -> (callee : String) ->
+  aliasBad ctx es callee =
+    mixedAlias es (funModes ctx callee)
+      || nestedMixed ctx es (funModes ctx callee)
+      || assignAlias es (funModes ctx callee)
+      || storedBorrowConsume ctx.summaries es (funModes ctx callee)
+aliasBadOpen _ _ _ = Refl
+
+||| The fourth flag is empty-start `storedLiveGo` at `funModes`.
+aliasStoredQuiet : {ctx : Ctx} -> {es : List Expr} -> {callee : String} ->
+                   aliasBad ctx es callee = False ->
+                   storedLiveGo ctx.summaries [] es (funModes ctx callee) = False
+aliasStoredQuiet {ctx} {es} {callee} prf =
+  let opened = replace {p = \b => b = False} (aliasBadOpen ctx es callee) prf
+      (_, r1) = orFalseC _ _ opened
+      (_, r2) = orFalseC _ _ r1
+      (_, st) = orFalseC _ _ r2
+  in st
+
+||| `modesCover []` holds only for an empty argument list, and that walk
+||| is quiet at every live set.
+storedLiveGoCoverNil : (acc : List (String, List Consume)) ->
+                       (live : List Place) ->
+                       (es : List Expr) ->
+                       modesCover [] es = True ->
+                       storedLiveGo acc live es [] = False
+storedLiveGoCoverNil _ _ [] _ = Refl
+storedLiveGoCoverNil _ _ (_ :: _) prf = void (trueNotFalseC (sym prf))
+
+||| An accepted defined call whose modes cover its arguments has a quiet
+||| pin-live `storedLiveGo`. Empty-start quiet is `aliasBad`'s fourth
+||| flag, from `checkCall = Right`. The two `nestedGo` facts stay
+||| premises: they are the outer `Never` head, not this call. A short
+||| mode list is excluded (`h(f(p))`, `f` at `[]`). This does not say
+||| the callee body keeps the cell live.
+export
+acceptedCovered : {ctx : Ctx} -> {sc, sc' : Scopes} -> {id : Nat} ->
+                  {callee : String} -> {es : List Expr} -> {live : List Place} ->
+                  modesCover (funModes ctx callee) es = True ->
+                  checkCall ctx sc id callee es = Right sc' ->
+                  isBuiltin callee = False ->
+                  isDefined ctx callee = True ->
+                  nestedGo ctx.summaries live [ECall id callee es] = False ->
+                  nestedGo ctx.summaries (nestStoreds es) [ECall id callee es] = False ->
+                  storedLiveGo ctx.summaries live es (funModes ctx callee) = False
+acceptedCovered {ctx} {id} {callee} {es} {live} cov eq pb pd nLive nNest =
+  let bad = callDefinedNoAlias {nid = id} {args = es} eq pb pd
+  in case calleeModesFunModes ctx callee of
+       Left same =>
+         coveredStored {acc = ctx.summaries} {live} {id} {callee} {es}
+                       {ms = funModes ctx callee}
+                       cov same nLive nNest (aliasStoredQuiet bad)
+       Right (fm, _) =>
+         replace {p = \ms => storedLiveGo ctx.summaries live es ms = False}
+                 (sym fm)
+                 (storedLiveGoCoverNil ctx.summaries live es
+                    (replace {p = \ms => modesCover ms es = True} fm cov))
+
+||| `readPlaces` of a variable is that one place.
+varOverlap : {id : Nat} -> {p : Place} -> {nm : String} -> {live : List Place} ->
+             placeIn p live = True ->
+             placesOverlap (readPlaces (EVar id p nm)) live = True
+varOverlap pin = rewrite pin in orTrueLeft (placesOverlap [] live)
+
+||| A missing mode is a consume, so a quiet walk did not read `live`.
+storedHeadExtra : {acc : List (String, List Consume)} ->
+                  {live : List Place} -> {e : Expr} -> {es : List Expr} ->
+                  storedLiveGo acc live (e :: es) [] = False ->
+                  placesOverlap (readPlaces e) live = False
+storedHeadExtra {acc} {live} {e} {es} prf =
+  go (placesOverlap (readPlaces e) live) Refl prf
+  where
+    go : (b : Bool) -> placesOverlap (readPlaces e) live = b ->
+         storedOn acc b live e es [] = False ->
+         placesOverlap (readPlaces e) live = False
+    go False eq _ = eq
+    go True _ pr0 = void (trueNotFalseC pr0)
+
+||| A consume head that is a variable in the pin live is not quiet.
+||| Covering modes use `May` or `Always` (`doesConsume`). The owner place
+||| is such a variable, so this head is not `EVar ownQ`.
+export
+storedVarOwner : {acc : List (String, List Consume)} ->
+                 {live : List Place} ->
+                 {id : Nat} -> {p : Place} -> {nm : String} ->
+                 {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+                 placeIn p live = True ->
+                 doesConsume m = True ->
+                 storedLiveGo acc live (EVar id p nm :: es) (m :: ms) = False ->
+                 Void
+storedVarOwner {id} {p} {nm} pin pc quiet =
+  trueNotFalseC (trans (sym (varOverlap {id} {p} {nm} pin))
+                       (storedHeadOverlap pc quiet))
+
+||| Same fact when the mode list has run out. `consumeHead [] = Always`.
+export
+storedVarExtra : {acc : List (String, List Consume)} ->
+                 {live : List Place} ->
+                 {id : Nat} -> {p : Place} -> {nm : String} ->
+                 {es : List Expr} ->
+                 placeIn p live = True ->
+                 storedLiveGo acc live (EVar id p nm :: es) [] = False ->
+                 Void
+storedVarExtra {id} {p} {nm} pin quiet =
+  trueNotFalseC (trans (sym (varOverlap {id} {p} {nm} pin))
+                       (storedHeadExtra quiet))
+

@@ -4773,3 +4773,387 @@ storedVarExtra {id} {p} {nm} pin quiet =
   trueNotFalseC (trans (sym (varOverlap {id} {p} {nm} pin))
                        (storedHeadExtra quiet))
 
+||| An empty mode list binds a pointer parameter as borrowed. `h(f(p))`
+||| with `f` at `[]` is this binding. Copy parameters are skipped by
+||| `bindParams`; this is the pointer at the head of the remaining list.
+export
+bindExtraBorrowed : (fid : Nat) -> (p : Param) -> (ps : List Param) ->
+                    p.ty = Ptr ->
+                    lookupPlace p.place (bindParams fid (p :: ps) []) =
+                      Just (Pagurus.Status.singleton (ABorrowed fid))
+bindExtraBorrowed fid p ps pty =
+  rewrite pty in rewrite eqNatRefl p.place in Refl
+
+||| Dropping a borrowed status is not a successful step.
+export
+borrowedDropStep : (fid, nid : Nat) -> (st' : Status) ->
+                   stepStatus (Pagurus.Status.singleton (ABorrowed fid)) Drop nid = Right st' ->
+                   Void
+borrowedDropStep _ _ _ eq = leftNotRightChk eq
+
+dropPlaceLeft : {sc : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
+                {st : Status} -> {d : Diag} ->
+                lookupPlace n sc = Just st ->
+                stepStatus st Drop nid = Left d ->
+                dropPlace sc n nid nm = Left (withName nm d)
+dropPlaceLeft pL pS = rewrite pL in rewrite pS in Refl
+
+||| The initial scope of an empty mode list rejects `free` of that parameter.
+export
+extraDropVoid : (fid, nid : Nat) -> (nm : String) ->
+                (p : Param) -> (ps : List Param) ->
+                p.ty = Ptr ->
+                (sc' : Scopes) ->
+                dropPlace (bindParams fid (p :: ps) []) p.place nid nm = Right sc' ->
+                Void
+extraDropVoid fid nid nm p ps pty sc' eq =
+  let look = bindExtraBorrowed fid p ps pty
+  in stepGo (stepStatus (Pagurus.Status.singleton (ABorrowed fid)) Drop nid) Refl look
+  where
+    stepGo : (r : Either Diag Status) ->
+             stepStatus (Pagurus.Status.singleton (ABorrowed fid)) Drop nid = r ->
+             lookupPlace p.place (bindParams fid (p :: ps) []) =
+               Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+             Void
+    stepGo (Left d) pS look =
+      void (leftNotRightChk (trans (sym (dropPlaceLeft look pS)) eq))
+    stepGo (Right st') pS _ = borrowedDropStep fid nid st' pS
+
+||| Same rejection through `checkStmt`. One drop, at this scope.
+export
+extraStmtDropVoid : (fuel : Nat) -> (ctx : Ctx) ->
+                    (fid, nid : Nat) -> (nm : String) ->
+                    (p : Param) -> (ps : List Param) ->
+                    p.ty = Ptr ->
+                    (sc' : Scopes) ->
+                    checkStmt (S fuel) ctx (bindParams fid (p :: ps) [])
+                      (SDrop nid p.place nm) = Right sc' ->
+                    Void
+extraStmtDropVoid fuel ctx fid nid nm p ps pty sc' eq =
+  extraDropVoid fid nid nm p ps pty sc'
+    (trans (sym (checkStmtDrop fuel ctx (bindParams fid (p :: ps) [])
+                   nid p.place nm)) eq)
+
+||| Moving a borrowed status is not a successful step.
+export
+borrowedMoveStep : (fid, nid : Nat) -> (st' : Status) ->
+                   stepStatus (Pagurus.Status.singleton (ABorrowed fid)) Move nid = Right st' ->
+                   Void
+borrowedMoveStep _ _ _ eq = leftNotRightChk eq
+
+movePlaceLeft : {sc : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
+                {st : Status} -> {d : Diag} ->
+                lookupPlace n sc = Just st ->
+                stepStatus st Move nid = Left d ->
+                movePlace sc n nid nm = Left (withName nm d)
+movePlaceLeft pL pS = rewrite pL in rewrite pS in Refl
+
+||| Any scope whose lookup is still this borrowed status rejects a move.
+export
+borrowedMovePlace : {sc, sc' : Scopes} -> {fid, nid : Nat} ->
+                    {n : Place} -> {nm : String} ->
+                    lookupPlace n sc =
+                      Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                    movePlace sc n nid nm = Right sc' ->
+                    Void
+borrowedMovePlace {fid} {nid} look eq =
+  stepGo (stepStatus (Pagurus.Status.singleton (ABorrowed fid)) Move nid) Refl
+  where
+    stepGo : (r : Either Diag Status) ->
+             stepStatus (Pagurus.Status.singleton (ABorrowed fid)) Move nid = r ->
+             Void
+    stepGo (Left d) pS =
+      void (leftNotRightChk (trans (sym (movePlaceLeft look pS)) eq))
+    stepGo (Right st') pS = borrowedMoveStep fid nid st' pS
+
+||| `takeOwner` of that variable moves it, so it is not `Right`.
+export
+borrowedTakeVar : {ctx : Ctx} -> {sc, sc' : Scopes} -> {fl : Flag} ->
+                  {fid, id : Nat} -> {n : Place} -> {nm : String} ->
+                  lookupPlace n sc =
+                    Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                  takeOwner ctx sc (EVar id n nm) = Right (sc', fl) ->
+                  Void
+borrowedTakeVar {ctx} {sc} {id} {n} {nm} look eq =
+  go (movePlace sc n id nm) Refl
+  where
+    go : (r : Either Diag Scopes) -> movePlace sc n id nm = r -> Void
+    go (Left d) pM =
+      void (leftNotRightChk (trans (sym (takeVarJustL ctx look pM)) eq))
+    go (Right sc1) pM = borrowedMovePlace look pM
+
+||| Use keeps the borrowed atom. `stepStatus []` is `Right []`, and
+||| `insertSorted a []` is `[a]`.
+export
+borrowedUseStep : (fid, nid : Nat) ->
+                  stepStatus (Pagurus.Status.singleton (ABorrowed fid)) Use nid =
+                    Right (Pagurus.Status.singleton (ABorrowed fid))
+borrowedUseStep _ _ = Refl
+
+usePlaceJust : {sc : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
+               {st, st' : Status} ->
+               lookupPlace n sc = Just st ->
+               stepStatus st Use nid = Right st' ->
+               usePlace sc n nid nm = Right (setPlace n st' sc)
+usePlaceJust pL pS = rewrite pL in rewrite pS in Refl
+
+||| An accepted use of a borrowed place writes the same borrowed status back.
+export
+borrowedUsePlace : {sc : Scopes} -> {fid, nid : Nat} ->
+                   {n : Place} -> {nm : String} ->
+                   lookupPlace n sc =
+                     Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                   usePlace sc n nid nm =
+                     Right (setPlace n (Pagurus.Status.singleton (ABorrowed fid)) sc)
+borrowedUsePlace {fid} {nid} look = usePlaceJust look (borrowedUseStep fid nid)
+
+||| `checkExpr` of a variable is that use.
+export
+borrowedCheckVar : {ctx : Ctx} -> {sc : Scopes} -> {fid, id : Nat} ->
+                   {n : Place} -> {nm : String} ->
+                   lookupPlace n sc =
+                     Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                   checkExpr ctx sc (EVar id n nm) =
+                     Right (setPlace n (Pagurus.Status.singleton (ABorrowed fid)) sc)
+borrowedCheckVar {ctx} {sc} {fid} {id} {n} {nm} look =
+  trans (checkExprVar ctx sc id n nm) (borrowedUsePlace {fid} {nid = id} look)
+
+||| Same use through an expression statement.
+export
+borrowedStmtUse : (fuel : Nat) -> {ctx : Ctx} -> {sc : Scopes} ->
+                  {fid, eid, id : Nat} -> {n : Place} -> {nm : String} ->
+                  lookupPlace n sc =
+                    Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                  checkStmt (S fuel) ctx sc (SExpr eid (EVar id n nm)) =
+                    Right (setPlace n (Pagurus.Status.singleton (ABorrowed fid)) sc)
+borrowedStmtUse fuel {ctx} {sc} {fid} {eid} {id} {n} {nm} look =
+  trans (checkStmtExpr fuel ctx sc eid (EVar id n nm))
+        (borrowedCheckVar {ctx} {sc} {fid} {id} {n} {nm} look)
+
+||| A copy assignment only checks the right-hand side, so the borrowed
+||| place stays borrowed.
+export
+borrowedStmtAsgCopy : (fuel : Nat) -> {ctx : Ctx} -> {sc : Scopes} ->
+                      {fid, aid, id : Nat} -> {dest, n : Place} ->
+                      {dnm, nm : String} ->
+                      lookupPlace n sc =
+                        Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                      checkStmt (S fuel) ctx sc
+                        (SAssign aid dest dnm Copy (EVar id n nm)) =
+                        Right (setPlace n (Pagurus.Status.singleton (ABorrowed fid)) sc)
+borrowedStmtAsgCopy fuel {ctx} {sc} {fid} {aid} {id} {dest} {n} {dnm} {nm} look =
+  trans (checkStmtAsgCopy fuel aid dest dnm {ctx} {sc} {rhs = EVar id n nm})
+        (borrowedCheckVar {ctx} {sc} {fid} {id} {n} {nm} look)
+
+||| A copy initialiser is the same use.
+export
+borrowedStmtDeclCopy : (fuel : Nat) -> {ctx : Ctx} -> {sc : Scopes} ->
+                       {fid, did, id : Nat} -> {dest, n : Place} ->
+                       {dnm, nm : String} ->
+                       lookupPlace n sc =
+                         Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                       checkStmt (S fuel) ctx sc
+                         (SDecl did dest dnm Copy (Just (EVar id n nm))) =
+                         Right (setPlace n (Pagurus.Status.singleton (ABorrowed fid)) sc)
+borrowedStmtDeclCopy fuel {ctx} {sc} {fid} {did} {id} {dest} {n} {dnm} {nm} look =
+  trans (checkStmtDeclCopyJust fuel did dest dnm {ctx} {sc} {e = EVar id n nm})
+        (borrowedCheckVar {ctx} {sc} {fid} {id} {n} {nm} look)
+
+||| Dropping the borrowed place is void in any scope, not only the
+||| initial `bindParams` scope.
+export
+borrowedDropPlace : {sc, sc' : Scopes} -> {fid, nid : Nat} ->
+                    {n : Place} -> {nm : String} ->
+                    lookupPlace n sc =
+                      Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                    dropPlace sc n nid nm = Right sc' ->
+                    Void
+borrowedDropPlace {fid} {nid} look eq =
+  stepGo (stepStatus (Pagurus.Status.singleton (ABorrowed fid)) Drop nid) Refl
+  where
+    stepGo : (r : Either Diag Status) ->
+             stepStatus (Pagurus.Status.singleton (ABorrowed fid)) Drop nid = r ->
+             Void
+    stepGo (Left d) pS =
+      void (leftNotRightChk (trans (sym (dropPlaceLeft look pS)) eq))
+    stepGo (Right st') pS = borrowedDropStep fid nid st' pS
+
+||| Same rejection through `checkStmt`.
+export
+borrowedStmtDrop : (fuel : Nat) -> (ctx : Ctx) -> {sc, sc' : Scopes} ->
+                   {fid, nid : Nat} -> {n : Place} -> {nm : String} ->
+                   lookupPlace n sc =
+                     Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                   checkStmt (S fuel) ctx sc (SDrop nid n nm) = Right sc' ->
+                   Void
+borrowedStmtDrop fuel ctx {sc} {fid} {nid} {n} {nm} look eq =
+  borrowedDropPlace {fid} {nid} {n} {nm} look
+    (trans (sym (checkStmtDrop fuel ctx sc nid n nm)) eq)
+
+||| A pointer assignment of the borrowed variable moves it.
+||| `ghostCopyLeak` of a variable is false, so the existing `stmtAsgPtrLeft`
+||| applies. An overwrite from `malloc` is a different right-hand side.
+borrowedAsgGo : (fuel : Nat) -> (ctx : Ctx) -> (sc, sc' : Scopes) ->
+                (fid, aid, id : Nat) -> (dest, n : Place) ->
+                (dnm, nm : String) ->
+                lookupPlace n sc =
+                  Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                checkStmt (S fuel) ctx sc
+                  (SAssign aid dest dnm Ptr (EVar id n nm)) = Right sc' ->
+                (r : Either Diag (Scopes, Flag)) ->
+                takeOwner ctx sc (EVar id n nm) = r ->
+                Void
+borrowedAsgGo fuel ctx sc _ fid aid id dest n dnm nm look eq (Left d) pT =
+  void (leftNotRightChk
+    (trans (sym (stmtAsgPtrLeft fuel aid dest dnm
+                   {ctx} {sc} {rhs = EVar id n nm} Refl pT)) eq))
+borrowedAsgGo _ ctx sc _ fid _ id _ n _ nm look _ (Right (sc1, fl1)) pT =
+  borrowedTakeVar {ctx} {sc} {sc' = sc1} {fl = fl1} {fid} {id} {n} {nm} look pT
+
+export
+borrowedStmtAsgVar : (fuel : Nat) -> (ctx : Ctx) -> {sc, sc' : Scopes} ->
+                     {fid, aid, id : Nat} -> {dest, n : Place} ->
+                     {dnm, nm : String} ->
+                     lookupPlace n sc =
+                       Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                     checkStmt (S fuel) ctx sc
+                       (SAssign aid dest dnm Ptr (EVar id n nm)) = Right sc' ->
+                     Void
+borrowedStmtAsgVar fuel ctx {sc} {sc'} {fid} {aid} {id} {dest} {n} {dnm} {nm}
+                   look eq =
+  borrowedAsgGo fuel ctx sc sc' fid aid id dest n dnm nm look eq
+    (takeOwner ctx sc (EVar id n nm)) Refl
+
+||| Returning the borrowed variable moves it.
+borrowedRetGo : (fuel : Nat) -> (ctx : Ctx) -> (sc, sc' : Scopes) ->
+                (fid, rid, id : Nat) -> (n : Place) -> (nm : String) ->
+                lookupPlace n sc =
+                  Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                checkStmt (S fuel) ctx sc
+                  (SReturn rid (Just (EVar id n nm))) = Right sc' ->
+                (r : Either Diag (Scopes, Flag)) ->
+                takeOwner ctx sc (EVar id n nm) = r ->
+                Void
+borrowedRetGo fuel ctx sc _ _ rid id n nm look eq (Left d) pT =
+  void (leftNotRightChk
+    (trans (sym (retVarLeft fuel ctx rid {sc} {nid = id} {n} {nm} pT)) eq))
+borrowedRetGo _ ctx sc _ fid _ id n nm look _ (Right (sc1, fl1)) pT =
+  borrowedTakeVar {ctx} {sc} {sc' = sc1} {fl = fl1} {fid} {id} {n} {nm} look pT
+
+export
+borrowedStmtRet : (fuel : Nat) -> (ctx : Ctx) -> {sc, sc' : Scopes} ->
+                  {fid, rid, id : Nat} -> {n : Place} -> {nm : String} ->
+                  lookupPlace n sc =
+                    Just (Pagurus.Status.singleton (ABorrowed fid)) ->
+                  checkStmt (S fuel) ctx sc
+                    (SReturn rid (Just (EVar id n nm))) = Right sc' ->
+                  Void
+borrowedStmtRet fuel ctx {sc} {sc'} {fid} {rid} {id} {n} {nm} look eq =
+  borrowedRetGo fuel ctx sc sc' fid rid id n nm look eq
+    (takeOwner ctx sc (EVar id n nm)) Refl
+
+||| A consume head that reads a pin-live place is not a quiet
+||| `storedLiveGo`. An assignment reads its right-hand side, so
+||| `r = p` with `p` in the pin is this head. This does not change
+||| what the checker accepts.
+export
+storedReadOwner : {acc : List (String, List Consume)} ->
+                  {live : List Place} -> {p : Place} -> {e : Expr} ->
+                  {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+                  placeIn p (readPlaces e) = True ->
+                  placeIn p live = True ->
+                  doesConsume m = True ->
+                  storedLiveGo acc live (e :: es) (m :: ms) = False ->
+                  Void
+storedReadOwner inR pin pc quiet =
+  trueNotFalseC (trans (sym (overlapBuild inR pin)) (storedHeadOverlap pc quiet))
+
+||| Same fact when the mode list has run out.
+export
+storedReadExtra : {acc : List (String, List Consume)} ->
+                  {live : List Place} -> {p : Place} -> {e : Expr} ->
+                  {es : List Expr} ->
+                  placeIn p (readPlaces e) = True ->
+                  placeIn p live = True ->
+                  storedLiveGo acc live (e :: es) [] = False ->
+                  Void
+storedReadExtra inR pin quiet =
+  trueNotFalseC (trans (sym (overlapBuild inR pin)) (storedHeadExtra quiet))
+
+||| `readPlaces` of an assignment is the right-hand side, and a variable
+||| reads itself.
+export
+readAssignVar : (id, sid : Nat) -> (d, p : Place) -> (nm, snm : String) ->
+                (ty : Ty) ->
+                placeIn p (readPlaces (EAssign id d nm ty (EVar sid p snm))) = True
+readAssignVar _ _ _ p _ _ _ = placeInHere p []
+
+||| One argument's `argsHit` is that argument's `argFrees`.
+argsHitSingleton : {acc : List (String, List Consume)} -> {p : Place} ->
+                   {e : Expr} ->
+                   argFrees acc p e = False ->
+                   argsHit acc p [e] = False
+argsHitSingleton prf = rewrite prf in Refl
+
+||| Quiet across a longer argument list is quiet on the first argument.
+nestedGoSingleton : {acc : List (String, List Consume)} ->
+                    {ps : List Place} -> {e : Expr} -> {es : List Expr} ->
+                    nestedGo acc ps (e :: es) = False ->
+                    nestedGo acc ps [e] = False
+nestedGoSingleton {ps = []} _ = Refl
+nestedGoSingleton {acc} {ps = p :: qs} {e} {es} prf =
+  let (hd, tl) = orFalseC _ _ prf
+  in orFalseIntro (argsHitSingleton {acc} {p} {e} (argsHitHead {acc} {p} {e} {es} hd))
+                  (nestedGoSingleton {acc} {ps = qs} {e} {es} tl)
+
+nestPlaceCallEq : (id : Nat) -> (callee : String) -> (args : List Expr) ->
+                  nestPlace (ECall id callee args) = nestStoreds args
+nestPlaceCallEq _ _ _ = Refl
+
+||| An outer `Never` head's `nestedMixed` says the inner call does not
+||| free its own stored destinations. Empty mode tails are not this fact:
+||| `modesCover [] (_ :: _)` is false, and `h(f(p))` stays accepted.
+export
+neverHeadStored : {ctx : Ctx} -> {id : Nat} -> {callee : String} ->
+                  {inner, es : List Expr} -> {ms : List Consume} ->
+                  nestedMixed ctx (ECall id callee inner :: es) (Never :: ms) = False ->
+                  nestedGo ctx.summaries (nestStoreds inner)
+                    [ECall id callee inner] = False
+neverHeadStored {ctx} {id} {callee} {inner} {es} {ms} prf =
+  let nb = nestBorrowBorrow {e = ECall id callee inner} {es} {m = Never} {ms} Refl
+      mixed = replace {p = \b => b = False}
+                (nestedMixedEq {ctx}
+                   {es = ECall id callee inner :: es} {ms = Never :: ms}) prf
+      opened0 = replace {p = \xs =>
+                           nestedGo ctx.summaries xs
+                             (ECall id callee inner :: es) = False}
+                  nb mixed
+      opened = replace {p = \xs =>
+                          nestedGo ctx.summaries
+                            (xs ++ nestBorrowPlaces es ms)
+                            (ECall id callee inner :: es) = False}
+                 (nestPlaceCallEq id callee inner) opened0
+      head = nestedGoPlacesHead {acc = ctx.summaries}
+               {xs = nestStoreds inner} {ys = nestBorrowPlaces es ms}
+               {es = ECall id callee inner :: es} opened
+  in nestedGoSingleton {acc = ctx.summaries} {ps = nestStoreds inner}
+       {e = ECall id callee inner} {es} head
+
+||| The two `nestedGo` premises of `acceptedCovered`, from an outer
+||| `Never` head. The conclusion is pin-live `storedLiveGo` of the inner
+||| arguments. It does not say the callee body keeps the cell live.
+export
+neverHeadCovered : {ctx : Ctx} -> {sc, sc' : Scopes} -> {id : Nat} ->
+                   {callee : String} -> {inner, es : List Expr} ->
+                   {ms : List Consume} -> {live : List Place} ->
+                   modesCover (funModes ctx callee) inner = True ->
+                   checkCall ctx sc id callee inner = Right sc' ->
+                   isBuiltin callee = False ->
+                   isDefined ctx callee = True ->
+                   storedLiveGo ctx.summaries live
+                     (ECall id callee inner :: es) (Never :: ms) = False ->
+                   nestedMixed ctx (ECall id callee inner :: es) (Never :: ms) = False ->
+                   storedLiveGo ctx.summaries live inner (funModes ctx callee) = False
+neverHeadCovered cov eq pb pd quiet mixed =
+  acceptedCovered cov eq pb pd (storedHeadFree quiet) (neverHeadStored mixed)
+

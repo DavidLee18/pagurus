@@ -5373,6 +5373,7 @@ aliasBadOpen : (ctx : Ctx) -> (es : List Expr) -> (callee : String) ->
 aliasBadOpen _ _ _ = Refl
 
 ||| Empty-start `storedLiveGo` is the second flag of `aliasBad`.
+export
 aliasStoredQuiet : {ctx : Ctx} -> {es : List Expr} -> {callee : String} ->
                    aliasBad ctx es callee = False ->
                    storedLiveGo ctx.summaries [] es (funModes ctx callee) = False
@@ -5619,6 +5620,7 @@ callOverlapNil : {acc : List (String, List Consume)} -> {ms : List Consume} ->
 callOverlapNil = Refl
 
 ||| Unfold `footsWrites` on a cons without matching the pair constructor.
+export
 footsWritesOpen :
   {f : (List Place, List Place)} -> {fs : List (List Place, List Place)} ->
   footsWrites (f :: fs) = fst f ++ footsWrites fs

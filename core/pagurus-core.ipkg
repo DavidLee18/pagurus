@@ -33,6 +33,7 @@ modules = Pagurus.IR
         , Pagurus.Heap.Update
         , Pagurus.Heap.Frame
         , Pagurus.Heap.Pres
+        , Pagurus.Heap.Footprint
         , Pagurus.Heap.Act
         , Pagurus.Heap.Drop
         , Pagurus.Heap.Thm

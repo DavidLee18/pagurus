@@ -1140,8 +1140,7 @@ mutual
   argFootprint : List (String, List Consume) -> Expr -> (List Place, List Place)
   argFootprint acc (EVar _ p _) = ([], [p])
   argFootprint acc (EAssign _ d _ Ptr rhs) =
-    let (w, r) = argFootprint acc rhs
-    in (d :: w, r)
+    (d :: fst (argFootprint acc rhs), snd (argFootprint acc rhs))
   argFootprint acc (EAssign _ _ _ Copy rhs) = argFootprint acc rhs
   argFootprint acc (ECall _ callee args) =
     argsCallFoot acc args (calleeModes acc callee)
@@ -1158,9 +1157,8 @@ mutual
                  (List Place, List Place)
   argsEvalFoot _ [] = ([], [])
   argsEvalFoot acc (e :: es) =
-    let (w, r) = argFootprint acc e
-        (ws, rs) = argsEvalFoot acc es
-    in (w ++ ws, r ++ rs)
+    (fst (argFootprint acc e) ++ fst (argsEvalFoot acc es),
+     snd (argFootprint acc e) ++ snd (argsEvalFoot acc es))
 
   ||| Evaluation footprints plus this callee's consume of each argument.
   public export
@@ -1168,21 +1166,25 @@ mutual
                  (List Place, List Place)
   argsCallFoot _ [] _ = ([], [])
   argsCallFoot acc (e :: es) ms =
-    let (w, r) = argModeFoot acc e (consumeHead ms)
-        (ws, rs) = argsCallFoot acc es (consumeTail ms)
-    in (w ++ ws, r ++ rs)
+    (fst (argModeFoot acc e (consumeHead ms)) ++
+       fst (argsCallFoot acc es (consumeTail ms)),
+     snd (argModeFoot acc e (consumeHead ms)) ++
+       snd (argsCallFoot acc es (consumeTail ms)))
 
   ||| One argument at a call: consume-mode writes everything the
   ||| expression reads or denotes; borrow-mode adds those denotations
-  ||| to the read set only.
+  ||| to the read set only. `fst` / `snd` so a `Never`/`May`/`Always`
+  ||| split reduces; a `let (w, r) = argFootprint` does not.
   public export
   argModeFoot : List (String, List Consume) -> Expr -> Consume ->
                 (List Place, List Place)
   argModeFoot acc e m =
-    let (w, r) = argFootprint acc e
-    in if doesConsume m
-         then (w ++ r ++ valuePlaces e, r)
-         else (w, r ++ valuePlaces e)
+    if doesConsume m
+      then (fst (argFootprint acc e) ++ snd (argFootprint acc e) ++
+              valuePlaces e,
+            snd (argFootprint acc e))
+      else (fst (argFootprint acc e),
+            snd (argFootprint acc e) ++ valuePlaces e)
 
 ||| `(W_i, R_i)` for each argument of a call with these modes.
 public export
@@ -1221,6 +1223,228 @@ callOverlap acc es ms = footsOverlap (callFoots acc es ms)
 public export
 callDisjoint : List (String, List Consume) -> List Expr -> List Consume -> Bool
 callDisjoint acc es ms = not (callOverlap acc es ms)
+
+--------------------------------------------------------------------------------
+-- Inductive image of the footprint functions
+--------------------------------------------------------------------------------
+
+mutual
+  ||| Inductive image of `argFootprint`. Frame lemmas induct on `Foot`
+  ||| (or on `HEvalExpr`) instead of computing through the pair-returning
+  ||| functions, so proofs stay out of `with`.
+  public export
+  data Foot : List (String, List Consume) -> Expr ->
+              (w : List Place) -> (r : List Place) -> Type where
+    FVar : Foot acc (EVar nid p nm) [] [p]
+    FAsgPtr : (w, r : List Place) -> Foot acc rhs w r ->
+              Foot acc (EAssign nid d nm Ptr rhs) (d :: w) r
+    FAsgCopy : (w, r : List Place) -> Foot acc rhs w r ->
+               Foot acc (EAssign nid n nm Copy rhs) w r
+    FCall : (w, r : List Place) ->
+            CallFoot acc args (calleeModes acc callee) w r ->
+            Foot acc (ECall nid callee args) w r
+    FMalloc : (w, r : List Place) -> EvalFoot acc args w r ->
+              Foot acc (EMalloc mid args) w r
+    FUse : (w, r : List Place) -> EvalFoot acc args w r ->
+           Foot acc (EUse uid args) w r
+    FLit : Foot acc (ELit n) [] []
+    FNull : Foot acc (ENull nid) [] []
+    FUnsup : Foot acc (EUnsupported nid reason) [] []
+
+  ||| Inductive image of `argsEvalFoot`.
+  public export
+  data EvalFoot : List (String, List Consume) -> List Expr ->
+                  (w : List Place) -> (r : List Place) -> Type where
+    EFNil : EvalFoot acc [] [] []
+    EFCons : (w, r, ws, rs : List Place) ->
+             Foot acc e w r -> EvalFoot acc es ws rs ->
+             EvalFoot acc (e :: es) (w ++ ws) (r ++ rs)
+
+  ||| Inductive image of `argModeFoot`.
+  public export
+  data ModeFoot : List (String, List Consume) -> Expr -> Consume ->
+                  (w : List Place) -> (r : List Place) -> Type where
+    MFConsume : (w0, r0 : List Place) ->
+                doesConsume m = True ->
+                Foot acc e w0 r0 ->
+                ModeFoot acc e m (w0 ++ r0 ++ valuePlaces e) r0
+    MFBorrow : (w0, r0 : List Place) ->
+               doesConsume m = False ->
+               Foot acc e w0 r0 ->
+               ModeFoot acc e m w0 (r0 ++ valuePlaces e)
+
+  ||| Inductive image of `argsCallFoot`.
+  public export
+  data CallFoot : List (String, List Consume) -> List Expr ->
+                  List Consume -> (w : List Place) -> (r : List Place) -> Type where
+    CFNil : CallFoot acc [] ms [] []
+    CFCons : (w, r, ws, rs : List Place) ->
+             ModeFoot acc e (consumeHead ms) w r ->
+             CallFoot acc es (consumeTail ms) ws rs ->
+             CallFoot acc (e :: es) ms (w ++ ws) (r ++ rs)
+
+mutual
+  ||| Soundness: a `Foot` tree names the lists `argFootprint` computes.
+  export
+  footSound : {acc : List (String, List Consume)} -> {e : Expr} ->
+              {w, r : List Place} ->
+              Foot acc e w r -> argFootprint acc e = (w, r)
+  footSound FVar = Refl
+  footSound (FAsgPtr {d} w r ft) =
+    replace {p = \wr => (d :: fst wr, snd wr) = (d :: w, r)}
+      (sym (footSound ft)) Refl
+  footSound (FAsgCopy _ _ ft) = footSound ft
+  footSound (FCall _ _ cf) = callFootSound cf
+  footSound (FMalloc _ _ ef) = evalFootSound ef
+  footSound (FUse _ _ ef) = evalFootSound ef
+  footSound FLit = Refl
+  footSound FNull = Refl
+  footSound FUnsup = Refl
+
+  export
+  evalFootSound : {acc : List (String, List Consume)} ->
+                  {es : List Expr} -> {w, r : List Place} ->
+                  EvalFoot acc es w r -> argsEvalFoot acc es = (w, r)
+  evalFootSound EFNil = Refl
+  evalFootSound (EFCons {e} {es} w r ws rs ft ef) =
+    replace {p = \wr => (fst wr ++ fst (argsEvalFoot acc es),
+                         snd wr ++ snd (argsEvalFoot acc es)) = (w ++ ws, r ++ rs)}
+      (sym (footSound ft))
+      (replace {p = \wr => (w ++ fst wr, r ++ snd wr) = (w ++ ws, r ++ rs)}
+         (sym (evalFootSound ef)) Refl)
+
+  export
+  modeFootSound : {acc : List (String, List Consume)} ->
+                  {e : Expr} -> {m : Consume} -> {w, r : List Place} ->
+                  ModeFoot acc e m w r -> argModeFoot acc e m = (w, r)
+  modeFootSound {m = Never} (MFConsume _ _ pc _) =
+    void (falseNotTrue pc)
+  modeFootSound {m = May} {e} (MFConsume w0 r0 _ ft) =
+    replace {p = \wr => (fst wr ++ snd wr ++ valuePlaces e, snd wr) =
+                          (w0 ++ r0 ++ valuePlaces e, r0)}
+      (sym (footSound ft)) Refl
+  modeFootSound {m = Always} {e} (MFConsume w0 r0 _ ft) =
+    replace {p = \wr => (fst wr ++ snd wr ++ valuePlaces e, snd wr) =
+                          (w0 ++ r0 ++ valuePlaces e, r0)}
+      (sym (footSound ft)) Refl
+  modeFootSound {m = Never} {e} (MFBorrow w0 r0 _ ft) =
+    replace {p = \wr => (fst wr, snd wr ++ valuePlaces e) =
+                          (w0, r0 ++ valuePlaces e)}
+      (sym (footSound ft)) Refl
+  modeFootSound {m = May} (MFBorrow _ _ pc _) =
+    void (falseNotTrue (sym pc))
+  modeFootSound {m = Always} (MFBorrow _ _ pc _) =
+    void (falseNotTrue (sym pc))
+
+  export
+  callFootSound : {acc : List (String, List Consume)} ->
+                  {es : List Expr} -> {ms : List Consume} ->
+                  {w, r : List Place} ->
+                  CallFoot acc es ms w r -> argsCallFoot acc es ms = (w, r)
+  callFootSound CFNil = Refl
+  callFootSound (CFCons {e} {es} {ms} w r ws rs mf cf) =
+    replace {p = \wr => (fst wr ++ fst (argsCallFoot acc es (consumeTail ms)),
+                         snd wr ++ snd (argsCallFoot acc es (consumeTail ms))) =
+                          (w ++ ws, r ++ rs)}
+      (sym (modeFootSound mf))
+      (replace {p = \wr => (w ++ fst wr, r ++ snd wr) = (w ++ ws, r ++ rs)}
+         (sym (callFootSound cf)) Refl)
+
+mutual
+  ||| Completeness: `argFootprint` yields a `Foot` tree.
+  export
+  footOf : (acc : List (String, List Consume)) -> (e : Expr) ->
+           Foot acc e (fst (argFootprint acc e)) (snd (argFootprint acc e))
+  footOf acc (EVar _ p _) = FVar
+  footOf acc (EAssign _ d _ Ptr rhs) =
+    FAsgPtr (fst (argFootprint acc rhs)) (snd (argFootprint acc rhs))
+      (footOf acc rhs)
+  footOf acc (EAssign _ _ _ Copy rhs) =
+    FAsgCopy (fst (argFootprint acc rhs)) (snd (argFootprint acc rhs))
+      (footOf acc rhs)
+  footOf acc (ECall _ callee args) =
+    FCall (fst (argsCallFoot acc args (calleeModes acc callee)))
+          (snd (argsCallFoot acc args (calleeModes acc callee)))
+          (callFootOf acc args (calleeModes acc callee))
+  footOf acc (EMalloc _ args) =
+    FMalloc (fst (argsEvalFoot acc args)) (snd (argsEvalFoot acc args))
+      (evalFootOf acc args)
+  footOf acc (EUse _ args) =
+    FUse (fst (argsEvalFoot acc args)) (snd (argsEvalFoot acc args))
+      (evalFootOf acc args)
+  footOf acc (ELit _) = FLit
+  footOf acc (ENull _) = FNull
+  footOf acc (EUnsupported _ _) = FUnsup
+
+  export
+  evalFootOf : (acc : List (String, List Consume)) -> (es : List Expr) ->
+               EvalFoot acc es (fst (argsEvalFoot acc es))
+                               (snd (argsEvalFoot acc es))
+  evalFootOf _ [] = EFNil
+  evalFootOf acc (e :: es) =
+    EFCons (fst (argFootprint acc e)) (snd (argFootprint acc e))
+           (fst (argsEvalFoot acc es)) (snd (argsEvalFoot acc es))
+           (footOf acc e) (evalFootOf acc es)
+
+  export
+  modeFootOf : (acc : List (String, List Consume)) -> (e : Expr) ->
+               (m : Consume) ->
+               ModeFoot acc e m (fst (argModeFoot acc e m))
+                                (snd (argModeFoot acc e m))
+  modeFootOf acc e Never =
+    MFBorrow (fst (argFootprint acc e)) (snd (argFootprint acc e))
+      Refl (footOf acc e)
+  modeFootOf acc e May =
+    MFConsume (fst (argFootprint acc e)) (snd (argFootprint acc e))
+      Refl (footOf acc e)
+  modeFootOf acc e Always =
+    MFConsume (fst (argFootprint acc e)) (snd (argFootprint acc e))
+      Refl (footOf acc e)
+
+  export
+  callFootOf : (acc : List (String, List Consume)) -> (es : List Expr) ->
+               (ms : List Consume) ->
+               CallFoot acc es ms (fst (argsCallFoot acc es ms))
+                                  (snd (argsCallFoot acc es ms))
+  callFootOf _ [] _ = CFNil
+  callFootOf acc (e :: es) ms =
+    CFCons (fst (argModeFoot acc e (consumeHead ms)))
+           (snd (argModeFoot acc e (consumeHead ms)))
+           (fst (argsCallFoot acc es (consumeTail ms)))
+           (snd (argsCallFoot acc es (consumeTail ms)))
+           (modeFootOf acc e (consumeHead ms))
+           (callFootOf acc es (consumeTail ms))
+
+||| Inversion the frame lemmas use: a computed pair is a `Foot` tree.
+export
+footFrom : {acc : List (String, List Consume)} -> {e : Expr} ->
+           {w, r : List Place} ->
+           argFootprint acc e = (w, r) -> Foot acc e w r
+footFrom {acc} {e} eq =
+  replace {p = \wr => Foot acc e (fst wr) (snd wr)} eq (footOf acc e)
+
+export
+evalFootFrom : {acc : List (String, List Consume)} -> {es : List Expr} ->
+               {w, r : List Place} ->
+               argsEvalFoot acc es = (w, r) -> EvalFoot acc es w r
+evalFootFrom {acc} {es} eq =
+  replace {p = \wr => EvalFoot acc es (fst wr) (snd wr)} eq (evalFootOf acc es)
+
+export
+modeFootFrom : {acc : List (String, List Consume)} -> {e : Expr} ->
+               {m : Consume} -> {w, r : List Place} ->
+               argModeFoot acc e m = (w, r) -> ModeFoot acc e m w r
+modeFootFrom {acc} {e} {m} eq =
+  replace {p = \wr => ModeFoot acc e m (fst wr) (snd wr)} eq
+    (modeFootOf acc e m)
+
+export
+callFootFrom : {acc : List (String, List Consume)} -> {es : List Expr} ->
+               {ms : List Consume} -> {w, r : List Place} ->
+               argsCallFoot acc es ms = (w, r) -> CallFoot acc es ms w r
+callFootFrom {acc} {es} {ms} eq =
+  replace {p = \wr => CallFoot acc es ms (fst wr) (snd wr)} eq
+    (callFootOf acc es ms)
 
 ||| First argument whose `W` meets another argument's `R ∪ W`.
 public export
@@ -1373,6 +1597,26 @@ storedBorrowViaDestOverlaps :
     ]
     [Never, Never, Always] = True
 storedBorrowViaDestOverlaps = Refl
+
+||| Completeness of `Foot` at a variable and a pointer store.
+export
+footOfVar : footOf [] (EVar 0 1 "p") = FVar
+footOfVar = Refl
+
+export
+footOfPtrAssign :
+  footOf [] (EAssign 0 1 "r" Ptr (EVar 2 3 "p")) = FAsgPtr [] [3] FVar
+footOfPtrAssign = Refl
+
+||| Soundness of `Foot` agrees with `argFootprint` on those shapes.
+export
+footSoundVar : argFootprint [] (EVar 0 1 "p") = ([], [1])
+footSoundVar = footSound (footOf [] (EVar 0 1 "p"))
+
+export
+footSoundPtrAssign :
+  argFootprint [] (EAssign 0 1 "r" Ptr (EVar 2 3 "p")) = ([1], [3])
+footSoundPtrAssign = footSound (footOf [] (EAssign 0 1 "r" Ptr (EVar 2 3 "p")))
 
 ||| `f(g(r = p), r)`: no earlier borrow captured `p`. The only frame copy
 ||| of that address is the consume. `storedBorrowConsume` stays false;
@@ -5027,15 +5271,13 @@ ptrAssignW : {acc : List (String, List Consume)} ->
              {id : Nat} -> {d : Place} -> {nm : String} -> {rhs : Expr} ->
              fst (argFootprint acc (EAssign id d nm Ptr rhs)) =
                d :: fst (argFootprint acc rhs)
-ptrAssignW {acc} {rhs} with (argFootprint acc rhs)
-  ptrAssignW {acc} {rhs} | (w, r) = Refl
+ptrAssignW = Refl
 
 ptrAssignR : {acc : List (String, List Consume)} ->
              {id : Nat} -> {d : Place} -> {nm : String} -> {rhs : Expr} ->
              snd (argFootprint acc (EAssign id d nm Ptr rhs)) =
                snd (argFootprint acc rhs)
-ptrAssignR {acc} {rhs} with (argFootprint acc rhs)
-  ptrAssignR {acc} {rhs} | (w, r) = Refl
+ptrAssignR = Refl
 
 neverEqMay : Always = May -> Void
 neverEqMay Refl impossible
@@ -5060,27 +5302,23 @@ readSubR _ (EUnsupported _ _) = Refl
 
 modeWNever : {acc : List (String, List Consume)} -> {e : Expr} ->
              fst (argModeFoot acc e Never) = fst (argFootprint acc e)
-modeWNever {acc} {e} with (argFootprint acc e)
-  modeWNever {acc} {e} | (w, r) = Refl
+modeWNever = Refl
 
 modeRNever : {acc : List (String, List Consume)} -> {e : Expr} ->
              snd (argModeFoot acc e Never) =
                snd (argFootprint acc e) ++ valuePlaces e
-modeRNever {acc} {e} with (argFootprint acc e)
-  modeRNever {acc} {e} | (w, r) = Refl
+modeRNever = Refl
 
 modeWMay : {acc : List (String, List Consume)} -> {e : Expr} ->
            fst (argModeFoot acc e May) =
              fst (argFootprint acc e) ++ snd (argFootprint acc e) ++ valuePlaces e
-modeWMay {acc} {e} with (argFootprint acc e)
-  modeWMay {acc} {e} | (w, r) = Refl
+modeWMay = Refl
 
 modeWAlways : {acc : List (String, List Consume)} -> {e : Expr} ->
               fst (argModeFoot acc e Always) =
                 fst (argFootprint acc e) ++ snd (argFootprint acc e) ++
                   valuePlaces e
-modeWAlways {acc} {e} with (argFootprint acc e)
-  modeWAlways {acc} {e} | (w, r) = Refl
+modeWAlways = Refl
 
 modeWConsume : {acc : List (String, List Consume)} -> {e : Expr} ->
                {m : Consume} ->
@@ -5110,9 +5348,7 @@ argsEvalFootCons :
   argsEvalFoot acc (e :: es) =
     (fst (argFootprint acc e) ++ fst (argsEvalFoot acc es),
      snd (argFootprint acc e) ++ snd (argsEvalFoot acc es))
-argsEvalFootCons {acc} {e} {es} with (argFootprint acc e)
-  argsEvalFootCons {acc} {e} {es} | (w, r) with (argsEvalFoot acc es)
-    argsEvalFootCons {acc} {e} {es} | (w, r) | (ws, rs) = Refl
+argsEvalFootCons = Refl
 
 argsCallFootCons :
   {acc : List (String, List Consume)} -> {e : Expr} -> {es : List Expr} ->
@@ -5122,10 +5358,7 @@ argsCallFootCons :
        fst (argsCallFoot acc es (consumeTail ms)),
      snd (argModeFoot acc e (consumeHead ms)) ++
        snd (argsCallFoot acc es (consumeTail ms)))
-argsCallFootCons {acc} {e} {es} {ms} with (argModeFoot acc e (consumeHead ms))
-  argsCallFootCons {acc} {e} {es} {ms} | (w, r) with
-      (argsCallFoot acc es (consumeTail ms))
-    argsCallFootCons {acc} {e} {es} {ms} | (w, r) | (ws, rs) = Refl
+argsCallFootCons = Refl
 
 ||| `aliasBad` is the footprint overlap or empty-start `storedLiveGo`.
 ||| Unfolding lets `orFalseC` see the `||`; the function name alone does not.

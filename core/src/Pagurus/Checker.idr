@@ -321,6 +321,8 @@ assignAlias es ms =
   placesOverlap (aliasBorrowPlaces es ms) (aliasConsumePlaces es ms)
 
 ||| First argument whose value shares a place with both sides.
+||| Kept for the old shape predicates; `checkCall` diagnostics use
+||| `overlapArg` on the footprint list.
 public export
 mixedAliasArg : List Expr -> List Consume -> Expr
 mixedAliasArg [] _ = EUnsupported 0 "mixed alias"
@@ -1128,21 +1130,116 @@ public export
 storedBorrowConsume : List (String, List Consume) -> List Expr -> List Consume -> Bool
 storedBorrowConsume acc es ms = storedLiveGo acc [] es ms
 
-||| True when the call aliases a borrow with a consume, including nested
-||| callees in later arguments, a pointer assignment used as a borrow,
-||| and a later consume of a destination copied from an earlier borrow
-||| (`f(p, g(r = p), r)`).
+mutual
+  ||| Per-argument write and read places. `W` is stores, nested callee
+  ||| consumes, and nested frees. `R` is every place the expression may
+  ||| read. Nested `ECall` uses `calleeModes` (prototype `realloc` is
+  ||| `[Always]`). Consume-mode arguments additionally treat every place
+  ||| the argument reads or denotes as written (`argModeFoot`).
+  public export
+  argFootprint : List (String, List Consume) -> Expr -> (List Place, List Place)
+  argFootprint acc (EVar _ p _) = ([], [p])
+  argFootprint acc (EAssign _ d _ Ptr rhs) =
+    let (w, r) = argFootprint acc rhs
+    in (d :: w, r)
+  argFootprint acc (EAssign _ _ _ Copy rhs) = argFootprint acc rhs
+  argFootprint acc (ECall _ callee args) =
+    argsCallFoot acc args (calleeModes acc callee)
+  argFootprint acc (EMalloc _ args) = argsEvalFoot acc args
+  argFootprint acc (EUse _ args) = argsEvalFoot acc args
+  argFootprint _ (ELit _) = ([], [])
+  argFootprint _ (ENull _) = ([], [])
+  argFootprint _ (EUnsupported _ _) = ([], [])
+
+  ||| Union of evaluation footprints. No extra consume: `malloc` / `use`
+  ||| borrow every argument. Nested calls still consume via `ECall`.
+  public export
+  argsEvalFoot : List (String, List Consume) -> List Expr ->
+                 (List Place, List Place)
+  argsEvalFoot _ [] = ([], [])
+  argsEvalFoot acc (e :: es) =
+    let (w, r) = argFootprint acc e
+        (ws, rs) = argsEvalFoot acc es
+    in (w ++ ws, r ++ rs)
+
+  ||| Evaluation footprints plus this callee's consume of each argument.
+  public export
+  argsCallFoot : List (String, List Consume) -> List Expr -> List Consume ->
+                 (List Place, List Place)
+  argsCallFoot _ [] _ = ([], [])
+  argsCallFoot acc (e :: es) ms =
+    let (w, r) = argModeFoot acc e (consumeHead ms)
+        (ws, rs) = argsCallFoot acc es (consumeTail ms)
+    in (w ++ ws, r ++ rs)
+
+  ||| One argument at a call: consume-mode writes everything the
+  ||| expression reads or denotes; borrow-mode adds those denotations
+  ||| to the read set only.
+  public export
+  argModeFoot : List (String, List Consume) -> Expr -> Consume ->
+                (List Place, List Place)
+  argModeFoot acc e m =
+    let (w, r) = argFootprint acc e
+    in if doesConsume m
+         then (w ++ r ++ valuePlaces e, r)
+         else (w, r ++ valuePlaces e)
+
+||| `(W_i, R_i)` for each argument of a call with these modes.
+public export
+callFoots : List (String, List Consume) -> List Expr -> List Consume ->
+            List (List Place, List Place)
+callFoots _ [] _ = []
+callFoots acc (e :: es) ms =
+  argModeFoot acc e (consumeHead ms) :: callFoots acc es (consumeTail ms)
+
+||| `W ∩ (R ∪ W')` for one pair, then the rest of the list.
+public export
+footHits : (List Place, List Place) -> List (List Place, List Place) -> Bool
+footHits _ [] = False
+footHits (w, r) ((w2, r2) :: rest) =
+  placesOverlap w (r2 ++ w2) || placesOverlap w2 (r ++ w) ||
+    footHits (w, r) rest
+
+||| Some pair `i ≠ j` has `W_i ∩ (R_j ∪ W_j) ≠ ∅`. Order-independent.
+public export
+footsOverlap : List (List Place, List Place) -> Bool
+footsOverlap [] = False
+footsOverlap (f :: fs) = footHits f fs || footsOverlap fs
+
+||| True when the call's argument footprints are not pairwise disjoint.
+public export
+callOverlap : List (String, List Consume) -> List Expr -> List Consume -> Bool
+callOverlap acc es ms = footsOverlap (callFoots acc es ms)
+
+||| The C11 §6.5p2 / post-call aliasing accept condition.
+public export
+callDisjoint : List (String, List Consume) -> List Expr -> List Consume -> Bool
+callDisjoint acc es ms = not (callOverlap acc es ms)
+
+||| First argument whose `W` meets another argument's `R ∪ W`.
+public export
+overlapArg : List Expr -> List (List Place, List Place) -> Expr
+overlapArg [] _ = EUnsupported 0 "mixed alias"
+overlapArg (e :: _) [] = e
+overlapArg (e :: es) (f :: fs) =
+  if footHits f fs then e else overlapArg es fs
+
+||| True when the call aliases a write with another argument's read or
+||| write. The structural, order-independent footprint rule replaces
+||| `mixedAlias` / `nestedMixed` / `assignAlias` at `checkCall`.
+||| `storedBorrowConsume` stays as a disjunct so Restore can still read
+||| empty-start `storedLiveGo` off `aliasBad = False` until the M2
+||| subsumption lemma lands; it does not accept anything the footprint
+||| rule rejects.
 public export
 aliasBad : Ctx -> List Expr -> String -> Bool
 aliasBad ctx args callee =
-  mixedAlias args (funModes ctx callee)
-    || nestedMixed ctx args (funModes ctx callee)
-    || assignAlias args (funModes ctx callee)
+  callOverlap ctx.summaries args (funModes ctx callee)
     || storedBorrowConsume ctx.summaries args (funModes ctx callee)
 
-||| `f(p, malloc(r = p, g(r)))` with modes `[Never, Always]`. The outer
-||| flags stay false: `g` frees `r`, not `p`, and a consume argument is
-||| not a `nestBorrowPlaces` entry. `checkArgsBorrow` rejects the malloc.
+||| `f(p, malloc(r = p, g(r)))` with modes `[Never, Always]`. The malloc
+||| argument reads `p` and frees `r`; consume-mode writes those reads, so
+||| the borrow of `p` overlaps. Previously only `checkArgsBorrow` rejected.
 export
 mallocHeldOuterAlias :
   aliasBad
@@ -1153,10 +1250,11 @@ mallocHeldOuterAlias :
         , ECall 6 "g" [EVar 7 4 "r"]
         ]
     ]
-    "f" = False
+    "f" = True
 mallocHeldOuterAlias = Refl
 
-||| `g(p, p = NULL)` stays accepted. Null is not a free of the borrowed place.
+||| `g(p, p = NULL)`: the assignment writes `p` unsequenced with the
+||| other argument's read of `p` (C11 §6.5p2). Previously accepted.
 export
 nullAssignNotAlias :
   aliasBad
@@ -1164,7 +1262,7 @@ nullAssignNotAlias :
     [ EVar 0 1 "p"
     , EAssign 2 1 "p" Ptr (ENull 3)
     ]
-    "g" = False
+    "g" = True
 nullAssignNotAlias = Refl
 
 ||| `f(p, g(r = p), r)`: an earlier borrow captured `p`, `g` copies it into
@@ -1226,7 +1324,9 @@ storedBorrowViaDest :
 storedBorrowViaDest = Refl
 
 ||| `f(g(r = p), r)`: no earlier borrow captured `p`. The only frame copy
-||| of that address is the consume.
+||| of that address is the consume. `storedBorrowConsume` stays false;
+||| the footprint rule rejects the unsequenced store of `r` with the
+||| later consume of `r`.
 export
 storedBorrowMoveDest :
   storedBorrowConsume []
@@ -1243,8 +1343,110 @@ storedBorrowMoveAlias :
     [ ECall 0 "g" [EAssign 1 2 "r" Ptr (EVar 3 4 "p")]
     , EVar 5 2 "r"
     ]
-    "f" = False
+    "f" = True
 storedBorrowMoveAlias = Refl
+
+||| `g(p, p)` with Never then Always: the consume writes `p`, the borrow
+||| reads it.
+export
+footprintDupVar :
+  aliasBad
+    (MkCtx [("g", [Never, Always])] ["g"])
+    [ EVar 0 1 "p"
+    , EVar 2 1 "p"
+    ]
+    "g" = True
+footprintDupVar = Refl
+
+||| `f(q = malloc(), q)`: the assignment writes `q`, the consume writes
+||| and reads `q`.
+export
+footprintAssignMalloc :
+  aliasBad
+    (MkCtx [("f", [Never, Always])] ["f"])
+    [ EAssign 0 1 "q" Ptr (EMalloc 2 [])
+    , EVar 3 1 "q"
+    ]
+    "f" = True
+footprintAssignMalloc = Refl
+
+||| `f(r = g(q = p), h(q))`: `g` stores `q`, `h` frees `q`.
+export
+footprintNestedStoreFree :
+  aliasBad
+    (MkCtx [("f", [Never, Always]), ("g", [Never]), ("h", [Always])]
+           ["f", "g", "h"])
+    [ EAssign 0 1 "r" Ptr
+        (ECall 2 "g" [EAssign 3 4 "q" Ptr (EVar 5 6 "p")])
+    , ECall 7 "h" [EVar 8 4 "q"]
+    ]
+    "f" = True
+footprintNestedStoreFree = Refl
+
+||| Distinct owners: `f(q = malloc(), p)` stays disjoint.
+export
+footprintAssignDistinct :
+  aliasBad
+    (MkCtx [("f", [Never, Always])] ["f"])
+    [ EAssign 0 1 "q" Ptr (EMalloc 2 [])
+    , EVar 3 4 "p"
+    ]
+    "f" = False
+footprintAssignDistinct = Refl
+
+||| `f(g(p), h(q))` with distinct places stays disjoint.
+export
+footprintNestedDistinct :
+  aliasBad
+    (MkCtx [("f", [Never, Always]), ("g", [Never]), ("h", [Always])]
+           ["f", "g", "h"])
+    [ ECall 0 "g" [EVar 1 2 "p"]
+    , ECall 3 "h" [EVar 4 5 "q"]
+    ]
+    "f" = False
+footprintNestedDistinct = Refl
+
+||| `f(g(p), p)`: the borrow argument reads `p`, the consume writes it.
+||| Conservative: `g`'s result may alias `p`. Previously accepted.
+export
+footprintCallThenVar :
+  aliasBad
+    (MkCtx [("f", [Never, Always]), ("g", [Never])] ["f", "g"])
+    [ ECall 0 "g" [EVar 1 2 "p"]
+    , EVar 3 2 "p"
+    ]
+    "f" = True
+footprintCallThenVar = Refl
+
+||| `f(g(p), h(p))` with `h` Always: evaluating `h(p)` frees `p` while
+||| `g(p)` reads it. Previously `nestedMixed` / `aliasBad` both false.
+export
+footprintNestedBare :
+  aliasBad
+    (MkCtx [("f", [Never, Always]), ("g", [Never]), ("h", [Always])]
+           ["f", "g", "h"])
+    [ ECall 0 "g" [EVar 1 2 "p"]
+    , ECall 3 "h" [EVar 4 2 "p"]
+    ]
+    "f" = True
+footprintNestedBare = Refl
+
+||| `f(malloc(r = p), r)`: `r` is stored under malloc, then consumed.
+export
+footprintMallocStoreConsume :
+  aliasBad
+    (MkCtx [("f", [Never, Always])] ["f"])
+    [ EMalloc 0 [EAssign 1 2 "r" Ptr (EVar 3 4 "p")]
+    , EVar 5 2 "r"
+    ]
+    "f" = True
+footprintMallocStoreConsume = Refl
+
+||| Empty argument list.
+export
+footprintNil :
+  aliasBad (MkCtx [("f", [Never])] ["f"]) [] "f" = False
+footprintNil = Refl
 
 ||| `f(malloc(r = p), r)`: `malloc` returns a fresh cell, not `p`.
 export
@@ -1302,10 +1504,9 @@ storedLiveFreesAlias :
     "f" = True
 storedLiveFreesAlias = Refl
 
-||| `f(r = p, r = malloc(), g(r))`. Both stores are consumes, so `r` is
-||| not a borrow place. `r = malloc()` overwrites `r` with a fresh cell
-||| and `xferLive` forgets the name before `g` frees it. `p`'s cell stays
-||| live. `borrowHeldFrees` is still true: `nestHeld` keeps the name `r`.
+||| `f(r = p, r = malloc(), g(r))`. Two unsequenced writes of `r`, and
+||| `g` frees `r`. The order-sensitive overwrite analysis accepted this;
+||| the footprint rule rejects it.
 export
 storedLiveOverwriteAlias :
   aliasBad
@@ -1314,7 +1515,7 @@ storedLiveOverwriteAlias :
     , EAssign 3 4 "r" Ptr (EMalloc 5 [])
     , ECall 6 "g" [EVar 7 4 "r"]
     ]
-    "f" = False
+    "f" = True
 storedLiveOverwriteAlias = Refl
 
 ||| The same overwrite, starting from the live set `r = p` captured.
@@ -1669,8 +1870,8 @@ mutual
 
   public export
   definedCallFrom : Bool -> Ctx -> Scopes -> Nat -> String -> List Expr -> List Consume -> Either Diag Scopes
-  definedCallFrom True _ _ nid callee args modes =
-    Left (mixedAliasDiag nid callee (mixedAliasArg args modes))
+  definedCallFrom True ctx _ nid callee args modes =
+    Left (mixedAliasDiag nid callee (overlapArg args (callFoots ctx.summaries args modes)))
   definedCallFrom False ctx sc _ callee args modes =
     checkArgsModes ctx sc callee args modes
 
@@ -1946,17 +2147,21 @@ storedBorrowConsumeNil : (acc : List (String, List Consume)) -> (es : List Expr)
   storedBorrowConsume acc es [] = False
 storedBorrowConsumeNil acc es = storedLiveGoNil acc es
 
+||| Empty argument list: no pair to overlap. Nonempty extras with
+||| `funModes = []` are all consume (`consumeHead [] = Always`) and may
+||| overlap, so the old "any args, empty modes" fact is false.
+export
+aliasBadNilArgs :
+  {ctx : Ctx} -> {callee : String} ->
+  aliasBad ctx [] callee = False
+aliasBadNilArgs = Refl
+
 export
 aliasBadNilModes :
-  {ctx : Ctx} -> {callee : String} -> {args : List Expr} ->
+  {ctx : Ctx} -> {callee : String} ->
   funModes ctx callee = [] ->
-  aliasBad ctx args callee = False
-aliasBadNilModes {ctx} {callee} {args} prf =
-  rewrite prf in
-    rewrite mixedAliasNilModes args in
-      rewrite nestedMixedNilModes ctx args in
-        rewrite assignAliasNilModes args in
-          rewrite storedBorrowConsumeNil ctx.summaries args in Refl
+  aliasBad ctx [] callee = False
+aliasBadNilModes _ = Refl
 
 trueNotFalseC : Not (True = False)
 trueNotFalseC Refl impossible
@@ -2716,7 +2921,7 @@ definedCallFromTrue :
   {ctx : Ctx} -> {sc : Scopes} -> {nid : Nat} -> {callee : String} ->
   {args : List Expr} -> {modes : List Consume} ->
   definedCallFrom True ctx sc nid callee args modes =
-    Left (mixedAliasDiag nid callee (mixedAliasArg args modes))
+    Left (mixedAliasDiag nid callee (overlapArg args (callFoots ctx.summaries args modes)))
 definedCallFromTrue = Refl
 
 export
@@ -2738,7 +2943,8 @@ checkCallMixedAlias :
   isDefined ctx callee = True ->
   aliasBad ctx args callee = True ->
   checkCall ctx sc nid callee args =
-    Left (mixedAliasDiag nid callee (mixedAliasArg args (funModes ctx callee)))
+    Left (mixedAliasDiag nid callee
+      (overlapArg args (callFoots ctx.summaries args (funModes ctx callee))))
 checkCallMixedAlias pb pd pbad = rewrite pb in rewrite pd in rewrite pbad in Refl
 
 leftNotRightChk : {0 d : a} -> {0 x : b} -> Not (Left d = Right x)
@@ -4664,26 +4870,21 @@ coveredStored {acc} {live} {es} {ms} cov modesEq nLive nNest s0 =
        (callArgsQuiet (nestedGoAppendQuiet nLive nNest))
        s0 subJoinL subJoinR
 
-||| `aliasBad` is the four-flag disjunction. Unfolding it lets `orFalseC`
-||| see the `||` chain; the function name alone does not.
+||| `aliasBad` is the footprint overlap or empty-start `storedLiveGo`.
+||| Unfolding lets `orFalseC` see the `||`; the function name alone does not.
 aliasBadOpen : (ctx : Ctx) -> (es : List Expr) -> (callee : String) ->
   aliasBad ctx es callee =
-    mixedAlias es (funModes ctx callee)
-      || nestedMixed ctx es (funModes ctx callee)
-      || assignAlias es (funModes ctx callee)
+    callOverlap ctx.summaries es (funModes ctx callee)
       || storedBorrowConsume ctx.summaries es (funModes ctx callee)
 aliasBadOpen _ _ _ = Refl
 
-||| The fourth flag is empty-start `storedLiveGo` at `funModes`.
+||| Empty-start `storedLiveGo` is the second flag of `aliasBad`.
 aliasStoredQuiet : {ctx : Ctx} -> {es : List Expr} -> {callee : String} ->
                    aliasBad ctx es callee = False ->
                    storedLiveGo ctx.summaries [] es (funModes ctx callee) = False
 aliasStoredQuiet {ctx} {es} {callee} prf =
   let opened = replace {p = \b => b = False} (aliasBadOpen ctx es callee) prf
-      (_, r1) = orFalseC _ _ opened
-      (_, r2) = orFalseC _ _ r1
-      (_, st) = orFalseC _ _ r2
-  in st
+  in snd (orFalseC _ _ opened)
 
 ||| `modesCover []` holds only for an empty argument list, and that walk
 ||| is quiet at every live set.
@@ -4696,7 +4897,7 @@ storedLiveGoCoverNil _ _ [] _ = Refl
 storedLiveGoCoverNil _ _ (_ :: _) prf = void (trueNotFalseC (sym prf))
 
 ||| An accepted defined call whose modes cover its arguments has a quiet
-||| pin-live `storedLiveGo`. Empty-start quiet is `aliasBad`'s fourth
+||| pin-live `storedLiveGo`. Empty-start quiet is `aliasBad`'s second
 ||| flag, from `checkCall = Right`. The two `nestedGo` facts stay
 ||| premises: they are the outer `Never` head, not this call. A short
 ||| mode list is excluded (`h(f(p))`, `f` at `[]`). This does not say

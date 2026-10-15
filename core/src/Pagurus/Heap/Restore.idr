@@ -21,6 +21,7 @@ import Pagurus.Heap.Update
 import Pagurus.Heap.Act
 import Pagurus.Heap.Frame
 import Pagurus.Heap.Pres
+import Pagurus.Heap.Footprint
 import Pagurus.Heap.Drop
 import Pagurus.Heap.Decl
 import Pagurus.Heap.Lit
@@ -635,6 +636,16 @@ ownLive : {env : HEnv} -> {h : Heap} -> {sc : Scopes} -> {a : Addr} ->
   OverApprox env h sc -> Own env sc a -> cell h a = Just Live
 ownLive oa own =
   oaLive oa own.ownQ own.ownSt a own.ownLp own.ownLook own.ownSafe
+
+||| Frame lemma for the owner place: outside `W`, the lookup is unchanged.
+export
+ownerEnvStay :
+  {env, env' : HEnv} -> {w : List Place} -> {sc : Scopes} -> {a : Addr} ->
+  (own : Own env sc a) ->
+  EnvFrame env env' w ->
+  placeIn own.ownQ w = False ->
+  lookupH own.ownQ env' = Just (HVPtr a)
+ownerEnvStay own fr nin = trans (fr own.ownQ nin) own.ownLook
 
 ownRewrite : {env : HEnv} -> {sc1, sc2 : Scopes} -> {a : Addr} ->
   sc1 = sc2 -> Own env sc1 a -> Own env sc2 a

@@ -281,6 +281,19 @@ ghostCopyLeakCopyOfPtrMalloc :
   ghostCopyLeak (EAssign 0 1 "x" Copy (EAssign 2 3 "r" Ptr (EMalloc 4 []))) = True
 ghostCopyLeakCopyOfPtrMalloc = Refl
 
+||| `n = use(n = x)`: the use is not a live pointer, so the outer dest
+||| is not a value-place.
+export
+nestedUseAssignNotLive :
+  maybeLivePtr (EUse 2 [EAssign 3 1 "n" Ptr (EVar 4 2 "x")]) = False
+nestedUseAssignNotLive = Refl
+
+export
+nestedUseAssignValuePlaces :
+  valuePlaces (EAssign 0 1 "n" Ptr
+    (EUse 2 [EAssign 3 1 "n" Ptr (EVar 4 2 "x")])) = []
+nestedUseAssignValuePlaces = Refl
+
 ||| True when any place is in both lists.
 public export
 placesHitBoth : List Place -> List Place -> List Place -> Bool
@@ -1423,6 +1436,27 @@ footFrom : {acc : List (String, List Consume)} -> {e : Expr} ->
 footFrom {acc} {e} eq =
   replace {p = \wr => Foot acc e (fst wr) (snd wr)} eq (footOf acc e)
 
+||| Write set of `n = use(n = x)` is `[n, n]`. The owner intern `x` is
+||| only in `R`, so a borrow `nin` of `W` holds while the inner assign
+||| destOwns onto `n` and the outer Ghost store sets `n` to `AEmpty`.
+export
+nestedUseAssignWrites :
+  fst (argFootprint [] (EAssign 0 1 "n" Ptr
+        (EUse 2 [EAssign 3 1 "n" Ptr (EVar 4 2 "x")]))) = 1 :: 1 :: []
+nestedUseAssignWrites = Refl
+
+export
+nestedUseAssignMissesOwner :
+  placeIn 2 (fst (argFootprint [] (EAssign 0 1 "n" Ptr
+        (EUse 2 [EAssign 3 1 "n" Ptr (EVar 4 2 "x")])))) = False
+nestedUseAssignMissesOwner = Refl
+
+export
+nestedUseAssignReadsOwner :
+  snd (argFootprint [] (EAssign 0 1 "n" Ptr
+        (EUse 2 [EAssign 3 1 "n" Ptr (EVar 4 2 "x")]))) = 2 :: []
+nestedUseAssignReadsOwner = Refl
+
 export
 evalFootFrom : {acc : List (String, List Consume)} -> {es : List Expr} ->
                {w, r : List Place} ->
@@ -2020,6 +2054,22 @@ assignPtrFrom _ _ n _ (Right (sc', Ghost)) =
   Right (setPlace n (Pagurus.Status.singleton AEmpty) sc')
 assignPtrFrom _ _ n _ (Right (sc', Null)) =
   Right (setPlace n (Pagurus.Status.singleton ANull) sc')
+
+||| A Ghost `takeOwner` of the rhs stores `AEmpty` at the dest. Combined
+||| with an inner destOwn onto `n`, Own of the source cell is dropped.
+export
+nestedGhostStoreEmpty :
+  {sc : Scopes} ->
+  takeAssignPtrFrom 0 1 "n" (Right (sc, Ghost)) =
+    Right (setPlace 1 (Pagurus.Status.singleton AEmpty) sc, Ghost)
+nestedGhostStoreEmpty = Refl
+
+export
+nestedGhostAssignEmpty :
+  {sc : Scopes} ->
+  assignPtrFrom False 0 1 "n" (Right (sc, Ghost)) =
+    Right (setPlace 1 (Pagurus.Status.singleton AEmpty) sc)
+nestedGhostAssignEmpty = Refl
 
 public export
 declPtrFrom : Nat -> Place -> String -> Either Diag (Scopes, Flag) -> Either Diag Scopes

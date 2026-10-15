@@ -5380,6 +5380,310 @@ aliasStoredQuiet {ctx} {es} {callee} prf =
   let opened = replace {p = \b => b = False} (aliasBadOpen ctx es callee) prf
   in snd (orFalseC _ _ opened)
 
+||| `callOverlap` is the first flag of `aliasBad`.
+export
+aliasCallQuiet : {ctx : Ctx} -> {es : List Expr} -> {callee : String} ->
+                 aliasBad ctx es callee = False ->
+                 callOverlap ctx.summaries es (funModes ctx callee) = False
+aliasCallQuiet {ctx} {es} {callee} prf =
+  let opened = replace {p = \b => b = False} (aliasBadOpen ctx es callee) prf
+  in fst (orFalseC _ _ opened)
+
+||| Unfold `callOverlap` on a cons so `orFalseC` sees the `||`.
+export
+callOverlapOpen :
+  {acc : List (String, List Consume)} ->
+  {e : Expr} -> {es : List Expr} -> {ms : List Consume} ->
+  callOverlap acc (e :: es) ms =
+    footHits (argModeFoot acc e (consumeHead ms))
+      (callFoots acc es (consumeTail ms))
+    || callOverlap acc es (consumeTail ms)
+callOverlapOpen = Refl
+
+||| Tail footprints stay disjoint.
+export
+callOverlapTail :
+  {acc : List (String, List Consume)} ->
+  {e : Expr} -> {es : List Expr} -> {ms : List Consume} ->
+  callOverlap acc (e :: es) ms = False ->
+  callOverlap acc es (consumeTail ms) = False
+callOverlapTail {acc} {e} {es} {ms} prf =
+  snd (orFalseC _ _
+    (replace {p = \b => b = False} (callOverlapOpen {acc} {e} {es} {ms}) prf))
+
+||| Head-vs-rest footprints stay disjoint.
+export
+callOverlapHits :
+  {acc : List (String, List Consume)} ->
+  {e : Expr} -> {es : List Expr} -> {ms : List Consume} ->
+  callOverlap acc (e :: es) ms = False ->
+  footHits (argModeFoot acc e (consumeHead ms))
+    (callFoots acc es (consumeTail ms)) = False
+callOverlapHits {acc} {e} {es} {ms} prf =
+  fst (orFalseC _ _
+    (replace {p = \b => b = False} (callOverlapOpen {acc} {e} {es} {ms}) prf))
+
+pairEq : (x : (a, b)) -> (fst x, snd x) = x
+pairEq (u, v) = Refl
+
+||| A consume-mode write set includes `valuePlaces`.
+export
+valueInConsumeW :
+  {acc : List (String, List Consume)} -> {e : Expr} -> {m : Consume} ->
+  {p : Place} ->
+  doesConsume m = True ->
+  placeIn p (valuePlaces e) = True ->
+  placeIn p (fst (argModeFoot acc e m)) = True
+valueInConsumeW {acc} {e} {m} {p} pc pin =
+  replace {p = \xs => placeIn p xs = True}
+    (sym (modeWConsume {acc} {e} {m} pc))
+    (placeInJoinR {p} {xs = fst (argFootprint acc e)}
+       {ys = snd (argFootprint acc e) ++ valuePlaces e}
+       (placeInJoinR {p} {xs = snd (argFootprint acc e)}
+          {ys = valuePlaces e} pin))
+
+||| A borrow-mode read set includes `valuePlaces`.
+export
+valueInBorrowR :
+  {acc : List (String, List Consume)} -> {e : Expr} -> {m : Consume} ->
+  {p : Place} ->
+  doesConsume m = False ->
+  placeIn p (valuePlaces e) = True ->
+  placeIn p (snd (argModeFoot acc e m)) = True
+valueInBorrowR {acc} {e} {m = Never} {p} _ pin =
+  placeInJoinR {p} {xs = snd (argFootprint acc e)} {ys = valuePlaces e} pin
+valueInBorrowR {m = May} pc _ = void (trueNotFalseC pc)
+valueInBorrowR {m = Always} pc _ = void (trueNotFalseC pc)
+
+||| `p` in `W` and in a later `R ∪ W` makes `footHits` true.
+hitsFromWriteRead :
+  {w, r, w2, r2 : List Place} -> {rest : List (List Place, List Place)} ->
+  {p : Place} ->
+  placeIn p w = True ->
+  placeIn p (r2 ++ w2) = True ->
+  footHits (w, r) ((w2, r2) :: rest) = True
+hitsFromWriteRead {w} {r} {r2} {w2} {rest} pinW pinR =
+  rewrite overlapBuild {xs = w} {ys = r2 ++ w2} pinW pinR in
+    orTrueLeft (placesOverlap w2 (r ++ w) || footHits (w, r) rest)
+
+||| `p` in this `R ∪ W` and in a later `W` makes `footHits` true.
+hitsFromReadWrite :
+  {w, r, w2, r2 : List Place} -> {rest : List (List Place, List Place)} ->
+  {p : Place} ->
+  placeIn p (r ++ w) = True ->
+  placeIn p w2 = True ->
+  footHits (w, r) ((w2, r2) :: rest) = True
+hitsFromReadWrite {w} {r} {w2} {r2} {rest} pinR pinW =
+  rewrite overlapBuild {xs = w2} {ys = r ++ w} pinW pinR in
+    rewrite orTrueLeft (footHits (w, r) rest) in
+      orTrueRight (placesOverlap w (r2 ++ w2))
+
+||| A later `footHits` stays a `footHits` after one more pair.
+hitsSuff :
+  {w, r : List Place} -> {f : (List Place, List Place)} ->
+  {rest : List (List Place, List Place)} ->
+  footHits (w, r) rest = True ->
+  footHits (w, r) (f :: rest) = True
+hitsSuff {f} {w} {r} {rest} prf =
+  replace {p = \pair => footHits (w, r) (pair :: rest) = True}
+    (pairEq f)
+    (suffGo (fst f) (snd f) prf)
+  where
+    suffGo : (w2, r2 : List Place) ->
+             footHits (w, r) rest = True ->
+             footHits (w, r) ((w2, r2) :: rest) = True
+    suffGo w2 r2 prf0 =
+      rewrite prf0 in
+        rewrite orTrueRight (placesOverlap w2 (r ++ w)) in
+          orTrueRight (placesOverlap w (r2 ++ w2))
+
+borrowRHasValue :
+  {acc : List (String, List Consume)} -> {e : Expr} -> {m : Consume} ->
+  {p : Place} ->
+  doesConsume m = False ->
+  placeIn p (valuePlaces e) = True ->
+  placeIn p (snd (argModeFoot acc e m) ++ fst (argModeFoot acc e m)) = True
+borrowRHasValue {acc} {e} {p} pc pin =
+  placeInAppendL (valueInBorrowR {acc} {e} pc pin)
+
+hitHereConsume :
+  {acc : List (String, List Consume)} ->
+  {e, e1 : Expr} -> {m, m1 : Consume} -> {es1 : List Expr} ->
+  {ms1 : List Consume} -> {p : Place} ->
+  doesConsume m = False ->
+  doesConsume m1 = True ->
+  placeIn p (valuePlaces e) = True ->
+  placeIn p (valuePlaces e1) = True ->
+  footHits (argModeFoot acc e m)
+    (argModeFoot acc e1 m1 :: callFoots acc es1 ms1) = True
+hitHereConsume {acc} {e} {e1} {m} {m1} {es1} {ms1} {p} pc pc1 pinH pinV =
+  replace {p = \wr => footHits wr (argModeFoot acc e1 m1 :: callFoots acc es1 ms1) = True}
+    (pairEq (argModeFoot acc e m))
+    (replace {p = \wr =>
+                footHits (fst (argModeFoot acc e m), snd (argModeFoot acc e m))
+                  (wr :: callFoots acc es1 ms1) = True}
+       (pairEq (argModeFoot acc e1 m1))
+       (hitsFromReadWrite {w = fst (argModeFoot acc e m)}
+          {r = snd (argModeFoot acc e m)}
+          {w2 = fst (argModeFoot acc e1 m1)}
+          {r2 = snd (argModeFoot acc e1 m1)}
+          {rest = callFoots acc es1 ms1}
+          (borrowRHasValue {acc} {e} {m} {p} pc pinH)
+          (valueInConsumeW {acc} {e = e1} {m = m1} {p} pc1 pinV)))
+
+||| Later consume `valuePlaces` sit in that argument's write set, so a
+||| borrow head that already named `p` overlaps.
+laterConsumeHits :
+  {acc : List (String, List Consume)} ->
+  {e : Expr} -> {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+  {p : Place} ->
+  doesConsume m = False ->
+  placeIn p (valuePlaces e) = True ->
+  placeIn p (aliasConsumePlaces es ms) = True ->
+  footHits (argModeFoot acc e m) (callFoots acc es ms) = True
+laterConsumeHits {es = []} _ _ pinC =
+  void (trueNotFalseC (sym pinC))
+laterConsumeHits {acc} {e} {es = e1 :: es1} {m} {ms = []} {p} pc pinH pinC =
+  case inAppend {p} {xs = valuePlaces e1} {ys = aliasConsumePlaces es1 []} pinC of
+    Left pinV =>
+      hitHereConsume {acc} {e} {e1} {m} {m1 = Always} {es1} {ms1 = []} {p}
+        pc Refl pinH pinV
+    Right pinRest =>
+      replace {p = \wr => footHits wr (callFoots acc (e1 :: es1) []) = True}
+        (pairEq (argModeFoot acc e m))
+        (hitsSuff {w = fst (argModeFoot acc e m)} {r = snd (argModeFoot acc e m)}
+           {f = argModeFoot acc e1 Always}
+           (replace {p = \wr => footHits wr (callFoots acc es1 []) = True}
+              (sym (pairEq (argModeFoot acc e m)))
+              (laterConsumeHits {acc} {e} {es = es1} {m} {ms = []} {p}
+                 pc pinH pinRest)))
+laterConsumeHits {acc} {e} {es = e1 :: es1} {m} {ms = m1 :: ms1} {p} pc pinH pinC =
+  go (doesConsume m1) Refl
+  where
+    go : (b : Bool) -> doesConsume m1 = b ->
+         footHits (argModeFoot acc e m) (callFoots acc (e1 :: es1) (m1 :: ms1)) = True
+    rec : {ms' : List Consume} ->
+          placeIn p (aliasConsumePlaces es1 ms') = True ->
+          footHits (fst (argModeFoot acc e m), snd (argModeFoot acc e m))
+            (callFoots acc es1 ms') = True
+    rec {ms'} pinRest =
+      replace {p = \wr => footHits wr (callFoots acc es1 ms') = True}
+        (sym (pairEq (argModeFoot acc e m)))
+        (laterConsumeHits {acc} {e} {es = es1} {m} {ms = ms'} {p} pc pinH pinRest)
+    go True pc1 =
+      case inAppend {p} {xs = valuePlaces e1} {ys = aliasConsumePlaces es1 ms1}
+             (replace {p = \ps => placeIn p ps = True}
+                (aliasConsumeConsume {e = e1} {es = es1} {m = m1} {ms = ms1} pc1)
+                pinC) of
+        Left pinV =>
+          hitHereConsume {acc} {e} {e1} {m} {m1} {es1} {ms1} {p} pc pc1 pinH pinV
+        Right pinRest =>
+          replace {p = \wr => footHits wr (callFoots acc (e1 :: es1) (m1 :: ms1)) = True}
+            (pairEq (argModeFoot acc e m))
+            (hitsSuff {w = fst (argModeFoot acc e m)} {r = snd (argModeFoot acc e m)}
+               {f = argModeFoot acc e1 m1} (rec pinRest))
+    go False pc1 =
+      replace {p = \wr => footHits wr (callFoots acc (e1 :: es1) (m1 :: ms1)) = True}
+        (pairEq (argModeFoot acc e m))
+        (hitsSuff {w = fst (argModeFoot acc e m)} {r = snd (argModeFoot acc e m)}
+           {f = argModeFoot acc e1 m1}
+           (rec (replace {p = \ps => placeIn p ps = True}
+                   (aliasConsumeBorrow {e = e1} {es = es1} {m = m1} {ms = ms1} pc1)
+                   pinC)))
+
+||| A borrow head whose value is `p` is not a later consume.
+export
+consumeQuietFromOverlap :
+  {acc : List (String, List Consume)} ->
+  {e : Expr} -> {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+  {p : Place} ->
+  doesConsume m = False ->
+  placeIn p (valuePlaces e) = True ->
+  callOverlap acc (e :: es) (m :: ms) = False ->
+  placeIn p (aliasConsumePlaces es ms) = False
+consumeQuietFromOverlap {acc} {e} {es} {m} {ms} {p} pc pin ov =
+  missGo (placeIn p (aliasConsumePlaces es ms)) Refl
+  where
+    missGo : (b : Bool) -> placeIn p (aliasConsumePlaces es ms) = b ->
+             placeIn p (aliasConsumePlaces es ms) = False
+    missGo False pb = pb
+    missGo True pb =
+      void (trueNotFalseC
+        (trans (sym (laterConsumeHits {acc} {e} {es} {m} {ms} {p} pc pin pb))
+          (callOverlapHits {acc} {e} {es} {ms = m :: ms} ov)))
+
+||| Empty argument list: no pair to overlap.
+export
+callOverlapNil : {acc : List (String, List Consume)} -> {ms : List Consume} ->
+                 callOverlap acc [] ms = False
+callOverlapNil = Refl
+
+||| Unfold `footsWrites` on a cons without matching the pair constructor.
+footsWritesOpen :
+  {f : (List Place, List Place)} -> {fs : List (List Place, List Place)} ->
+  footsWrites (f :: fs) = fst f ++ footsWrites fs
+footsWritesOpen {f} {fs} =
+  replace {p = \pair => footsWrites (pair :: fs) = fst pair ++ footsWrites fs}
+    (pairEq f) Refl
+
+||| `p` in a later write set and in this `R ∪ W` makes `footHits` true.
+laterWriteHits :
+  {w, r : List Place} -> {fs : List (List Place, List Place)} -> {p : Place} ->
+  placeIn p (r ++ w) = True ->
+  placeIn p (footsWrites fs) = True ->
+  footHits (w, r) fs = True
+laterWriteHits {fs = []} _ pinW = void (trueNotFalseC (sym pinW))
+laterWriteHits {w} {r} {fs = f :: rest} {p} pinR pinW =
+  replace {p = \pair => footHits (w, r) (pair :: rest) = True}
+    (pairEq f)
+    (go (fst f) (snd f)
+      (replace {p = \xs => placeIn p xs = True} (footsWritesOpen {f} {fs = rest}) pinW))
+  where
+    go : (w2, r2 : List Place) ->
+         placeIn p (w2 ++ footsWrites rest) = True ->
+         footHits (w, r) ((w2, r2) :: rest) = True
+    go w2 r2 pin =
+      case inAppend {p} {xs = w2} {ys = footsWrites rest} pin of
+        Left pinH =>
+          hitsFromReadWrite {w} {r} {w2} {r2} {rest} pinR pinH
+        Right pinT =>
+          hitsSuff {w} {r} {f = (w2, r2)} {rest}
+            (laterWriteHits {w} {r} {fs = rest} {p} pinR pinT)
+
+||| A quiet `footHits` cannot write a place this pair already named.
+export
+laterWriteQuiet :
+  {w, r : List Place} -> {fs : List (List Place, List Place)} -> {p : Place} ->
+  placeIn p (r ++ w) = True ->
+  footHits (w, r) fs = False ->
+  placeIn p (footsWrites fs) = False
+laterWriteQuiet {w} {r} {fs} {p} pinR hits =
+  missGo (placeIn p (footsWrites fs)) Refl
+  where
+    missGo : (b : Bool) -> placeIn p (footsWrites fs) = b ->
+             placeIn p (footsWrites fs) = False
+    missGo False pb = pb
+    missGo True pb =
+      void (trueNotFalseC (trans (sym (laterWriteHits {w} {r} {fs} {p} pinR pb)) hits))
+
+||| A borrow head whose value is `p` is not in a later write set.
+export
+laterWriteQuietFromOverlap :
+  {acc : List (String, List Consume)} ->
+  {e : Expr} -> {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+  {p : Place} ->
+  doesConsume m = False ->
+  placeIn p (valuePlaces e) = True ->
+  callOverlap acc (e :: es) (m :: ms) = False ->
+  placeIn p (footsWrites (callFoots acc es ms)) = False
+laterWriteQuietFromOverlap {acc} {e} {es} {m} {ms} {p} pc pin ov =
+  laterWriteQuiet {w = fst (argModeFoot acc e m)} {r = snd (argModeFoot acc e m)}
+    {fs = callFoots acc es ms} {p}
+    (borrowRHasValue {acc} {e} {m} {p} pc pin)
+    (replace {p = \wr => footHits wr (callFoots acc es ms) = False}
+       (sym (pairEq (argModeFoot acc e m)))
+       (callOverlapHits {acc} {e} {es} {ms = m :: ms} ov))
+
 ||| `modesCover []` holds only for an empty argument list, and that walk
 ||| is quiet at every live set.
 storedLiveGoCoverNil : (acc : List (String, List Consume)) ->

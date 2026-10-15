@@ -69,7 +69,7 @@ fn pass_borrow_then_free_is_clean() {
 
 #[test]
 fn pass_assign_arg_distinct_is_clean() {
-    for name in ["assign_arg_distinct.c", "assign_null_arg.c"] {
+    for name in ["assign_arg_distinct.c", "nested_call_distinct.c"] {
         let diags = check(&fixture("pass", name));
         assert!(diags.is_empty(), "{name} must be accepted, got {diags:?}");
     }
@@ -344,6 +344,11 @@ fn fail_mixed_borrow_consume_alias_is_rejected() {
         "mix_borrow_consume_may.c",
         "assign_arg_alias.c",
         "assign_arg_alias_nested.c",
+        "assign_null_arg.c",
+        "nested_store_then_free.c",
+        "nested_call_store_consume.c",
+        "nested_bare_alias.c",
+        "call_then_var.c",
     ] {
         let diags = check(&fixture("fail", name));
         assert!(

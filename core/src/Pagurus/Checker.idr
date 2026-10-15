@@ -1192,6 +1192,12 @@ callFoots _ [] _ = []
 callFoots acc (e :: es) ms =
   argModeFoot acc e (consumeHead ms) :: callFoots acc es (consumeTail ms)
 
+||| Union of every argument's write set.
+public export
+footsWrites : List (List Place, List Place) -> List Place
+footsWrites [] = []
+footsWrites ((w, _) :: fs) = w ++ footsWrites fs
+
 ||| `W ∩ (R ∪ W')` for one pair, then the rest of the list.
 public export
 footHits : (List Place, List Place) -> List (List Place, List Place) -> Bool
@@ -1228,9 +1234,10 @@ overlapArg (e :: es) (f :: fs) =
 ||| write. The structural, order-independent footprint rule replaces
 ||| `mixedAlias` / `nestedMixed` / `assignAlias` at `checkCall`.
 ||| `storedBorrowConsume` stays as a disjunct so Restore can still read
-||| empty-start `storedLiveGo` off `aliasBad = False` until the M2
-||| subsumption lemma lands; it does not accept anything the footprint
-||| rule rejects.
+||| empty-start `storedLiveGo` off `aliasBad = False` until
+||| `storedQuietFromFoots` lands. The four `storedBorrowConsume = True`
+||| shapes already have `callOverlap = True`. It does not accept anything
+||| the footprint rule rejects.
 public export
 aliasBad : Ctx -> List Expr -> String -> Bool
 aliasBad ctx args callee =
@@ -1322,6 +1329,50 @@ storedBorrowViaDest :
     ]
     [Never, Never, Always] = True
 storedBorrowViaDest = Refl
+
+||| The four `storedBorrowConsume = True` shapes above are also
+||| `callOverlap`: a later write meets an earlier write or read. If any
+||| of these were `False`, empty-start `storedLiveGo` would be independent
+||| of the footprint rule.
+export
+storedBorrowCopyOverlaps :
+  callOverlap []
+    [ EVar 0 1 "p"
+    , ECall 2 "g" [EAssign 3 4 "r" Ptr (EVar 5 1 "p")]
+    , EVar 6 4 "r"
+    ]
+    [Never, Never, Always] = True
+storedBorrowCopyOverlaps = Refl
+
+export
+storedBorrowMidOverlaps :
+  callOverlap []
+    [ EVar 0 1 "p"
+    , ECall 2 "g" [EAssign 3 4 "r" Ptr (EVar 5 1 "p")]
+    , EVar 6 4 "r"
+    ]
+    [Never, Always, Always] = True
+storedBorrowMidOverlaps = Refl
+
+export
+storedBorrowMallocOverlaps :
+  callOverlap []
+    [ EVar 0 1 "p"
+    , EMalloc 2 [EAssign 3 4 "r" Ptr (EVar 5 1 "p")]
+    , EVar 6 4 "r"
+    ]
+    [Never, Never, Always] = True
+storedBorrowMallocOverlaps = Refl
+
+export
+storedBorrowViaDestOverlaps :
+  callOverlap []
+    [ EAssign 0 1 "q" Ptr (EVar 2 3 "p")
+    , ECall 4 "g" [EAssign 5 6 "r" Ptr (EVar 7 1 "q")]
+    , EVar 8 6 "r"
+    ]
+    [Never, Never, Always] = True
+storedBorrowViaDestOverlaps = Refl
 
 ||| `f(g(r = p), r)`: no earlier borrow captured `p`. The only frame copy
 ||| of that address is the consume. `storedBorrowConsume` stays false;
@@ -4870,8 +4921,218 @@ coveredStored {acc} {live} {es} {ms} cov modesEq nLive nNest s0 =
        (callArgsQuiet (nestedGoAppendQuiet nLive nNest))
        s0 subJoinL subJoinR
 
+--------------------------------------------------------------------------------
+-- M2(a): empty-start storedLiveGo is subsumed by callOverlap
+--------------------------------------------------------------------------------
+
+ovAppL : {xs, ys, zs : List Place} ->
+         placesOverlap xs zs = True -> placesOverlap (xs ++ ys) zs = True
+ovAppL {xs = []} prf = void (trueNotFalseC (sym prf))
+ovAppL {xs = p :: ps} {ys} {zs} prf =
+  case orTrueChk prf of
+    Left pin =>
+      replace {p = \b => (b || Delay (placesOverlap (ps ++ ys) zs)) = True}
+        (sym pin) (orTrueLeft (placesOverlap (ps ++ ys) zs))
+    Right ov => overlapTail (ovAppL {xs = ps} {ys} {zs} ov)
+
+ovAppR : {xs, ys, zs : List Place} ->
+         placesOverlap ys zs = True -> placesOverlap (xs ++ ys) zs = True
+ovAppR {xs = []} prf = prf
+ovAppR {xs = _ :: ps} prf = overlapTail (ovAppR {xs = ps} prf)
+
+ovInAppendL : {xs, ys, zs : List Place} ->
+              placesOverlap xs ys = True -> placesOverlap xs (ys ++ zs) = True
+ovInAppendL {xs = []} prf = void (trueNotFalseC (sym prf))
+ovInAppendL {xs = p :: ps} {ys} {zs} prf =
+  case orTrueChk prf of
+    Left pin =>
+      replace {p = \b => (b || Delay (placesOverlap ps (ys ++ zs))) = True}
+        (sym (placeInAppendL {xs = ys} {ys = zs} pin))
+        (orTrueLeft (placesOverlap ps (ys ++ zs)))
+    Right ov => overlapTail (ovInAppendL {xs = ps} {ys} {zs} ov)
+
+ovInJoinR : {xs, ys, zs : List Place} ->
+            placesOverlap xs zs = True -> placesOverlap xs (ys ++ zs) = True
+ovInJoinR {xs = []} prf = void (trueNotFalseC (sym prf))
+ovInJoinR {xs = p :: ps} {ys} {zs} prf =
+  case orTrueChk prf of
+    Left pin =>
+      replace {p = \b => (b || Delay (placesOverlap ps (ys ++ zs))) = True}
+        (sym (placeInJoinR {xs = ys} {ys = zs} pin))
+        (orTrueLeft (placesOverlap ps (ys ++ zs)))
+    Right ov => overlapTail (ovInJoinR {xs = ps} {ys} {zs} ov)
+
+ovInCons : {q : Place} -> {xs, ys : List Place} ->
+           placesOverlap xs ys = True -> placesOverlap xs (q :: ys) = True
+ovInCons {q} prf = ovInJoinR {ys = [q]} prf
+
+overlapSplitL : {xs, ys, zs : List Place} ->
+                placesOverlap (xs ++ ys) zs = True ->
+                Either (placesOverlap xs zs = True) (placesOverlap ys zs = True)
+overlapSplitL {xs = []} prf = Right prf
+overlapSplitL {xs = p :: ps} {ys} {zs} prf =
+  case orTrueChk prf of
+    Left pin =>
+      Left (replace {p = \b => (b || Delay (placesOverlap ps zs)) = True}
+              (sym pin) (orTrueLeft (placesOverlap ps zs)))
+    Right ov =>
+      case overlapSplitL {xs = ps} {ys} {zs} ov of
+        Left h => Left (overlapTail h)
+        Right h => Right h
+
+overlapSplitR : {xs, ys, zs : List Place} ->
+                placesOverlap xs (ys ++ zs) = True ->
+                Either (placesOverlap xs ys = True) (placesOverlap xs zs = True)
+overlapSplitR {xs = []} prf = void (trueNotFalseC (sym prf))
+overlapSplitR {xs = p :: ps} {ys} {zs} prf =
+  case orTrueChk prf of
+    Left pin =>
+      case inAppend {xs = ys} {ys = zs} pin of
+        Left inY =>
+          Left (replace {p = \b => (b || Delay (placesOverlap ps ys)) = True}
+                  (sym inY) (orTrueLeft (placesOverlap ps ys)))
+        Right inZ =>
+          Right (replace {p = \b => (b || Delay (placesOverlap ps zs)) = True}
+                   (sym inZ) (orTrueLeft (placesOverlap ps zs)))
+    Right ov =>
+      case overlapSplitR {xs = ps} {ys} {zs} ov of
+        Left h => Left (overlapTail h)
+        Right h => Right (overlapTail h)
+
+overlapSubL : {xs, ys, zs : List Place} ->
+              placeSub xs ys = True ->
+              placesOverlap xs zs = True ->
+              placesOverlap ys zs = True
+overlapSubL {xs = []} _ prf = void (trueNotFalseC (sym prf))
+overlapSubL {xs = q :: qs} {ys} {zs} psub ov =
+  case orTrueChk ov of
+    Left pin =>
+      overlapBuild {p = q} {xs = ys} {ys = zs}
+        (subIn {xs = q :: qs} psub (placeInHere q qs)) pin
+    Right ovt => overlapSubL {xs = qs} (subTail psub) ovt
+
+overlapSubR : {xs, ys, zs : List Place} ->
+              placeSub ys zs = True ->
+              placesOverlap xs ys = True ->
+              placesOverlap xs zs = True
+overlapSubR {xs = []} _ prf = void (trueNotFalseC (sym prf))
+overlapSubR {xs = p :: ps} {ys} {zs} psub ov =
+  case orTrueChk ov of
+    Left pin =>
+      overlapBuild {p} {xs = p :: ps} {ys = zs} (placeInHere p ps)
+        (subIn psub pin)
+    Right ovt => overlapTail (overlapSubR {xs = ps} psub ovt)
+
+ptrAssignW : {acc : List (String, List Consume)} ->
+             {id : Nat} -> {d : Place} -> {nm : String} -> {rhs : Expr} ->
+             fst (argFootprint acc (EAssign id d nm Ptr rhs)) =
+               d :: fst (argFootprint acc rhs)
+ptrAssignW {acc} {rhs} with (argFootprint acc rhs)
+  ptrAssignW {acc} {rhs} | (w, r) = Refl
+
+ptrAssignR : {acc : List (String, List Consume)} ->
+             {id : Nat} -> {d : Place} -> {nm : String} -> {rhs : Expr} ->
+             snd (argFootprint acc (EAssign id d nm Ptr rhs)) =
+               snd (argFootprint acc rhs)
+ptrAssignR {acc} {rhs} with (argFootprint acc rhs)
+  ptrAssignR {acc} {rhs} | (w, r) = Refl
+
+neverEqMay : Always = May -> Void
+neverEqMay Refl impossible
+
+neverEqAlways : Never = Always -> Void
+neverEqAlways Refl impossible
+
+readSubR : (acc : List (String, List Consume)) -> (e : Expr) ->
+           placeSub (readPlaces e) (snd (argFootprint acc e)) = True
+readSubR acc (EVar _ p _) = rewrite eqNatRefl p in Refl
+readSubR acc (EAssign id d nm Ptr rhs) =
+  replace {p = \xs => placeSub (readPlaces rhs) xs = True}
+    (sym (ptrAssignR {acc} {id} {d} {nm} {rhs}))
+    (readSubR acc rhs)
+readSubR acc (EAssign _ _ _ Copy rhs) = readSubR acc rhs
+readSubR _ (ELit _) = Refl
+readSubR _ (ENull _) = Refl
+readSubR _ (EMalloc _ _) = Refl
+readSubR _ (ECall _ _ _) = Refl
+readSubR _ (EUse _ _) = Refl
+readSubR _ (EUnsupported _ _) = Refl
+
+modeWNever : {acc : List (String, List Consume)} -> {e : Expr} ->
+             fst (argModeFoot acc e Never) = fst (argFootprint acc e)
+modeWNever {acc} {e} with (argFootprint acc e)
+  modeWNever {acc} {e} | (w, r) = Refl
+
+modeRNever : {acc : List (String, List Consume)} -> {e : Expr} ->
+             snd (argModeFoot acc e Never) =
+               snd (argFootprint acc e) ++ valuePlaces e
+modeRNever {acc} {e} with (argFootprint acc e)
+  modeRNever {acc} {e} | (w, r) = Refl
+
+modeWMay : {acc : List (String, List Consume)} -> {e : Expr} ->
+           fst (argModeFoot acc e May) =
+             fst (argFootprint acc e) ++ snd (argFootprint acc e) ++ valuePlaces e
+modeWMay {acc} {e} with (argFootprint acc e)
+  modeWMay {acc} {e} | (w, r) = Refl
+
+modeWAlways : {acc : List (String, List Consume)} -> {e : Expr} ->
+              fst (argModeFoot acc e Always) =
+                fst (argFootprint acc e) ++ snd (argFootprint acc e) ++
+                  valuePlaces e
+modeWAlways {acc} {e} with (argFootprint acc e)
+  modeWAlways {acc} {e} | (w, r) = Refl
+
+modeWConsume : {acc : List (String, List Consume)} -> {e : Expr} ->
+               {m : Consume} ->
+               doesConsume m = True ->
+               fst (argModeFoot acc e m) =
+                 fst (argFootprint acc e) ++ snd (argFootprint acc e) ++
+                   valuePlaces e
+modeWConsume {m = Never} pc = void (trueNotFalseC (sym pc))
+modeWConsume {m = May} _ = modeWMay
+modeWConsume {m = Always} _ = modeWAlways
+
+evalWSubMode : {acc : List (String, List Consume)} -> {e : Expr} ->
+               {m : Consume} -> {p : Place} ->
+               placeIn p (fst (argFootprint acc e)) = True ->
+               placeIn p (fst (argModeFoot acc e m)) = True
+evalWSubMode {acc} {e} {m = Never} {p = q} pin =
+  replace {p = \xs => placeIn q xs = True} (sym (modeWNever {acc} {e})) pin
+evalWSubMode {acc} {e} {m = May} {p = q} pin =
+  replace {p = \xs => placeIn q xs = True} (sym (modeWMay {acc} {e}))
+    (placeInAppendL pin)
+evalWSubMode {acc} {e} {m = Always} {p = q} pin =
+  replace {p = \xs => placeIn q xs = True} (sym (modeWAlways {acc} {e}))
+    (placeInAppendL pin)
+
+argsEvalFootCons :
+  {acc : List (String, List Consume)} -> {e : Expr} -> {es : List Expr} ->
+  argsEvalFoot acc (e :: es) =
+    (fst (argFootprint acc e) ++ fst (argsEvalFoot acc es),
+     snd (argFootprint acc e) ++ snd (argsEvalFoot acc es))
+argsEvalFootCons {acc} {e} {es} with (argFootprint acc e)
+  argsEvalFootCons {acc} {e} {es} | (w, r) with (argsEvalFoot acc es)
+    argsEvalFootCons {acc} {e} {es} | (w, r) | (ws, rs) = Refl
+
+argsCallFootCons :
+  {acc : List (String, List Consume)} -> {e : Expr} -> {es : List Expr} ->
+  {ms : List Consume} ->
+  argsCallFoot acc (e :: es) ms =
+    (fst (argModeFoot acc e (consumeHead ms)) ++
+       fst (argsCallFoot acc es (consumeTail ms)),
+     snd (argModeFoot acc e (consumeHead ms)) ++
+       snd (argsCallFoot acc es (consumeTail ms)))
+argsCallFootCons {acc} {e} {es} {ms} with (argModeFoot acc e (consumeHead ms))
+  argsCallFootCons {acc} {e} {es} {ms} | (w, r) with
+      (argsCallFoot acc es (consumeTail ms))
+    argsCallFootCons {acc} {e} {es} {ms} | (w, r) | (ws, rs) = Refl
+
 ||| `aliasBad` is the footprint overlap or empty-start `storedLiveGo`.
 ||| Unfolding lets `orFalseC` see the `||`; the function name alone does not.
+||| M2(a) remaining: `callOverlap = False -> storedLiveGo acc [] es ms = False`
+||| (`storedQuietFromFoots`). The four `storedBorrowConsume = True` shapes
+||| already have `callOverlap = True` (`storedBorrow*Overlaps`). Until the
+||| implication lands, `storedBorrowConsume` stays in `aliasBad`.
 aliasBadOpen : (ctx : Ctx) -> (es : List Expr) -> (callee : String) ->
   aliasBad ctx es callee =
     callOverlap ctx.summaries es (funModes ctx callee)

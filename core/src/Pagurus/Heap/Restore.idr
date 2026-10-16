@@ -16866,8 +16866,16 @@ mutual
           tGo True prf =
             ownThruModesDest {chk} {ihs} {oih} (exprUK uk evE) ownA0 oaA0
               prf ov10 pEs0 evEs
-          liveStay : StayAt env1 h1 sc' a -> cell h1 a = Just Live
-          liveStay stS =
+          ||| recX dw True: dest intern in extra Always tail writes. Do not
+          ||| use `goneDiedWrite` (needs miss). Route (b): both call sites
+          ||| put dest intern in eval `W` of head `e` (`dMiss True`;
+          ||| `shiftToWrites` of `sh True False`), so Always `W` of `e` hits
+          ||| the tail writes, contradicting M1 `ov` (`extraAlwaysTailHitContra`).
+          ||| (a) write-status Live/Gone is dest intern not in head `W` (not
+          ||| this case). (c) `goneWrittenWrite` restates a case M1 forbids.
+          liveStay : placeIn ownA0.ownQ (fst (argFootprint ctx.summaries e)) = True ->
+                     StayAt env1 h1 sc' a -> cell h1 a = Just Live
+          liveStay pinE stS =
             stayOwnGo stS
               (\oS, oaS => ownLive oaS oS)
               (\inhS, _ => inhS.inLive)
@@ -16879,9 +16887,9 @@ mutual
                              oaA0.wf evEs a (ownLive oaA0 ownA0) of
                         Left keep => void (liveNotFreed (justInjH (trans (sym keep) fr)))
                         Right died =>
-                          dw (placeIn ownA0.ownQ
+                          void (dw (placeIn ownA0.ownQ
                                 (footsWrites (callFoots ctx.summaries es [])))
-                             Refl oaG fr died)
+                             Refl oaG fr died))
                    (\miss => void (exprsStay oaA0.wf evEs (ownLive oaA0 ownA0) miss)))
             where
               envFr : EnvFrame envA env1 (fst (argsCallFoot ctx.summaries es []))
@@ -16903,9 +16911,9 @@ mutual
                             ninD pEs0 ownA0.ownLp
                 in goneDiedWrite (exprUK uk evE) ownA0 oaA0 envFr ninW oaG0
                      lp' fr0 died0
-              dw True pinD oaG0 fr0 died0 =
-                goneDiedWrite (exprUK uk evE) ownA0 oaA0 envFr pinD oaG0
-                  ownA0.ownLp fr0 died0
+              dw True pinD _ _ _ =
+                extraAlwaysTailHitContra {acc = ctx.summaries} {e} {es}
+                  {p = ownA0.ownQ} pinE pinD ov
           sh : (h : Bool) -> (k : Bool) ->
                shiftTo ownA0.ownQ own.ownQ e = h ->
                keepsDest ownA0.ownQ own.ownQ e = k ->
@@ -16958,12 +16966,15 @@ mutual
                 in void (noShiftContra oa neQ own.ownLook own.ownLp
                            own.ownSafe own.ownHas own.ownNb
                            look0 ownA0.ownLp ownA0.ownSafe)
-              dMiss True _ =
-                liveStay (tGo (placeIn ownA0.ownQ
+              dMiss True pinDE =
+                liveStay pinDE (tGo (placeIn ownA0.ownQ
                   (fst (argsCallFoot ctx.summaries es []))) Refl)
-          sh True False _ _ =
-            liveStay (tGo (placeIn ownA0.ownQ
-              (fst (argsCallFoot ctx.summaries es []))) Refl)
+          sh True False ph _ =
+            liveStay
+              (shiftToWrites {acc = ctx.summaries}
+                 {d = ownA0.ownQ} {q = own.ownQ} {e} ph)
+              (tGo (placeIn ownA0.ownQ
+                (fst (argsCallFoot ctx.summaries es []))) Refl)
   ownerCellGo {chk} {ihs} {oih} uk own oa live pin sb ov qw eq
       (HEArgsCons v envA hA evE evEs) {es = e :: es} {ms = m :: ms} =
     go (doesConsume m) Refl

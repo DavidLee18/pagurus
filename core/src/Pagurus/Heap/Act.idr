@@ -1093,6 +1093,29 @@ useKeepLookupInv ne lp' eq = uGo (lookupPlace n sc) Refl
         in trans (sym (lookupPlaceSetMiss p n st' sc ne))
              (trans (cong (\s => lookupPlace p s) scEq) lp')
 
+||| dest intern Unique Own leftover intern AFTER `usePlace` of dest intern
+||| itself: Use succeeded, so dest intern was already use-safe at START.
+export
+useKeepSelfSafe :
+  {sc, sc' : Scopes} -> {n : Place} -> {nid : Nat} -> {nm : String} ->
+  {st : Status} ->
+  lookupPlace n sc' = Just st ->
+  usePlace sc n nid nm = Right sc' ->
+  (st0 ** (lookupPlace n sc = Just st0, unsafeUse st0 = False))
+useKeepSelfSafe lp' eq = uGo (lookupPlace n sc) Refl
+  where
+    uGo : (look : Maybe Status) -> lookupPlace n sc = look ->
+          (st0 ** (lookupPlace n sc = Just st0, unsafeUse st0 = False))
+    uGo Nothing pL =
+      let scEq = rightInj (trans (sym (usePlaceNothing pL)) eq)
+      in void (nothingNotJust (trans (sym pL)
+           (trans (cong (\s => lookupPlace n s) scEq) lp')))
+    uGo (Just st0) pL with (stepStatus st0 Use nid) proof pS
+      uGo (Just st0) pL | Left d =
+        void (leftNotRight (trans (sym (usePlaceJustL pL pS)) eq))
+      uGo (Just st0) pL | Right st' =
+        (st0 ** (pL, stepUseSafe st0 nid st' pS))
+
 ||| `movePlace` of a different intern leaves `p` unchanged.
 export
 moveKeepLookup :

@@ -1804,6 +1804,66 @@ argsModesKeepLookupExtraReallocInv :
 argsModesKeepLookupExtraReallocInv keepCInv keepTInv =
   argsModesKeepLookupConsInv (takeCallKeepLookupInv keepCInv) keepTInv
 
+||| Extra Always of a copy assignment is Ghost.
+export
+argsModesExtraCopyVoid :
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {callee : String} ->
+  {id : Nat} -> {n : Place} -> {nm : String} -> {rhs : Expr} ->
+  {es : List Expr} ->
+  checkArgsModes ctx sc callee (EAssign id n nm Copy rhs :: es) [] = Right sc' ->
+  Void
+argsModesExtraCopyVoid eq = cGo (checkExpr ctx sc rhs) Refl
+  where
+    cGo : (r : Either Diag Scopes) -> checkExpr ctx sc rhs = r -> Void
+    cGo (Left d) pE =
+      void (leftNotRight
+        (trans (sym (argsModesExtraLeft es (takeAsgCopyLeft id n nm pE))) eq))
+    cGo (Right sc1) pE =
+      void (leftNotRight
+        (trans (sym (argsModesExtraGhost es (takeAsgCopyRight id n nm pE))) eq))
+
+||| Extra Always of `use(...)` is Ghost.
+export
+argsModesExtraUseVoid :
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {callee : String} ->
+  {uid : Nat} -> {args, es : List Expr} ->
+  checkArgsModes ctx sc callee (EUse uid args :: es) [] = Right sc' ->
+  Void
+argsModesExtraUseVoid eq = uGo (checkArgsBorrow ctx sc args) Refl
+  where
+    uGo : (r : Either Diag Scopes) -> checkArgsBorrow ctx sc args = r -> Void
+    uGo (Left d) pA =
+      void (leftNotRight
+        (trans (sym (argsModesExtraLeft es (takeUseLeft uid pA))) eq))
+    uGo (Right sc1) pA =
+      void (leftNotRight
+        (trans (sym (argsModesExtraGhost es (takeUseRight uid pA))) eq))
+
+||| Extra Always of unsupported is Left.
+export
+argsModesExtraUnsupVoid :
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {callee : String} ->
+  {id : Nat} -> {reason : String} -> {es : List Expr} ->
+  checkArgsModes ctx sc callee (EUnsupported id reason :: es) [] = Right sc' ->
+  Void
+argsModesExtraUnsupVoid eq =
+  void (leftNotRight
+    (trans (sym (argsModesExtraLeft es (takeUnsup ctx sc id reason))) eq))
+
+||| Always writes of a Ptr assign start with the dest intern.
+export
+ninAsgPtrAlwaysDest :
+  {acc : List (String, List Consume)} ->
+  {id : Nat} -> {dest : Place} -> {nm : String} -> {rhs : Expr} ->
+  {p : Place} ->
+  placeIn p (fst (argModeFoot acc (EAssign id dest nm Ptr rhs) Always)) = False ->
+  p == dest = False
+ninAsgPtrAlwaysDest {acc} {id} {dest} {nm} {rhs} {p} nin =
+  fst (orFalse {x = p == dest}
+    {y = placeIn p (fst (argFootprint acc rhs) ++
+           snd (argFootprint acc rhs) ++
+           valuePlaces (EAssign id dest nm Ptr rhs))} nin)
+
 ||| Single consume-mode `EVar` argument: after `checkArgsModes` the intern
 ||| is not use-safe. This is the checker-side transfer lemma for a named
 ||| May/Always owner with no further arguments.

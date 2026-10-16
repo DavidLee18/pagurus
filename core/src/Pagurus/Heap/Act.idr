@@ -1068,6 +1068,31 @@ useKeepLookup ne lp eq = uGo (lookupPlace n sc) Refl
         in trans (cong (\s => lookupPlace p s) (sym scEq))
              (trans (lookupPlaceSetMiss p n st' sc ne) lp)
 
+||| Inverse: dest intern Unique Own leftover intern AFTER `usePlace` of a
+||| different intern is dest intern Unique Own leftover intern at START.
+export
+useKeepLookupInv :
+  {sc, sc' : Scopes} -> {n, p : Place} -> {nid : Nat} -> {nm : String} ->
+  {st : Status} ->
+  p == n = False ->
+  lookupPlace p sc' = Just st ->
+  usePlace sc n nid nm = Right sc' ->
+  lookupPlace p sc = Just st
+useKeepLookupInv ne lp' eq = uGo (lookupPlace n sc) Refl
+  where
+    uGo : (look : Maybe Status) -> lookupPlace n sc = look ->
+          lookupPlace p sc = Just st
+    uGo Nothing pL =
+      let scEq = rightInj (trans (sym (usePlaceNothing pL)) eq)
+      in trans (cong (\s => lookupPlace p s) scEq) lp'
+    uGo (Just stN) pL with (stepStatus stN Use nid) proof pS
+      uGo (Just stN) pL | Left d =
+        void (leftNotRight (trans (sym (usePlaceJustL pL pS)) eq))
+      uGo (Just stN) pL | Right st' =
+        let scEq = rightInj (trans (sym (usePlaceJust pL pS)) eq)
+        in trans (sym (lookupPlaceSetMiss p n st' sc ne))
+             (trans (cong (\s => lookupPlace p s) scEq) lp')
+
 ||| `movePlace` of a different intern leaves `p` unchanged.
 export
 moveKeepLookup :

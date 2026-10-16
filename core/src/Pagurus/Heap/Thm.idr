@@ -74,6 +74,13 @@ export
 hrFromOk : HSafeRes (HROk v env' h') sc' -> OverApprox env' h' sc'
 hrFromOk (HROutOk oa) = oa
 
+||| Explicit `HVNone` form, so Restore call sites do not solve `{v}`.
+export
+hrFromOkNone :
+  {env' : HEnv} -> {h' : Heap} -> {sc' : Scopes} ->
+  HSafeRes (HROk HVNone env' h') sc' -> OverApprox env' h' sc'
+hrFromOkNone res = hrFromOk {v = HVNone} res
+
 export
 hrRewrite : {sc1, sc2 : Scopes} -> sc1 = sc2 -> HSafeRes o sc1 -> HSafeRes o sc2
 hrRewrite Refl s = s

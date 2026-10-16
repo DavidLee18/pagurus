@@ -921,6 +921,48 @@ noShiftContra oa ne lookQ lpQ safeQ ownQ nbQ lookD lpD safeD =
        stQ lpQ stD lpD safeQ ownQ nbQ))
     safeD)
 
+pairEqX : (x : (a, b)) -> (fst x, snd x) = x
+pairEqX (u, v) = Refl
+
+||| Dest intern in eval writes of extra Always head `e`, and in tail
+||| Always writes, contradicts M1 `callOverlap` of `e :: es` at `[]`.
+||| Honest recX `dw True` route (b): both `liveStay` call sites have dest
+||| intern in eval `W` of `e` (`dMiss True`, `shiftToWrites` of `sh True
+||| False`). (a) write-status Live/Gone is for dest intern not in head `W`
+||| (not this case). (c) `goneWrittenWrite` would restate a case M1 forbids
+||| here. Checker unchanged.
+export
+extraAlwaysTailHitContra :
+  {acc : List (String, List Consume)} ->
+  {e : Expr} -> {es : List Expr} -> {p : Place} ->
+  placeIn p (fst (argFootprint acc e)) = True ->
+  placeIn p (footsWrites (callFoots acc es [])) = True ->
+  callOverlap acc (e :: es) [] = False ->
+  Void
+extraAlwaysTailHitContra {acc} {e} {es} {p} pinE pinT ov =
+  let pinW = evalInModeX {acc} {e} {m = Always} {p} pinE
+      pinRW = placeInJoinRX {p}
+                {xs = snd (argModeFoot acc e Always)}
+                {ys = fst (argModeFoot acc e Always)} pinW
+      ninT = laterWriteQuiet {w = fst (argModeFoot acc e Always)}
+               {r = snd (argModeFoot acc e Always)}
+               {fs = callFoots acc es []} {p} pinRW
+               (replace {p = \wr =>
+                  footHits wr (callFoots acc es []) = False}
+                  (sym (pairEqX (argModeFoot acc e Always)))
+                  (callOverlapHits {acc} {e} {es} {ms = []} ov))
+  in trueNotFalseX (trans (sym pinT) ninT)
+
+export
+extraAlwaysTailHitContraCanary :
+  callOverlap []
+    [EAssign 0 1 "n" Ptr (EVar 2 2 "x"), EVar 3 1 "n"] [] = False ->
+  Void
+extraAlwaysTailHitContraCanary ov =
+  extraAlwaysTailHitContra {acc = []} {p = 1}
+    {e = EAssign 0 1 "n" Ptr (EVar 2 2 "x")}
+    {es = [EVar 3 1 "n"]} Refl Refl ov
+
 export
 shiftToWritesCanary :
   placeIn 1

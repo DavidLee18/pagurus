@@ -73,7 +73,7 @@ mutual
     (\ev, sc0, sc1, fl, p, oa => takeHSafe {funs} {chk} ev sc0 sc1 fl p oa)
     (\ev, pE, inh, oa => inhExprH {funs} {fk = lteRefl} (evalSize ev) dispatchExprs inh oa ev pE)
     (\ev, pT, inh, oa, oaY => inhTakeH {funs} {fk = lteRefl} (evalSize ev) dispatchExprs inh oa ev pT oaY)
-    (\ev, pE, ln => exprLN {funs} {chk} ln pE ev)
+    (\ev, pE, ln => exprLN {funs} {chk} {wln = walkLNIHs} ln pE ev)
     (\ev, pT, ln => (takeLN {funs} {chk} ln pT ev).lnTLN)
     (\ev, pT, ln, veq => nuoNoTakeLeftover {funs} {chk} ev pT ln veq)
     defNs

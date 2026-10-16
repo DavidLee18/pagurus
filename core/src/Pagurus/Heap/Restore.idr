@@ -16755,6 +16755,8 @@ mutual
                    Refl => (Freed ** goneFreedOk oaG ua fr))
            (\miss => void (exprStay oa.wf ev (ownLive oa own) miss)))
 
+  ||| Leftover intern through one consume. `SGone` is the same as
+  ||| `cellThroughExpr`: unsafe holders make Freed OA-ok (`goneFreedOk`).
   cellThroughTake :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
     {auto chk : FunsChecked cfuel ctx funs} ->
@@ -16770,18 +16772,23 @@ mutual
     placeIn own.ownQ (fst (argModeFoot ctx.summaries e m)) = False ->
     takeOwner ctx sc e = Right (sc', fl) ->
     HEvalExpr {funs} env h e (HROk v env' h') ->
-    cell h' a = Just Live
+    (cl : Cell ** cell h' a = Just cl)
   cellThroughTake {chk} {ihs} {oih} uk own oa pc nH eq ev =
     stayOwnGo (ownThruTake {chk} {ihs} {oih} {m} uk own oa pc nH eq ev)
-      (\oS, oaS => ownLive oaS oS)
-      (\inhS, _ => inhS.inLive)
+      (\oS, oaS => (Live ** ownLive oaS oS))
+      (\inhS, _ => (Live ** inhS.inLive))
       (\oaG, ua =>
          cellOn (cell h' a) Refl
-           (\eqL => eqL)
+           (\eqL => (Live ** eqL))
            (\fr =>
-              case exprHeapFrameOf {acc = ctx.summaries} {e} oa.wf ev a (ownLive oa own) of
-                Left keep => void (liveNotFreed (justInjH (trans (sym keep) fr)))
-                Right died => void (goneDiedWrite nH died))
+              let envFr = exprEnvFrameOf {acc = ctx.summaries} {e} ev
+                  look' = ownerEnvStay own envFr (ninEvalW {m} nH)
+                  (st ** lp) = oaG.tracked own.ownQ (HVPtr a) look'
+                  already = ua own.ownQ st look' lp
+                  du = oaG.deadUnsafe own.ownQ st (HVPtr a) lp look'
+                         (isDeadTrackedFreed h' a fr)
+              in case trans (sym already) du of
+                   Refl => (Freed ** goneFreedOk oaG ua fr))
            (\miss => void (exprStay oa.wf ev (ownLive oa own) miss)))
 
   export
@@ -17452,14 +17459,14 @@ mutual
               mGo (Left d) pA =
                 void (leftNotRight (trans (sym (takeMallocLeft mid pA)) pT0))
               mGo (Right scM) pA =
-                let live0 = cellThroughTake {chk} {ihs} {oih} {m} uk own oa pc nH0 pT0
+                let (_ ** just0) = cellThroughTake {chk} {ihs} {oih} {m} uk own oa pc nH0 pT0
                               (HEMalloc _ hM evs0)
-                    nf = liveNotFresh hM (exprsWf oa.wf evs0) a live0
+                    nf = justNotFresh hM (exprsWf oa.wf evs0) a just0
                 in eqNatFalse a hM.next nf (trans ab (sym (allocNext hM)))
           consumeLeftover (ECall idC c args) (HERealloc _ _ _ hR evr) nH0 _ pT0 ab =
-            let live0 = cellThroughTake {chk} {ihs} {oih} {m} uk own oa pc nH0 pT0
+            let (_ ** just0) = cellThroughTake {chk} {ihs} {oih} {m} uk own oa pc nH0 pT0
                           (HERealloc _ _ _ hR evr)
-                nf = liveNotFresh hR (reallocWf oa.wf evr) a live0
+                nf = justNotFresh hR (reallocWf oa.wf evr) a just0
             in eqNatFalse a hR.next nf (trans ab (sym (allocNext hR)))
           consumeLeftover (EAssign idA nA nmA Copy rhs)
               (HEAsgCopy _ _ _ evR) _ _ pT0 _ =

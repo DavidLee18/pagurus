@@ -1,8 +1,9 @@
 ||| Independently checkable `bindOkJust` family lifted out of the
 ||| `stmtsLN` mutual. Does not import `Pagurus.Heap.Restore`.
 |||
-||| `frameOwnerVoid` / `exprsModesRest` / `headNamesOwner` stay in Restore
-||| and are passed as `BindLNIHs` so this module is not in that SCC.
+||| `frameOwnerVoid` lives in RestoreFrame; BindLNIHs still takes it as
+||| `frameOwnerVoidIH` because this module has no `exprLN` / `takeLN`.
+||| `exprsModesRest` / `headNamesOwner` stay in Restore.
 ||| `OwnerIHs` stays in Restore. bindOk takes ownerCell/ownerFrame
 ||| via BindLNIHs without that self-auto cycle.
 module Pagurus.Heap.RestoreBind

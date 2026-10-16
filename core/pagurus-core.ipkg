@@ -53,6 +53,7 @@ modules = Pagurus.IR
         , Pagurus.Heap.Inh
         , Pagurus.Heap.RestoreAux
         , Pagurus.Heap.RestoreBind
+        , Pagurus.Heap.RestoreFrame
         , Pagurus.Heap.RestoreCall
         , Pagurus.Heap.Restore
         , Pagurus.Heap.Dispatch

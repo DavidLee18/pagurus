@@ -1139,6 +1139,29 @@ moveKeepLookup ne lp eq = mGo (lookupPlace n sc) Refl
         in trans (cong (\s => lookupPlace p s) (sym scEq))
              (trans (lookupPlaceSetMiss p n st' sc ne) lp)
 
+||| Inverse: dest intern Unique Own AFTER `movePlace` of a different intern
+||| is dest intern Unique Own at START. Fact 4 leaf (`useKeepLookupInv` for Move).
+export
+moveKeepLookupInv :
+  {sc, sc' : Scopes} -> {n, p : Place} -> {nid : Nat} -> {nm : String} ->
+  {st : Status} ->
+  p == n = False ->
+  lookupPlace p sc' = Just st ->
+  movePlace sc n nid nm = Right sc' ->
+  lookupPlace p sc = Just st
+moveKeepLookupInv ne lp' eq = mGo (lookupPlace n sc) Refl
+  where
+    mGo : (look : Maybe Status) -> lookupPlace n sc = look ->
+          lookupPlace p sc = Just st
+    mGo Nothing pL =
+      void (leftNotRight (trans (sym (movePlaceNothing pL)) eq))
+    mGo (Just stN) pL with (stepStatus stN Move nid) proof pS
+      mGo (Just stN) pL | Left d =
+        void (leftNotRight (trans (sym (movePlaceJustL pL pS)) eq))
+      mGo (Just stN) pL | Right st' =
+        let scEq = rightInj (trans (sym (movePlaceJust pL pS)) eq)
+        in trans (sym (lookupPlaceSetMiss p n st' sc ne))
+             (trans (cong (\s => lookupPlace p s) scEq) lp')
 
 ||| Inverse of `takeVarJustR`: a successful take of a tracked var is a move.
 export
@@ -1161,6 +1184,130 @@ takeVarMove pT lp = mvGo (movePlace sc n nid nm) Refl
       replace {p = \s => movePlace sc n nid nm = Right s}
         (cong fst (rightInj (trans (sym (takeVarJustR ctx lp pM)) pT)))
         pM
+
+--------------------------------------------------------------------------------
+-- Fact 4 leaves: lookupPlace of a missed intern across takeOwner / empty
+-- checkArgsModes. Analogue of useKeepLookup / useKeepLookupInv. Checker
+-- unchanged. Do not edit uniqueLive.
+--------------------------------------------------------------------------------
+
+||| `takeOwner` of a literal does not rewrite scopes.
+export
+takeLitKeepLookup :
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {id : Nat} -> {fl : Flag} ->
+  {p : Place} -> {st : Status} ->
+  takeOwner ctx sc (ELit id) = Right (sc', fl) ->
+  lookupPlace p sc = Just st ->
+  lookupPlace p sc' = Just st
+takeLitKeepLookup eq lp =
+  let scEq = cong fst (rightInj (trans (sym (takeLit ctx sc id)) eq))
+  in trans (cong (\s => lookupPlace p s) (sym scEq)) lp
+
+export
+takeLitKeepLookupInv :
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {id : Nat} -> {fl : Flag} ->
+  {p : Place} -> {st : Status} ->
+  takeOwner ctx sc (ELit id) = Right (sc', fl) ->
+  lookupPlace p sc' = Just st ->
+  lookupPlace p sc = Just st
+takeLitKeepLookupInv eq lp' =
+  let scEq = cong fst (rightInj (trans (sym (takeLit ctx sc id)) eq))
+  in trans (cong (\s => lookupPlace p s) scEq) lp'
+
+export
+takeNullKeepLookup :
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {id : Nat} -> {fl : Flag} ->
+  {p : Place} -> {st : Status} ->
+  takeOwner ctx sc (ENull id) = Right (sc', fl) ->
+  lookupPlace p sc = Just st ->
+  lookupPlace p sc' = Just st
+takeNullKeepLookup eq lp =
+  let scEq = cong fst (rightInj (trans (sym (takeNull ctx sc id)) eq))
+  in trans (cong (\s => lookupPlace p s) (sym scEq)) lp
+
+export
+takeNullKeepLookupInv :
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {id : Nat} -> {fl : Flag} ->
+  {p : Place} -> {st : Status} ->
+  takeOwner ctx sc (ENull id) = Right (sc', fl) ->
+  lookupPlace p sc' = Just st ->
+  lookupPlace p sc = Just st
+takeNullKeepLookupInv eq lp' =
+  let scEq = cong fst (rightInj (trans (sym (takeNull ctx sc id)) eq))
+  in trans (cong (\s => lookupPlace p s) scEq) lp'
+
+||| `takeOwner` of a different intern is `movePlace` of that intern, or a
+||| Ghost no-op. Dest intern Unique Own is unchanged.
+export
+takeVarKeepLookup :
+  {ctx : Ctx} -> {sc, sc' : Scopes} ->
+  {nid : Nat} -> {n, p : Place} -> {nm : String} -> {fl : Flag} ->
+  {st : Status} ->
+  p == n = False ->
+  takeOwner ctx sc (EVar nid n nm) = Right (sc', fl) ->
+  lookupPlace p sc = Just st ->
+  lookupPlace p sc' = Just st
+takeVarKeepLookup ne pT lp = vGo (lookupPlace n sc) Refl
+  where
+    vGo : (look : Maybe Status) -> lookupPlace n sc = look ->
+          lookupPlace p sc' = Just st
+    vGo Nothing pL =
+      let scEq = cong fst (rightInj (trans (sym (takeVarMiss ctx nid nm pL)) pT))
+      in trans (cong (\s => lookupPlace p s) (sym scEq)) lp
+    vGo (Just stN) pL =
+      moveKeepLookup ne lp (takeVarMove pT pL)
+
+export
+takeVarKeepLookupInv :
+  {ctx : Ctx} -> {sc, sc' : Scopes} ->
+  {nid : Nat} -> {n, p : Place} -> {nm : String} -> {fl : Flag} ->
+  {st : Status} ->
+  p == n = False ->
+  takeOwner ctx sc (EVar nid n nm) = Right (sc', fl) ->
+  lookupPlace p sc' = Just st ->
+  lookupPlace p sc = Just st
+takeVarKeepLookupInv ne pT lp' = vGo (lookupPlace n sc) Refl
+  where
+    vGo : (look : Maybe Status) -> lookupPlace n sc = look ->
+          lookupPlace p sc = Just st
+    vGo Nothing pL =
+      let scEq = cong fst (rightInj (trans (sym (takeVarMiss ctx nid nm pL)) pT))
+      in trans (cong (\s => lookupPlace p s) scEq) lp'
+    vGo (Just stN) pL =
+      moveKeepLookupInv ne lp' (takeVarMove pT pL)
+
+||| Empty argument list: `checkArgsModes` is the identity on scopes.
+export
+argsModesKeepLookupNil :
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {callee : String} ->
+  {ms : List Consume} -> {p : Place} -> {st : Status} ->
+  checkArgsModes ctx sc callee [] ms = Right sc' ->
+  lookupPlace p sc = Just st ->
+  lookupPlace p sc' = Just st
+argsModesKeepLookupNil {ms} eq lp =
+  let scEq = rightInj (trans (sym (checkArgsModesNil ctx sc callee ms)) eq)
+  in trans (cong (\s => lookupPlace p s) (sym scEq)) lp
+
+export
+argsModesKeepLookupNilInv :
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {callee : String} ->
+  {ms : List Consume} -> {p : Place} -> {st : Status} ->
+  checkArgsModes ctx sc callee [] ms = Right sc' ->
+  lookupPlace p sc' = Just st ->
+  lookupPlace p sc = Just st
+argsModesKeepLookupNilInv {ms} eq lp' =
+  let scEq = rightInj (trans (sym (checkArgsModesNil ctx sc callee ms)) eq)
+  in trans (cong (\s => lookupPlace p s) scEq) lp'
+
+||| Extra Always `EVar` writes are `[n, n]`; a miss is `p != n`.
+export
+ninVarAlwaysNeq :
+  {acc : List (String, List Consume)} ->
+  {nid : Nat} -> {n, p : Place} -> {nm : String} ->
+  placeIn p (fst (argModeFoot acc (EVar nid n nm) Always)) = False ->
+  p == n = False
+ninVarAlwaysNeq nin =
+  fst (orFalse {x = p == n} {y = placeIn p [n]} nin)
 
 ||| Single consume-mode `EVar` argument: after `checkArgsModes` the intern
 ||| is not use-safe. This is the checker-side transfer lemma for a named

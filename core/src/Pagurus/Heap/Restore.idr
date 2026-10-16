@@ -11988,24 +11988,32 @@ goneStayBorrow ua oa noMiss eq evs =
               oa1.deadUnsafe q stQ (HVPtr a) lp look (isDeadTrackedFreed h1 a fr1)))
         (\miss1 => void (exprsStay oa.wf evs fr miss1))
 
-||| Unique consume + free of leftover intern puts intern in writes.
-||| DestOwn-then-Ghost is unheld, so `afterUserBody` is `Left` not `FBFrame`.
-||| Under `nin`, a nested `heldPtr = False` contradicts `FBFrame`'s `True`.
+||| Unique Own leftover intern whose lookup and Unique Own status both
+||| survive evaluation cannot die: `deadUnsafe` of the post OA vs `ownSafe`.
+||| `nin` + `EnvFrame` keep `lookupH intern = HVPtr a`. The remaining
+||| premise is `lookupPlace intern sc' = Just own.ownSt` (intern not
+||| consumed and not borrowed — EVar borrow writes `[]` and only reads).
+||| `internShiftXfer` / `useKeepLookupInv` / `useKeepSelfSafe` transport
+||| dest intern Unique Own / `xferLive`; they do not restore leftover
+||| intern Unique Own at `sc'`.
 goneDiedWrite :
-  {q : Place} -> {w : List Place} -> {a : Addr} ->
-  placeIn q w = False ->
+  {env, env' : HEnv} -> {h, h' : Heap} -> {sc, sc' : Scopes} ->
+  {w : List Place} -> {a : Addr} ->
+  UniqueKeys env ->
+  (own : Own env sc a) ->
+  OverApprox env h sc ->
+  EnvFrame env env' w ->
+  placeIn own.ownQ w = False ->
+  OverApprox env' h' sc' ->
+  lookupPlace own.ownQ sc' = Just own.ownSt ->
+  cell h' a = Just Freed ->
   FreedBy a ->
   Void
-goneDiedWrite {q} {w} nin (FBFrame {frame} hd _ _) with (placeIn q w)
-  goneDiedWrite nin (FBFrame hd _ _) | True = void (trueNotFalse nin)
-  goneDiedWrite nin (FBFrame {frame} hd _ _) | False with (heldPtr frame a)
-    goneDiedWrite nin (FBFrame hd _ _) | False | False = void (trueNotFalse (sym hd))
-    goneDiedWrite nin (FBFrame hd _ _) | False | True = void (trueNotFalse (sym hd))
-goneDiedWrite {q} {w} nin (FBFrameRet {frame} hd _ _) with (placeIn q w)
-  goneDiedWrite nin (FBFrameRet hd _ _) | True = void (trueNotFalse nin)
-  goneDiedWrite nin (FBFrameRet {frame} hd _ _) | False with (heldPtr frame a)
-    goneDiedWrite nin (FBFrameRet hd _ _) | False | False = void (trueNotFalse (sym hd))
-    goneDiedWrite nin (FBFrameRet hd _ _) | False | True = void (trueNotFalse (sym hd))
+goneDiedWrite {h'} _ own _ envFr nin oa' lp' fr _ =
+  let look' = ownerEnvStay own envFr nin
+      du = oa'.deadUnsafe own.ownQ own.ownSt (HVPtr a) lp' look'
+            (isDeadTrackedFreed h' a fr)
+  in trueNotFalse (trans (sym du) own.ownSafe)
 
 ||| Pack a post-body OA onto leftover `Own` (heap-independent). `InHand`
 ||| keeps the same holders and needs the cell still live at `hB`.
@@ -16721,7 +16729,11 @@ mutual
            (\fr =>
               case exprHeapFrameOf {acc = ctx.summaries} {e} oa.wf ev a (ownLive oa own) of
                 Left keep => void (liveNotFreed (justInjH (trans (sym keep) fr)))
-                Right died => void (goneDiedWrite nin died))
+                Right died =>
+                  let envFr = exprEnvFrameOf {acc = ctx.summaries} {e} ev
+                      look' = ownerEnvStay own envFr nin
+                      (st ** lp) = oaG.tracked own.ownQ (HVPtr a) look'
+                  in void (goneDiedWrite uk own oa envFr nin oaG lp fr died))
            (\miss => void (exprStay oa.wf ev (ownLive oa own) miss)))
 
   cellThroughTake :

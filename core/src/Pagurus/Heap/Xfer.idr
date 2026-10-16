@@ -779,3 +779,44 @@ internShiftXferChainCanary :
 internShiftXferChainCanary =
   asgDestFromCaptured {d = 1} {r = 3} {live = [3, 2]}
     {id = 5} {nm = "n"} {rhs = EVar 6 3 "r"} Refl Refl
+
+||| Copy assignment is transparent to `valuePlaces` / `xferLive` /
+||| footprints, so Unique Own AFTER Copy is Unique Own AFTER the rhs.
+export
+valuePlacesCopyEq : {id, n : Nat} -> {nm : String} -> {rhs : Expr} ->
+  valuePlaces (EAssign id n nm Copy rhs) = valuePlaces rhs
+valuePlacesCopyEq = Refl
+
+export
+xferLiveCopyEq : {live : List Place} -> {id, n : Nat} -> {nm : String} ->
+  {rhs : Expr} ->
+  xferLive live (EAssign id n nm Copy rhs) = xferLive live rhs
+xferLiveCopyEq = Refl
+
+export
+argFootprintCopyEq : {acc : List (String, List Consume)} ->
+  {id, n : Nat} -> {nm : String} -> {rhs : Expr} ->
+  argFootprint acc (EAssign id n nm Copy rhs) = argFootprint acc rhs
+argFootprintCopyEq = Refl
+
+export
+argModeFootCopyEq : {acc : List (String, List Consume)} ->
+  {id, n : Nat} -> {nm : String} -> {rhs : Expr} -> {m : Consume} ->
+  argModeFoot acc (EAssign id n nm Copy rhs) m = argModeFoot acc rhs m
+argModeFootCopyEq {m = Never} = Refl
+argModeFootCopyEq {m = May} = Refl
+argModeFootCopyEq {m = Always} = Refl
+
+export
+xferArgsNilEq : {live : List Place} -> xferArgs live [] = live
+xferArgsNilEq = Refl
+
+export
+copyUnfoldCanary :
+  (valuePlaces (EAssign 0 1 "n" Copy (EVar 2 3 "x")) = [3],
+   xferLive [2] (EAssign 0 1 "n" Copy (EVar 3 4 "y")) = [2],
+   argFootprint [] (EAssign 0 1 "n" Copy (EVar 2 3 "x")) = ([], [3]),
+   argModeFoot [] (EAssign 0 1 "n" Copy (EVar 2 3 "x")) Never =
+     argModeFoot [] (EVar 2 3 "x") Never,
+   xferArgs [2] [] = [2])
+copyUnfoldCanary = (Refl, Refl, Refl, Refl, Refl)

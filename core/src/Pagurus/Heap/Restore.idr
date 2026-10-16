@@ -38,6 +38,7 @@ import Pagurus.Heap.Return
 import public Pagurus.Heap.Unique
 import public Pagurus.Heap.Inh
 import Pagurus.Heap.Xfer
+import Pagurus.Heap.RestoreAux
 
 %default total
 
@@ -856,7 +857,7 @@ borrowListOA :
 borrowListOA [] env0 env0 h0 h0 HEArgsNil _ _ eq oa0 =
   hrFromOk (argsBorrowNilH eq oa0)
 borrowListOA (e :: rest) env0 env1 h0 h1 (HEArgsCons v envM hM evE evEs) sc0 sc1 eq oa0 =
-  hrFromOk (argsBorrowConsH rest
+  hrFromOkNone (argsBorrowConsH rest
     (\scA, pE => ihs.exprIH evE sc0 scA pE oa0)
     (\scA, pEs, oaM => HROutOk (borrowListOA rest envM env1 hM h1 evEs scA sc1 pEs oaM))
     eq (checkExpr ctx sc0 e) Refl)
@@ -1035,7 +1036,7 @@ reallocArgsOA :
 reallocArgsOA HRNil eq oa =
   hrFromOk (reallocNilH eq oa)
 reallocArgsOA (HRHeadOk {e} {es = rest} v envM hM evE evEs) eq oa =
-  hrFromOk (reallocHeadOkH rest
+  hrFromOkNone (reallocHeadOkH rest
     (\scA, fl, pT => ihs.takeIH evE sc scA fl pT oa)
     (\scA, pEs, oaM =>
        HROutOk (borrowListOA rest envM env1 hM h1 evEs scA sc1 pEs oaM))
@@ -1904,19 +1905,19 @@ mutual
     let scEq = rightInj (trans (sym (checkExprNull ctx sc id)) eq)
     in MkLN (hrFromOk (nullH id eq ln.oaLN)) (nuoRewrite scEq ln.nuoLN) ln.liveLN
   exprLN ln eq (HEVarLive b look cl) {e = EVar nid n nm} =
-    MkLN (hrFromOk (varUseH nid n nm eq ln.oaLN (HEVarLive b look cl)))
+    MkLN (hrFromOk (varUseHFuns funs nid n nm eq ln.oaLN (HEVarLive b look cl)))
       (nuoUse ln.nuoLN (trans (sym (checkExprVar ctx sc nid n nm)) eq) look)
       ln.liveLN
   exprLN ln eq (HEVarNone look) {e = EVar nid n nm} =
-    MkLN (hrFromOk (varUseH nid n nm eq ln.oaLN (HEVarNone look)))
+    MkLN (hrFromOk (varUseHFuns funs nid n nm eq ln.oaLN (HEVarNone look)))
       (nuoUse ln.nuoLN (trans (sym (checkExprVar ctx sc nid n nm)) eq) look)
       ln.liveLN
   exprLN ln eq (HEVarCopy look) {e = EVar nid n nm} =
-    MkLN (hrFromOk (varUseH nid n nm eq ln.oaLN (HEVarCopy look)))
+    MkLN (hrFromOk (varUseHFuns funs nid n nm eq ln.oaLN (HEVarCopy look)))
       (nuoUse ln.nuoLN (trans (sym (checkExprVar ctx sc nid n nm)) eq) look)
       ln.liveLN
   exprLN ln eq (HEVarMiss miss) {e = EVar nid n nm} =
-    MkLN (hrFromOk (varUseH nid n nm eq ln.oaLN (HEVarMiss miss)))
+    MkLN (hrFromOk (varUseHFuns funs nid n nm eq ln.oaLN (HEVarMiss miss)))
       (nuoUseMiss ln.nuoLN (trans (sym (checkExprVar ctx sc nid n nm)) eq) miss)
       ln.liveLN
   exprLN ln eq HEUnsup {e = EUnsupported nid reason} =
@@ -2718,7 +2719,7 @@ mutual
         (replace {p = \x => cell h x = Just Live}
            (sym (eqNatTrue a b pab)) cl))
     takeLN ln eq (HEVarLive b look cl) {e = EVar nid n nm} {env} {env' = env} {h} {h' = h} | False =
-      let ht = takeVarH ctx nid n nm eq ln.oaLN (HEVarLive b look cl)
+      let ht = takeVarHFuns funs ctx nid n nm eq ln.oaLN (HEVarLive b look cl)
       in MkTLN (MkLN (htFromOk ht) (nuoMove ln.nuoLN (takeVarMoveEq eq look) look) ln.liveLN)
            (htTaken ht)
       where
@@ -2747,7 +2748,7 @@ mutual
                     (cong fst (rightInj (trans (sym (takeVarJustR ctx pL pMv)) pT)))
                     pMv
   takeLN ln eq (HEVarNone none) {e = EVar nid n nm} =
-    let ht = takeVarH ctx nid n nm eq ln.oaLN (HEVarNone none)
+    let ht = takeVarHFuns funs ctx nid n nm eq ln.oaLN (HEVarNone none)
     in MkTLN (MkLN (htFromOk ht) (nuoMoveOrGhost eq none) ln.liveLN)
          (htTaken ht)
       where
@@ -2775,7 +2776,7 @@ mutual
   takeLN ln eq (HEVarCopy look) {e = EVar nid n nm} =
     void (takeVarCopyContra ctx nid n nm eq ln.oaLN look)
   takeLN ln eq (HEVarMiss miss) {e = EVar nid n nm} =
-    let ht = takeVarH ctx nid n nm eq ln.oaLN (HEVarMiss miss)
+    let ht = takeVarHFuns funs ctx nid n nm eq ln.oaLN (HEVarMiss miss)
     in MkTLN (MkLN (htFromOk ht) (nuoMiss eq miss) ln.liveLN)
          (htTaken ht)
       where
@@ -3236,7 +3237,7 @@ mutual
     {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
     {id : Nat} -> {n : Place} -> {nm : String} -> {rhs : Expr} ->
     {env, env1 : HEnv} -> {h, h1 : Heap} -> {v : HVal} ->
-    {sc, sc' : Scopes} -> {a : Addr} -> {w : HVal} ->
+    {sc, sc' : Scopes} -> {a : Addr} ->
     LiveNuo env h sc a ->
     checkExpr ctx sc (EAssign id n nm Ptr rhs) = Right sc' ->
     HEvalExpr {funs} env h rhs (HROk v env1 h1) ->
@@ -3301,7 +3302,7 @@ mutual
     {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
     {id : Nat} -> {n : Place} -> {nm : String} -> {rhs : Expr} ->
     {env, env1 : HEnv} -> {h, h1 : Heap} -> {v : HVal} ->
-    {sc, sc' : Scopes} -> {a : Addr} -> {fl : Flag} -> {w : HVal} ->
+    {sc, sc' : Scopes} -> {a : Addr} -> {fl : Flag} ->
     LiveNuo env h sc a ->
     takeOwner ctx sc (EAssign id n nm Ptr rhs) = Right (sc', fl) ->
     HEvalExpr {funs} env h rhs (HROk v env1 h1) ->
@@ -18192,8 +18193,8 @@ mutual
                                                   void (Pagurus.Checker.nullNotGhost
                                                     (sym (cong snd (rightInj
                                                       (trans (sym (takeUseRight uid pA)) pI2)))))
-                                            nullE (ECall cid callee args2) pI2 pinE1 =
-                                              void (trueNotFalse (sym pinE1))
+                                            nullE (ECall cid callee args2) pI2 _ =
+                                              void (callNotNull pI2)
                                             nullE (EAssign i4 d4 nm4 Ptr rhs4) pI2 pinE1 =
                                               t3 (takeOwner ctx scFrom rhs4) Refl
                                               where
@@ -20399,6 +20400,11 @@ mutual
                                 tGo True pinA =
                                   ownThruModesDest {chk} {ihs} {oih} (exprUK uk evE) ownA0 oaA0
                                     pinA ov1 pEs evEs
+                                envFr : EnvFrame envA env1
+                                          (fst (argsCallFoot ctx.summaries es ms))
+                                envFr = callExprsEnvFrame {acc = ctx.summaries}
+                                          {es} {ms}
+                                          (callFootOf ctx.summaries es ms) evEs
                             in stayOwnGo
                                  (tGo (placeIn ownA0.ownQ
                                     (fst (argsCallFoot ctx.summaries es ms))) Refl)
@@ -20413,7 +20419,11 @@ mutual
                                                 (ownLive oaA0 ownA0) of
                                            Left keep => void (liveNotFreed (justInjH
                                              (trans (sym keep) fr)))
-                                           Right died => void (goneDiedWrite nT died))
+                                           Right died =>
+                                             qTakeSGone {e} {es} {m} {ms}
+                                               (exprUK uk evE) own ownA0 oa oaA0
+                                               neQ pT pEs evE evEs ov envFr
+                                               oaG fr died)
                                       (\miss => void (exprsStay oaA0.wf evEs
                                          (ownLive oaA0 ownA0) miss)))
                       in unsGo (unsafeUse st) Refl
@@ -20429,7 +20439,9 @@ mutual
                   (\fr =>
                      case exprHeapFrameOf {acc = ctx.summaries} {e} oa.wf evE a (ownLive oa own) of
                        Left keep => void (liveNotFreed (justInjH (trans (sym keep) fr)))
-                       Right died => void (goneDiedWrite nH died))
+                       Right died =>
+                         qTakeHeadSGone {e} {m} uk own oa pc nH pT evE
+                           oaG fr died)
                   (\miss => void (exprStay oa.wf evE (ownLive oa own) miss)))
 
   export

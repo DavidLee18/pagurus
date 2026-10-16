@@ -54,3 +54,41 @@ overlapReadNested :
 overlapReadNested =
   overlapRead {q = 4} {e = EAssign 1 1 "n" Ptr (EVar 3 4 "x")} {ys = [4]}
     Refl Refl
+
+placeInHeadX : (d : Place) -> (qs : List Place) -> placeIn d (d :: qs) = True
+placeInHeadX d qs = rewrite eqNatRefl d in Refl
+
+placeAfterTrue : (d : Place) -> (xs : List Place) ->
+  placeAfter d xs True = d :: xs
+placeAfterTrue _ _ = Refl
+
+||| dest intern of leftover intern (leftover intern in `xferLive` of the
+||| rhs and in `readPlaces`) is in `xferLive` of the pointer assignment
+||| via `placeAfter` True.
+export
+asgDestInXfer :
+  {d, q : Place} -> {live : List Place} ->
+  {id : Nat} -> {nm : String} -> {rhs : Expr} ->
+  placeIn q (xferLive live rhs) = True ->
+  placeIn q (readPlaces rhs) = True ->
+  placeIn d (xferLive live (EAssign id d nm Ptr rhs)) = True
+asgDestInXfer {d} {q} {live} {rhs} inX inR =
+  let ov = overlapRead {q} {e = rhs} {ys = xferLive live rhs} inR inX
+  in ovGo (placesOverlap (readPlaces rhs) (xferLive live rhs)) Refl ov
+  where
+    ovGo : (b : Bool) ->
+           placesOverlap (readPlaces rhs) (xferLive live rhs) = b ->
+           placesOverlap (readPlaces rhs) (xferLive live rhs) = True ->
+           placeIn d (placeAfter d (xferLive live rhs) b) = True
+    ovGo True _ _ =
+      replace {p = \xs => placeIn d xs = True}
+        (sym (placeAfterTrue d (xferLive live rhs)))
+        (placeInHeadX d (xferLive live rhs))
+    ovGo False peq ovT = void (trueNotFalseX (trans (sym ovT) peq))
+
+export
+asgDestInXferVar :
+  placeIn 1 (xferLive [2] (EAssign 0 1 "n" Ptr (EVar 3 2 "x"))) = True
+asgDestInXferVar =
+  asgDestInXfer {d = 1} {q = 2} {live = [2]} {id = 0} {nm = "n"}
+    {rhs = EVar 3 2 "x"} Refl Refl

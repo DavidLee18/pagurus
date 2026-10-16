@@ -2401,6 +2401,259 @@ mutual
               rGo False pr =
                 void (leftNotRight (trans (sym (checkCallOpaque pb pr pd)) pC))
 
+--------------------------------------------------------------------------------
+-- Inverse of the takeKeepWR family: lookupPlace p at sc' is lookupPlace p
+-- at sc, given intern misses eval W ++ R. Honest: EVar is p != n via
+-- ninVarWRNeq (W of EVar is []; R is [n]). Checker unchanged.
+--------------------------------------------------------------------------------
+
+mutual
+  ||| Inverse `takeOwner` keep given a miss of eval `W ++ R`.
+  export
+  takeKeepWRInv :
+    {ctx : Ctx} -> {e : Expr} -> {p : Place} -> {st : Status} ->
+    placeIn p (fst (argFootprint ctx.summaries e) ++
+               snd (argFootprint ctx.summaries e)) = False ->
+    {sc, sc' : Scopes} -> {fl : Flag} ->
+    takeOwner ctx sc e = Right (sc', fl) ->
+    lookupPlace p sc' = Just st ->
+    lookupPlace p sc = Just st
+  takeKeepWRInv {e = ELit id} _ pT lp' = takeLitKeepLookupInv pT lp'
+  takeKeepWRInv {e = ENull id} _ pT lp' = takeNullKeepLookupInv pT lp'
+  takeKeepWRInv {e = EVar nid n nm} nin pT lp' =
+    takeVarKeepLookupInv
+      (ninVarWRNeq {acc = ctx.summaries} {nid} {n} {nm} nin) pT lp'
+  takeKeepWRInv {e = EUnsupported id reason} _ pT _ =
+    void (leftNotRight (trans (sym (takeUnsup ctx sc id reason)) pT))
+  takeKeepWRInv {e = EAssign id n nm Copy rhs} nin pT lp' =
+    cGo (checkExpr ctx sc rhs) Refl
+    where
+      cGo : (r : Either Diag Scopes) -> checkExpr ctx sc rhs = r ->
+            lookupPlace p sc = Just st
+      cGo (Left d) pE =
+        void (leftNotRight (trans (sym (takeAsgCopyLeft id n nm pE)) pT))
+      cGo (Right sc1) pE =
+        let scEq = cong fst (rightInj (trans (sym (takeAsgCopyRight id n nm pE)) pT))
+        in exprKeepWRInv nin pE (trans (cong (\s => lookupPlace p s) scEq) lp')
+  takeKeepWRInv {e = EAssign aid dest nm Ptr rhs} nin pT lp' =
+    let (ne, ninR) = ninAsgPtrWR {acc = ctx.summaries} {id = aid} {dest} {nm} {rhs} nin
+    in takeAsgPtrKeepLookupInv ne (takeKeepWRInv {e = rhs} ninR) pT lp'
+  takeKeepWRInv {e = EMalloc mid args} nin pT lp' =
+    takeMallocKeepLookupInv (borrowKeepWRInv nin) pT lp'
+  takeKeepWRInv {e = EUse uid args} nin pT lp' =
+    uGo (checkArgsBorrow ctx sc args) Refl
+    where
+      uGo : (r : Either Diag Scopes) -> checkArgsBorrow ctx sc args = r ->
+            lookupPlace p sc = Just st
+      uGo (Left d) pA =
+        void (leftNotRight (trans (sym (takeUseLeft uid pA)) pT))
+      uGo (Right sc1) pA =
+        let scEq = cong fst (rightInj (trans (sym (takeUseRight uid pA)) pT))
+        in borrowKeepWRInv nin pA (trans (cong (\s => lookupPlace p s) scEq) lp')
+  takeKeepWRInv {e = ECall cid callee args} nin pT lp' =
+    takeCallKeepLookupInv (callKeepWRInv {cid} {callee} {args} nin) pT lp'
+
+  ||| Inverse `checkExpr` keep given a miss of eval `W ++ R`.
+  export
+  exprKeepWRInv :
+    {ctx : Ctx} -> {e : Expr} -> {p : Place} -> {st : Status} ->
+    placeIn p (fst (argFootprint ctx.summaries e) ++
+               snd (argFootprint ctx.summaries e)) = False ->
+    {sc, sc' : Scopes} ->
+    checkExpr ctx sc e = Right sc' ->
+    lookupPlace p sc' = Just st ->
+    lookupPlace p sc = Just st
+  exprKeepWRInv {e = ELit id} _ eq lp' =
+    let scEq = rightInj (trans (sym (checkExprLit ctx sc id)) eq)
+    in trans (cong (\s => lookupPlace p s) scEq) lp'
+  exprKeepWRInv {e = ENull id} _ eq lp' =
+    let scEq = rightInj (trans (sym (checkExprNull ctx sc id)) eq)
+    in trans (cong (\s => lookupPlace p s) scEq) lp'
+  exprKeepWRInv {e = EVar nid n nm} nin eq lp' =
+    useKeepLookupInv
+      (ninVarWRNeq {acc = ctx.summaries} {nid} {n} {nm} nin) lp'
+      (trans (sym (checkExprVar ctx sc nid n nm)) eq)
+  exprKeepWRInv {e = EUnsupported id reason} _ eq _ =
+    void (leftNotRight (trans (sym (checkExprUnsup ctx sc id reason)) eq))
+  exprKeepWRInv {e = EAssign id n nm Copy rhs} nin eq lp' =
+    exprKeepWRInv {e = rhs} nin (trans (sym (checkExprAsgCopy id n nm)) eq) lp'
+  exprKeepWRInv {e = EMalloc mid args} nin eq lp' =
+    borrowKeepWRInv nin (trans (sym (checkExprMalloc ctx sc mid args)) eq) lp'
+  exprKeepWRInv {e = EUse uid args} nin eq lp' =
+    borrowKeepWRInv nin (trans (sym (checkExprUse ctx sc uid args)) eq) lp'
+  exprKeepWRInv {e = ECall cid callee args} nin eq lp' =
+    callKeepWRInv {cid} {callee} {args} nin
+      (trans (sym (checkExprCall ctx sc cid callee args)) eq) lp'
+  exprKeepWRInv {e = EAssign aid dest nm Ptr rhs} nin eq lp' =
+    ptrGo (takeOwner ctx sc rhs) Refl (ghostCopyLeakFalseChk eq)
+    where
+      ne : p == dest = False
+      ne = fst (ninAsgPtrWR {acc = ctx.summaries} {id = aid} {dest} {nm} {rhs} nin)
+      ninR : placeIn p (fst (argFootprint ctx.summaries rhs) ++
+                        snd (argFootprint ctx.summaries rhs)) = False
+      ninR = snd (ninAsgPtrWR {acc = ctx.summaries} {id = aid} {dest} {nm} {rhs} nin)
+      ptrGo :
+        (r : Either Diag (Scopes, Flag)) ->
+        takeOwner ctx sc rhs = r ->
+        ghostCopyLeak rhs = False ->
+        lookupPlace p sc = Just st
+      ptrGo (Left d) pI leakI =
+        void (leftNotRight
+          (trans (sym (checkExprAsgPtrLeft aid dest nm leakI pI)) eq))
+      ptrGo (Right (scI, Ghost)) pI leakI =
+        let scEq = rightInj
+                     (trans (sym (checkExprAsgPtrGhost aid dest nm leakI pI)) eq)
+            lpI = setPlaceKeepLookupInv {v = Pagurus.Status.singleton AEmpty} ne
+                    (trans (cong (\s => lookupPlace p s) scEq) lp')
+        in takeKeepWRInv {e = rhs} ninR pI lpI
+      ptrGo (Right (scI, Null)) pI leakI =
+        let scEq = rightInj
+                     (trans (sym (checkExprAsgPtrNull aid dest nm leakI pI)) eq)
+            lpI = setPlaceKeepLookupInv {v = Pagurus.Status.singleton ANull} ne
+                    (trans (cong (\s => lookupPlace p s) scEq) lp')
+        in takeKeepWRInv {e = rhs} ninR pI lpI
+      ptrGo (Right (scI, Owner)) pI leakI = useGo
+        (usePlace (setPlace dest (Pagurus.Status.singleton AOwned) scI)
+           dest aid nm) Refl
+        where
+          useGo :
+            (u : Either Diag Scopes) ->
+            usePlace (setPlace dest (Pagurus.Status.singleton AOwned) scI)
+              dest aid nm = u ->
+            lookupPlace p sc = Just st
+          useGo (Left d) pU =
+            void (leftNotRight
+              (trans (sym (checkExprAsgPtrUseFail leakI pI pU)) eq))
+          useGo (Right sc2) pU =
+            let scEq = rightInj
+                         (trans (sym (checkExprAsgPtrOwner leakI pI pU)) eq)
+                lp2 = trans (cong (\s => lookupPlace p s) scEq) lp'
+                lpSet = useKeepLookupInv ne lp2 pU
+                lpI = setPlaceKeepLookupInv
+                        {v = Pagurus.Status.singleton AOwned} ne lpSet
+            in takeKeepWRInv {e = rhs} ninR pI lpI
+
+  ||| Inverse `checkArgsBorrow` keep given a miss of eval `W ++ R` of the list.
+  export
+  borrowKeepWRInv :
+    {ctx : Ctx} -> {args : List Expr} -> {p : Place} -> {st : Status} ->
+    placeIn p (fst (argsEvalFoot ctx.summaries args) ++
+               snd (argsEvalFoot ctx.summaries args)) = False ->
+    {sc, sc' : Scopes} ->
+    checkArgsBorrow ctx sc args = Right sc' ->
+    lookupPlace p sc' = Just st ->
+    lookupPlace p sc = Just st
+  borrowKeepWRInv {args = []} _ eq lp' =
+    let scEq = rightInj (trans (sym (checkArgsBorrowNil ctx sc)) eq)
+    in trans (cong (\s => lookupPlace p s) scEq) lp'
+  borrowKeepWRInv {args = e :: es} nin eq lp' =
+    let (sc1 ** (pE, pEs)) = argsBorrowSplit eq
+        (nH, nT) = ninEvalArgsConsWR {acc = ctx.summaries} {e} {es} nin
+    in exprKeepWRInv {e} nH pE (borrowKeepWRInv {args = es} nT pEs lp')
+
+  ||| Inverse `checkRealloc` keep given a miss of eval `W ++ R` of the args.
+  export
+  reallocKeepWRInv :
+    {ctx : Ctx} -> {args : List Expr} -> {p : Place} -> {st : Status} ->
+    placeIn p (fst (argsEvalFoot ctx.summaries args) ++
+               snd (argsEvalFoot ctx.summaries args)) = False ->
+    {sc, sc' : Scopes} ->
+    checkRealloc ctx sc args = Right sc' ->
+    lookupPlace p sc' = Just st ->
+    lookupPlace p sc = Just st
+  reallocKeepWRInv {args = []} _ eq lp' =
+    let scEq = rightInj (trans (sym (checkReallocNil ctx sc)) eq)
+    in trans (cong (\s => lookupPlace p s) scEq) lp'
+  reallocKeepWRInv {args = e :: es} nin eq lp' =
+    tGo (takeOwner ctx sc e) Refl
+    where
+      tGo : (r : Either Diag (Scopes, Flag)) ->
+            takeOwner ctx sc e = r ->
+            lookupPlace p sc = Just st
+      tGo (Left d) pT =
+        void (leftNotRight (trans (sym (reallocTailLeft es pT)) eq))
+      tGo (Right (sc1, fl)) pT =
+        let (nH, nT) = ninEvalArgsConsWR {acc = ctx.summaries} {e} {es} nin
+        in takeKeepWRInv {e} nH pT
+             (borrowKeepWRInv nT (trans (sym (reallocTailRight es pT)) eq) lp')
+
+  ||| Inverse `checkArgsModes` keep given a miss of call-foot `W ++ R`.
+  export
+  modesKeepWRInv :
+    {ctx : Ctx} -> {callee : String} -> {es : List Expr} ->
+    {ms : List Consume} -> {p : Place} -> {st : Status} ->
+    placeIn p (fst (argsCallFoot ctx.summaries es ms) ++
+               snd (argsCallFoot ctx.summaries es ms)) = False ->
+    {sc, sc' : Scopes} ->
+    checkArgsModes ctx sc callee es ms = Right sc' ->
+    lookupPlace p sc' = Just st ->
+    lookupPlace p sc = Just st
+  modesKeepWRInv {es = []} _ eq lp' = argsModesKeepLookupNilInv eq lp'
+  modesKeepWRInv {es = e :: es} {ms = []} nin eq lp' =
+    let (nH, nT) = ninCallArgsConsWR {acc = ctx.summaries} {e} {es} {ms = []} nin
+    in argsModesKeepLookupConsInv
+         (takeKeepWRInv {e} (ninModeEvalWR {acc = ctx.summaries} Always nH))
+         (modesKeepWRInv {es} {ms = []} nT)
+         eq lp'
+  modesKeepWRInv {es = e :: es} {ms = Never :: ms} nin eq lp' =
+    let (sc1 ** (pE, pEs)) = argsModesBorrowSplit {m = Never} Refl eq
+        (nH, nT) = ninCallArgsConsWR {acc = ctx.summaries} {e} {es} {ms = Never :: ms} nin
+    in exprKeepWRInv {e} (ninModeEvalWR {acc = ctx.summaries} Never nH) pE
+         (modesKeepWRInv {es} {ms} nT pEs lp')
+  modesKeepWRInv {es = e :: es} {ms = May :: ms} nin eq lp' =
+    let (sc1 ** (fl ** (pT, pEs))) = argsModesMoveSplit {m = May} Refl eq
+        (nH, nT) = ninCallArgsConsWR {acc = ctx.summaries} {e} {es} {ms = May :: ms} nin
+    in takeKeepWRInv {e} (ninModeEvalWR {acc = ctx.summaries} May nH) pT
+         (modesKeepWRInv {es} {ms} nT pEs lp')
+  modesKeepWRInv {es = e :: es} {ms = Always :: ms} nin eq lp' =
+    let (sc1 ** (fl ** (pT, pEs))) = argsModesMoveSplit {m = Always} Refl eq
+        (nH, nT) = ninCallArgsConsWR {acc = ctx.summaries} {e} {es} {ms = Always :: ms} nin
+    in takeKeepWRInv {e} (ninModeEvalWR {acc = ctx.summaries} Always nH) pT
+         (modesKeepWRInv {es} {ms} nT pEs lp')
+
+  ||| Inverse `checkCall` keep given a miss of eval `W ++ R` of the call.
+  export
+  callKeepWRInv :
+    {ctx : Ctx} -> {cid : Nat} -> {callee : String} -> {args : List Expr} ->
+    {p : Place} -> {st : Status} ->
+    placeIn p (fst (argFootprint ctx.summaries (ECall cid callee args)) ++
+               snd (argFootprint ctx.summaries (ECall cid callee args))) = False ->
+    {sc, sc' : Scopes} ->
+    checkCall ctx sc cid callee args = Right sc' ->
+    lookupPlace p sc' = Just st ->
+    lookupPlace p sc = Just st
+  callKeepWRInv nin pC lp' = bGo (isBuiltin callee) Refl
+    where
+      bGo : (b : Bool) -> isBuiltin callee = b -> lookupPlace p sc = Just st
+      bGo True pb =
+        borrowKeepWRInv
+          (callMissEvalWR {acc = ctx.summaries}
+             {ms = calleeModes ctx.summaries callee} nin)
+          (trans (sym (checkCallBuiltin {nid = cid} pb)) pC) lp'
+      bGo False pb = dGo (isDefined ctx callee) Refl
+        where
+          dGo : (d : Bool) -> isDefined ctx callee = d ->
+                lookupPlace p sc = Just st
+          dGo True pd =
+            let pbad = callDefinedNoAlias pC pb pd
+                pModes = trans (sym (checkCallDefined pb pd pbad)) pC
+                ninM = replace
+                         {p = \wr =>
+                            placeIn p (fst wr ++ snd wr) = False}
+                         (callFootEq {callee} {es = args}) nin
+            in modesKeepWRInv {es = args} {ms = funModes ctx callee} ninM pModes lp'
+          dGo False pd = rGo (isRealloc callee) Refl
+            where
+              rGo : (r : Bool) -> isRealloc callee = r ->
+                    lookupPlace p sc = Just st
+              rGo True pr =
+                reallocKeepWRInv
+                  (callMissEvalWR {acc = ctx.summaries}
+                    {ms = calleeModes ctx.summaries callee} nin)
+                  (trans (sym (checkCallRealloc pb pr pd)) pC) lp'
+              rGo False pr =
+                void (leftNotRight (trans (sym (checkCallOpaque pb pr pd)) pC))
+
   ||| Extra Always `checkArgsModes` keep given a miss of Always writes.
   export
   argsModesKeepLookupExtraMiss :

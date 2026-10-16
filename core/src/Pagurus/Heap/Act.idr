@@ -1309,6 +1309,68 @@ ninVarAlwaysNeq :
 ninVarAlwaysNeq nin =
   fst (orFalse {x = p == n} {y = placeIn p [n]} nin)
 
+||| Extra Always of a literal is Ghost, so `checkArgsModes` rejects it.
+export
+argsModesExtraLitVoid :
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {callee : String} ->
+  {id : Nat} -> {es : List Expr} ->
+  checkArgsModes ctx sc callee (ELit id :: es) [] = Right sc' ->
+  Void
+argsModesExtraLitVoid eq =
+  void (leftNotRight (trans (sym (argsModesExtraGhost es (takeLit ctx sc id))) eq))
+
+||| Extra Always of null: dest intern Unique Own is unchanged (scopes
+||| identity on the head) then the empty tail is `checkArgsModesNil`.
+export
+argsModesKeepLookupExtraNullNil :
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {callee : String} ->
+  {id : Nat} -> {p : Place} -> {st : Status} ->
+  checkArgsModes ctx sc callee [ENull id] [] = Right sc' ->
+  lookupPlace p sc = Just st ->
+  lookupPlace p sc' = Just st
+argsModesKeepLookupExtraNullNil eq lp =
+  let (sc1 ** (fl ** (pT, pEs))) = argsModesExtraSplit eq
+      lp1 = takeNullKeepLookup pT lp
+  in argsModesKeepLookupNil pEs lp1
+
+export
+argsModesKeepLookupExtraNullNilInv :
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {callee : String} ->
+  {id : Nat} -> {p : Place} -> {st : Status} ->
+  checkArgsModes ctx sc callee [ENull id] [] = Right sc' ->
+  lookupPlace p sc' = Just st ->
+  lookupPlace p sc = Just st
+argsModesKeepLookupExtraNullNilInv eq lp' =
+  let (sc1 ** (fl ** (pT, pEs))) = argsModesExtraSplit eq
+  in takeNullKeepLookupInv pT (argsModesKeepLookupNilInv pEs lp')
+
+||| Extra Always of a different intern: head is `takeVarKeepLookup`, empty
+||| tail is `checkArgsModesNil`. Fact 4 for a singleton extra Always tail.
+export
+argsModesKeepLookupExtraVarNil :
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {callee : String} ->
+  {nid : Nat} -> {n, p : Place} -> {nm : String} -> {st : Status} ->
+  p == n = False ->
+  checkArgsModes ctx sc callee [EVar nid n nm] [] = Right sc' ->
+  lookupPlace p sc = Just st ->
+  lookupPlace p sc' = Just st
+argsModesKeepLookupExtraVarNil ne eq lp =
+  let (sc1 ** (fl ** (pT, pEs))) = argsModesExtraSplit eq
+      lp1 = takeVarKeepLookup ne pT lp
+  in argsModesKeepLookupNil pEs lp1
+
+export
+argsModesKeepLookupExtraVarNilInv :
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {callee : String} ->
+  {nid : Nat} -> {n, p : Place} -> {nm : String} -> {st : Status} ->
+  p == n = False ->
+  checkArgsModes ctx sc callee [EVar nid n nm] [] = Right sc' ->
+  lookupPlace p sc' = Just st ->
+  lookupPlace p sc = Just st
+argsModesKeepLookupExtraVarNilInv ne eq lp' =
+  let (sc1 ** (fl ** (pT, pEs))) = argsModesExtraSplit eq
+  in takeVarKeepLookupInv ne pT (argsModesKeepLookupNilInv pEs lp')
+
 ||| Single consume-mode `EVar` argument: after `checkArgsModes` the intern
 ||| is not use-safe. This is the checker-side transfer lemma for a named
 ||| May/Always owner with no further arguments.

@@ -820,3 +820,41 @@ copyUnfoldCanary :
      argModeFoot [] (EVar 2 3 "x") Never,
    xferArgs [2] [] = [2])
 copyUnfoldCanary = (Refl, Refl, Refl, Refl, Refl)
+
+||| dest intern stays in `xferLive` of a pointer assignment whose dest is
+||| a different intern (`placeAfter` only forgets that dest).
+export
+xferLivePtrNeq :
+  {d, p : Place} -> {live : List Place} ->
+  {id : Nat} -> {nm : String} -> {rhs : Expr} ->
+  p == d = False ->
+  placeIn d (xferLive live rhs) = True ->
+  placeIn d (xferLive live (EAssign id p nm Ptr rhs)) = True
+xferLivePtrNeq {d} {p} {live} {rhs} pd pin =
+  afterGo (placesOverlap (readPlaces rhs) (xferLive live rhs)) Refl
+  where
+    afterGo : (b : Bool) ->
+              placesOverlap (readPlaces rhs) (xferLive live rhs) = b ->
+              placeIn d (placeAfter p (xferLive live rhs) b) = True
+    afterGo True _ =
+      placeInTailX {p = d} {q = p} {qs = xferLive live rhs} pin
+    afterGo False _ =
+      pinForgetX {p = d} {d = p} pin (neqNatSymX pd)
+
+export
+ninFootprintPtrRhs :
+  {acc : List (String, List Consume)} ->
+  {id : Nat} -> {p, q : Place} -> {nm : String} -> {rhs : Expr} ->
+  placeIn q (fst (argFootprint acc (EAssign id p nm Ptr rhs))) = False ->
+  placeIn q (fst (argFootprint acc rhs)) = False
+ninFootprintPtrRhs nin =
+  snd (orFX (q == p) (placeIn q (fst (argFootprint acc rhs))) nin)
+
+export
+xferLivePtrNeqCanary :
+  placeIn 1
+    (xferLive [2]
+      (EAssign 0 3 "r" Ptr (EAssign 1 1 "n" Ptr (EVar 2 2 "x")))) = True
+xferLivePtrNeqCanary =
+  xferLivePtrNeq {d = 1} {p = 3} {live = [2]} {id = 0} {nm = "r"}
+    {rhs = EAssign 1 1 "n" Ptr (EVar 2 2 "x")} Refl Refl

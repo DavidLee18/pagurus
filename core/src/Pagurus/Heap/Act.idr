@@ -2009,6 +2009,7 @@ modeWAlwaysEq (EUse _ _) = Refl
 modeWAlwaysEq (EUnsupported _ _) = Refl
 
 ||| Always writes are eval `W ++ R ++ valuePlaces`; a miss is a miss of `W ++ R`.
+export
 ninAlwaysWR :
   {acc : List (String, List Consume)} -> {e : Expr} -> {p : Place} ->
   placeIn p (fst (argModeFoot acc e Always)) = False ->

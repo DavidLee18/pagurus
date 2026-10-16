@@ -16824,7 +16824,7 @@ mutual
         sb1 = storedLiveExtra sb
         pin1 = xferKeeps {acc = ctx.summaries} {e} pin (ninEvalW {m = Always} nH)
     in stayOwnGo stA
-         (\ownA0, oaA0 => recX sc1 ownA0 oaA0 pin1 nT sb1 ov1 pEs (own.ownQ == ownA0.ownQ) Refl)
+         (\ownA0, oaA0 => recX sc1 ownA0 oaA0 pin1 nT sb1 ov1 pEs pT (own.ownQ == ownA0.ownQ) Refl)
          (\inhA, oaInh =>
             let (inh1, _) = inhStayModes inhA oaInh pEs evEs
             in inh1.inLive)
@@ -16836,7 +16836,14 @@ mutual
               (\fr =>
                  case exprHeapFrameOf {acc = ctx.summaries} {e} oa.wf evE a (ownLive oa own) of
                    Left keep => void (liveNotFreed (justInjH (trans (sym keep) fr)))
-                   Right died => void (goneDiedWrite nH died))
+                   Right died =>
+                     let envFrE = exprEnvFrameOf {acc = ctx.summaries} {e} evE
+                         ninW = ninEvalW {m = Always} {p = own.ownQ} nH
+                         lp1 = takeKeepWR {e} {p = own.ownQ}
+                                 (ninAlwaysWR {acc = ctx.summaries} {e}
+                                    {p = own.ownQ} nH)
+                                 pT own.ownLp
+                     in void (goneDiedWrite uk own oa envFrE ninW oaG lp1 fr died))
               (\miss => void (exprStay oa.wf evE (ownLive oa own) miss)))
     where
       recX : (scX : Scopes) -> (ownA0 : Own envA scX a) -> OverApprox envA hA scX ->
@@ -16845,14 +16852,15 @@ mutual
              storedLiveGo ctx.summaries (xferLive live e) es [] = False ->
              callOverlap ctx.summaries es [] = False ->
              checkArgsModes ctx scX callee es [] = Right sc' ->
+             {flX : Flag} -> takeOwner ctx sc e = Right (scX, flX) ->
              (eqb : Bool) -> own.ownQ == ownA0.ownQ = eqb ->
              cell h1 a = Just Live
-      recX scX ownA0 oaA0 pin10 nT0 sb10 ov10 pEs0 True pq =
+      recX scX ownA0 oaA0 pin10 nT0 sb10 ov10 pEs0 _ True pq =
         ownerCellGo {chk} {ihs} {oih} (exprUK uk evE) ownA0 oaA0 (xferLive live e)
           (replace {p = \q => placeIn q (xferLive live e) = True}
              (eqNatTrue own.ownQ ownA0.ownQ pq) pin10)
           sb10 ov10 (ninKeep pq nT0) pEs0 evEs
-      recX scX ownA0 oaA0 pin10 nT0 sb10 ov10 pEs0 False neQ =
+      recX scX ownA0 oaA0 pin10 nT0 sb10 ov10 pEs0 pTX False neQ =
         sh (shiftTo ownA0.ownQ own.ownQ e) (keepsDest ownA0.ownQ own.ownQ e) Refl Refl
         where
           nH0 : placeIn own.ownQ (fst (argModeFoot ctx.summaries e Always)) = False
@@ -16963,9 +16971,12 @@ mutual
               dMiss False ninD =
                 let envFr = exprEnvFrameOf {acc = ctx.summaries} {e} evE
                     look0 = trans (sym (envFr ownA0.ownQ ninD)) ownA0.ownLook
+                    (stD ** (lpD, _, safeD, _)) =
+                      takeKeepWUniqInv {e} {p = ownA0.ownQ} ninD pTX
+                        ownA0.ownLp ownA0.ownHas ownA0.ownSafe ownA0.ownNb
                 in void (noShiftContra oa neQ own.ownLook own.ownLp
                            own.ownSafe own.ownHas own.ownNb
-                           look0 ownA0.ownLp ownA0.ownSafe)
+                           look0 lpD safeD)
               dMiss True pinDE =
                 liveStay pinDE (tGo (placeIn ownA0.ownQ
                   (fst (argsCallFoot ctx.summaries es []))) Refl)

@@ -17061,9 +17061,8 @@ mutual
                     placeIn q (footsWrites (callFoots ctx.summaries es ms)) = False}
                     (eqNatTrue own.ownQ ownA0.ownQ pq) nT0)
                  pEs0 evEs
-          qOwn scX nH0 nT0 pE0 pEs0 sbX ovX ownA0 oaA0 False _ =
-            liveStay (tShift (placeIn ownA0.ownQ
-              (fst (argsCallFoot ctx.summaries es ms))) Refl)
+          qOwn scX nH0 nT0 pE0 pEs0 sbX ovX ownA0 oaA0 False neQ =
+            dMiss (placeIn ownA0.ownQ (fst (argFootprint ctx.summaries e))) Refl
             where
               tShift : (b : Bool) ->
                        placeIn ownA0.ownQ (fst (argsCallFoot ctx.summaries es ms)) = b ->
@@ -17074,8 +17073,17 @@ mutual
               tShift True prf =
                 ownThruModesDest {chk} {ihs} {oih} (exprUK uk evE) ownA0 oaA0
                   prf ovX pEs0 evEs
-              liveStay : StayAt env1 h1 sc' a -> cell h1 a = Just Live
-              liveStay stS =
+              ||| qOwn dw True: dest intern in later writes. Do not use
+              ||| `goneDiedWrite` (needs miss). `argsModesKeepLookupExtraMiss`
+              ||| / `extraAlwaysTailHitContra` are extra Always `[]` only.
+              ||| Dest intern in Never `W` of `e` plus M1 `ov` is a miss of
+              ||| later `W ++ R` (`laterCallWRQuiet`), so dest intern cannot
+              ||| be in later writes.
+              ||| qOwn dw False: same miss is `modesKeepWR` (the extraMiss
+              ||| analog for remaining `ms`).
+              liveStay : placeIn ownA0.ownQ (fst (argFootprint ctx.summaries e)) = True ->
+                         StayAt env1 h1 sc' a -> cell h1 a = Just Live
+              liveStay pinE stS =
                 stayOwnGo stS
                   (\oS, oaS => ownLive oaS oS)
                   (\inhS, _ => inhS.inLive)
@@ -17086,8 +17094,62 @@ mutual
                           case callExprsHeapFrameOf {acc = ctx.summaries} {es} {ms}
                                  oaA0.wf evEs a (ownLive oaA0 ownA0) of
                             Left keep => void (liveNotFreed (justInjH (trans (sym keep) fr)))
-                            Right died => void (goneDiedWrite nT0 died))
+                            Right died =>
+                              void (dw (placeIn ownA0.ownQ
+                                    (footsWrites (callFoots ctx.summaries es ms)))
+                                 Refl oaG fr died))
                        (\miss => void (exprsStay oaA0.wf evEs (ownLive oaA0 ownA0) miss)))
+                where
+                  pinW : placeIn ownA0.ownQ (fst (argModeFoot ctx.summaries e m)) = True
+                  pinW = evalInModeX {acc = ctx.summaries} {e} {m} {p = ownA0.ownQ} pinE
+                  ninWR : placeIn ownA0.ownQ
+                            (fst (argsCallFoot ctx.summaries es ms) ++
+                             snd (argsCallFoot ctx.summaries es ms)) = False
+                  ninWR = laterCallWRQuiet {acc = ctx.summaries} {e} {es} {m} {ms}
+                            {p = ownA0.ownQ} pinW ov
+                  envFr : EnvFrame envA env1 (fst (argsCallFoot ctx.summaries es ms))
+                  envFr = callExprsEnvFrame {acc = ctx.summaries} {es} {ms}
+                            (callFootOf ctx.summaries es ms) evEs
+                  dw : (b : Bool) ->
+                       placeIn ownA0.ownQ
+                         (footsWrites (callFoots ctx.summaries es ms)) = b ->
+                       OverApprox env1 h1 sc' ->
+                       cell h1 a = Just Freed ->
+                       FreedBy a ->
+                       Void
+                  dw False ninD oaG0 fr0 died0 =
+                    let ninW = replace {p = \w => placeIn ownA0.ownQ w = False}
+                                 (callWritesEq {acc = ctx.summaries} {es} {ms})
+                                 ninD
+                        lp' = modesKeepWR {ctx} {callee} {es} {ms}
+                                {p = ownA0.ownQ} {st = ownA0.ownSt}
+                                ninWR pEs0 ownA0.ownLp
+                    in goneDiedWrite (exprUK uk evE) ownA0 oaA0 envFr ninW oaG0
+                         lp' fr0 died0
+                  dw True pinD _ _ _ =
+                    let ninW = placeInPref {p = ownA0.ownQ}
+                                 {xs = fst (argsCallFoot ctx.summaries es ms)}
+                                 {ys = snd (argsCallFoot ctx.summaries es ms)}
+                                 ninWR
+                    in void (trueNotFalse (trans (sym pinD)
+                         (replace {p = \w => placeIn ownA0.ownQ w = False}
+                            (sym (callWritesEq {acc = ctx.summaries} {es} {ms}))
+                            ninW)))
+              dMiss : (b : Bool) ->
+                      placeIn ownA0.ownQ (fst (argFootprint ctx.summaries e)) = b ->
+                      cell h1 a = Just Live
+              dMiss False ninD =
+                let envFrE = exprEnvFrameOf {acc = ctx.summaries} {e} evE
+                    look0 = trans (sym (envFrE ownA0.ownQ ninD)) ownA0.ownLook
+                    (stD ** (lpD, _, safeD, _)) =
+                      exprKeepUniqInv {e} {p = ownA0.ownQ} ninD pE0
+                        ownA0.ownLp ownA0.ownHas ownA0.ownSafe ownA0.ownNb
+                in void (noShiftContra oa neQ own.ownLook own.ownLp
+                           own.ownSafe own.ownHas own.ownNb
+                           look0 lpD safeD)
+              dMiss True pinDE =
+                liveStay pinDE (tShift (placeIn ownA0.ownQ
+                  (fst (argsCallFoot ctx.summaries es ms))) Refl)
       go True pc =
         let (sc1 ** (fl ** (pT, pEs))) = argsModesMoveSplit pc eq
             nH = ninWritesHead {acc = ctx.summaries} {e} {es} {ms = m :: ms} qw

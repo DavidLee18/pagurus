@@ -5736,6 +5736,107 @@ laterWriteQuietFromOverlap {acc} {e} {es} {m} {ms} {p} pc pin ov =
        (sym (pairEq (argModeFoot acc e m)))
        (callOverlapHits {acc} {e} {es} {ms = m :: ms} ov))
 
+||| Membership in concatenated later `W ++ R` is this pair's `R ∪ W` or the rest.
+callWRMember :
+  {p : Place} -> {w2, wt, r2, rt : List Place} ->
+  placeIn p ((w2 ++ wt) ++ (r2 ++ rt)) = True ->
+  Either (placeIn p (r2 ++ w2) = True) (placeIn p (wt ++ rt) = True)
+callWRMember {p} {w2} {wt} {r2} {rt} pin =
+  case inAppend {p} {xs = w2 ++ wt} {ys = r2 ++ rt} pin of
+    Left inW =>
+      case inAppend {p} {xs = w2} {ys = wt} inW of
+        Left inW2 => Left (placeInJoinR {p} {xs = r2} {ys = w2} inW2)
+        Right inWt => Right (placeInAppendL {p} {xs = wt} {ys = rt} inWt)
+    Right inR =>
+      case inAppend {p} {xs = r2} {ys = rt} inR of
+        Left inR2 => Left (placeInAppendL {p} {xs = r2} {ys = w2} inR2)
+        Right inRt => Right (placeInJoinR {p} {xs = wt} {ys = rt} inRt)
+
+||| `p` in this write set and in a later `W ++ R` makes `footHits` true.
+||| Twin of `laterWriteHits` (later `W` from `R ∪ W` of this pair). Head
+||| `W` vs later `R ∪ W` is `hitsFromWriteRead`.
+laterCallWRHits :
+  {acc : List (String, List Consume)} ->
+  {e : Expr} -> {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+  {p : Place} ->
+  placeIn p (fst (argModeFoot acc e m)) = True ->
+  placeIn p (fst (argsCallFoot acc es ms) ++
+             snd (argsCallFoot acc es ms)) = True ->
+  footHits (argModeFoot acc e m) (callFoots acc es ms) = True
+laterCallWRHits {es = []} _ pin = void (trueNotFalseC (sym pin))
+laterCallWRHits {acc} {e} {es = e1 :: es1} {m} {ms} {p} pinW pinRest =
+  replace {p = \wr => footHits wr (callFoots acc (e1 :: es1) ms) = True}
+    (pairEq (argModeFoot acc e m))
+    (replace {p = \wr =>
+                footHits (fst (argModeFoot acc e m), snd (argModeFoot acc e m))
+                  (wr :: callFoots acc es1 (consumeTail ms)) = True}
+       (pairEq (argModeFoot acc e1 (consumeHead ms)))
+       (hereOrLater pinRest))
+  where
+    hereOrLater :
+      placeIn p (fst (argsCallFoot acc (e1 :: es1) ms) ++
+                 snd (argsCallFoot acc (e1 :: es1) ms)) = True ->
+      footHits (fst (argModeFoot acc e m), snd (argModeFoot acc e m))
+        ((fst (argModeFoot acc e1 (consumeHead ms)),
+          snd (argModeFoot acc e1 (consumeHead ms))) ::
+         callFoots acc es1 (consumeTail ms)) = True
+    hereOrLater pin0 =
+      case callWRMember {p}
+             {w2 = fst (argModeFoot acc e1 (consumeHead ms))}
+             {wt = fst (argsCallFoot acc es1 (consumeTail ms))}
+             {r2 = snd (argModeFoot acc e1 (consumeHead ms))}
+             {rt = snd (argsCallFoot acc es1 (consumeTail ms))}
+             pin0 of
+        Left pinHere =>
+          hitsFromWriteRead
+            {w = fst (argModeFoot acc e m)}
+            {r = snd (argModeFoot acc e m)}
+            {w2 = fst (argModeFoot acc e1 (consumeHead ms))}
+            {r2 = snd (argModeFoot acc e1 (consumeHead ms))}
+            {rest = callFoots acc es1 (consumeTail ms)}
+            pinW pinHere
+        Right pinTail =>
+          hitsSuff
+            {w = fst (argModeFoot acc e m)}
+            {r = snd (argModeFoot acc e m)}
+            {f = (fst (argModeFoot acc e1 (consumeHead ms)),
+                  snd (argModeFoot acc e1 (consumeHead ms)))}
+            {rest = callFoots acc es1 (consumeTail ms)}
+            (replace {p = \wr =>
+                footHits wr (callFoots acc es1 (consumeTail ms)) = True}
+               (sym (pairEq (argModeFoot acc e m)))
+               (laterCallWRHits {acc} {e} {es = es1} {m}
+                  {ms = consumeTail ms} {p} pinW pinTail))
+
+||| Dest intern in this argument's write set and a quiet M1 `callOverlap`
+||| cannot sit in a later argument's `W ++ R`. Twin of `laterWriteQuiet`
+||| (later `W` from `R ∪ W` of this pair). Extra Always `[]` gets the same
+||| miss from Always writes (`argsModesKeepLookupExtraMiss`); remaining
+||| modes need the `W ++ R` form for `modesKeepWR`.
+export
+laterCallWRQuiet :
+  {acc : List (String, List Consume)} ->
+  {e : Expr} -> {es : List Expr} -> {m : Consume} -> {ms : List Consume} ->
+  {p : Place} ->
+  placeIn p (fst (argModeFoot acc e m)) = True ->
+  callOverlap acc (e :: es) (m :: ms) = False ->
+  placeIn p (fst (argsCallFoot acc es ms) ++
+             snd (argsCallFoot acc es ms)) = False
+laterCallWRQuiet {acc} {e} {es} {m} {ms} {p} pinW ov =
+  missGo (placeIn p (fst (argsCallFoot acc es ms) ++
+                     snd (argsCallFoot acc es ms))) Refl
+  where
+    missGo : (b : Bool) ->
+             placeIn p (fst (argsCallFoot acc es ms) ++
+                        snd (argsCallFoot acc es ms)) = b ->
+             placeIn p (fst (argsCallFoot acc es ms) ++
+                        snd (argsCallFoot acc es ms)) = False
+    missGo False pb = pb
+    missGo True pb =
+      void (trueNotFalseC
+        (trans (sym (laterCallWRHits {acc} {e} {es} {m} {ms} {p} pinW pb))
+          (callOverlapHits {acc} {e} {es} {ms = m :: ms} ov)))
+
 ||| `modesCover []` holds only for an empty argument list, and that walk
 ||| is quiet at every live set.
 storedLiveGoCoverNil : (acc : List (String, List Consume)) ->

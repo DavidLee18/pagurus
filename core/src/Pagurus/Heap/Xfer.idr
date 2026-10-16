@@ -812,6 +812,7 @@ placeInSuffTrueX {p} {xs = q :: qs} {ys} pin nxs =
   in placeInSuffTrueX {xs = qs} {ys} pin1 nrest
 
 ||| Evaluation writes sit inside consume-mode writes.
+export
 evalInModeX :
   {acc : List (String, List Consume)} -> {e : Expr} -> {m : Consume} ->
   {p : Place} ->

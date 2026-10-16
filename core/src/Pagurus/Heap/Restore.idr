@@ -16852,7 +16852,7 @@ mutual
           (replace {p = \q => placeIn q (xferLive live e) = True}
              (eqNatTrue own.ownQ ownA0.ownQ pq) pin10)
           sb10 ov10 (ninKeep pq nT0) pEs0 evEs
-      recX scX ownA0 oaA0 pin10 nT0 sb10 ov10 pEs0 False _ =
+      recX scX ownA0 oaA0 pin10 nT0 sb10 ov10 pEs0 False neQ =
         sh (shiftTo ownA0.ownQ own.ownQ e) (keepsDest ownA0.ownQ own.ownQ e) Refl Refl
         where
           nH0 : placeIn own.ownQ (fst (argModeFoot ctx.summaries e Always)) = False
@@ -16923,10 +16923,42 @@ mutual
               dW pinL0 False ninD =
                 ownerCellGo {chk} {ihs} {oih} (exprUK uk evE) ownA0 oaA0
                   (xferLive live e) pinL0 sb10 ov10 ninD pEs0 evEs
-              dW _ True _ =
+              dW _ True pinD =
+                let pinW = evalInModeX {acc = ctx.summaries} {e} {m = Always}
+                             {p = ownA0.ownQ}
+                             (shiftToWrites {acc = ctx.summaries}
+                                {d = ownA0.ownQ} {q = own.ownQ} {e} ph)
+                    pinRW = placeInJoinR {p = ownA0.ownQ}
+                              {xs = snd (argModeFoot ctx.summaries e Always)}
+                              {ys = fst (argModeFoot ctx.summaries e Always)}
+                              pinW
+                    ninT = laterWriteQuiet
+                             {w = fst (argModeFoot ctx.summaries e Always)}
+                             {r = snd (argModeFoot ctx.summaries e Always)}
+                             {fs = callFoots ctx.summaries es []}
+                             {p = ownA0.ownQ} pinRW
+                             (replace {p = \wr =>
+                                footHits wr (callFoots ctx.summaries es []) = False}
+                                (sym (pairEta (argModeFoot ctx.summaries e Always)))
+                                (callOverlapHits {acc = ctx.summaries} {e} {es}
+                                   {ms = []} ov))
+                in void (trueNotFalse (trans (sym pinD) ninT))
+          sh False _ _ _ =
+            dMiss (placeIn ownA0.ownQ (fst (argFootprint ctx.summaries e))) Refl
+            where
+              dMiss : (b : Bool) ->
+                      placeIn ownA0.ownQ (fst (argFootprint ctx.summaries e)) = b ->
+                      cell h1 a = Just Live
+              dMiss False ninD =
+                let envFr = exprEnvFrameOf {acc = ctx.summaries} {e} evE
+                    look0 = trans (sym (envFr ownA0.ownQ ninD)) ownA0.ownLook
+                in void (noShiftContra oa neQ own.ownLook own.ownLp
+                           own.ownSafe own.ownHas own.ownNb
+                           look0 ownA0.ownLp ownA0.ownSafe)
+              dMiss True _ =
                 liveStay (tGo (placeIn ownA0.ownQ
                   (fst (argsCallFoot ctx.summaries es []))) Refl)
-          sh _ _ _ _ =
+          sh True False _ _ =
             liveStay (tGo (placeIn ownA0.ownQ
               (fst (argsCallFoot ctx.summaries es []))) Refl)
   ownerCellGo {chk} {ihs} {oih} uk own oa live pin sb ov qw eq

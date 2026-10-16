@@ -781,6 +781,153 @@ destOwnsLiveMode :
 destOwnsLiveMode {acc} {e} {m} oa look lp safe pin nin hit kd =
   destOwnsLive oa look lp safe pin (ninEvalWX {acc} {e} {m} nin) hit kd
 
+orTrueX : (x, y : Bool) -> x || y = True -> Either (x = True) (y = True)
+orTrueX True _ Refl = Left Refl
+orTrueX False True Refl = Right Refl
+
+placeInJoinLX : {p : Place} -> {xs, ys : List Place} ->
+  placeIn p xs = True -> placeIn p (xs ++ ys) = True
+placeInJoinLX {xs = []} pin = void (trueNotFalseX (sym pin))
+placeInJoinLX {p} {xs = q :: qs} {ys} pin = appGo (p == q) Refl pin
+  where
+    appGo : (b : Bool) -> p == q = b -> placeIn p (q :: qs) = True ->
+            placeIn p ((q :: qs) ++ ys) = True
+    appGo True pq _ =
+      replace {p = \n => placeIn n (q :: qs ++ ys) = True}
+        (sym (eqNatTrue p q pq))
+        (rewrite eqNatRefl q in Refl)
+    appGo False pq pin0 =
+      let pinq = replace {p = \b => (b || Delay (placeIn p qs)) = True} pq pin0
+      in replace {p = \b => (b || Delay (placeIn p (qs ++ ys))) = True} (sym pq)
+           (placeInJoinLX {xs = qs} {ys} pinq)
+
+placeInSuffTrueX : {p : Place} -> {xs, ys : List Place} ->
+  placeIn p (xs ++ ys) = True ->
+  placeIn p xs = False ->
+  placeIn p ys = True
+placeInSuffTrueX {xs = []} pin _ = pin
+placeInSuffTrueX {p} {xs = q :: qs} {ys} pin nxs =
+  let (ne, nrest) = orFX (p == q) (placeIn p qs) nxs
+      pin1 = replace {p = \b => (b || Delay (placeIn p (qs ++ ys))) = True} ne pin
+  in placeInSuffTrueX {xs = qs} {ys} pin1 nrest
+
+||| Evaluation writes sit inside consume-mode writes.
+evalInModeX :
+  {acc : List (String, List Consume)} -> {e : Expr} -> {m : Consume} ->
+  {p : Place} ->
+  placeIn p (fst (argFootprint acc e)) = True ->
+  placeIn p (fst (argModeFoot acc e m)) = True
+evalInModeX {m = Never} pin = pin
+evalInModeX {m = May} pin = placeInJoinLX pin
+evalInModeX {m = Always} pin = placeInJoinLX pin
+
+||| Evaluation writes of the argument list sit inside the call writes.
+evalInCallX :
+  {acc : List (String, List Consume)} -> {p : Place} ->
+  {es : List Expr} -> {ms : List Consume} ->
+  placeIn p (fst (argsEvalFoot acc es)) = True ->
+  placeIn p (fst (argsCallFoot acc es ms)) = True
+evalInCallX {es = []} pin = void (trueNotFalseX (sym pin))
+evalInCallX {acc} {p} {es = e :: es} {ms} pin =
+  orGo (placeIn p (fst (argFootprint acc e))) Refl pin
+  where
+    orGo : (b : Bool) ->
+           placeIn p (fst (argFootprint acc e)) = b ->
+           placeIn p (fst (argFootprint acc e) ++
+                        fst (argsEvalFoot acc es)) = True ->
+           placeIn p (fst (argModeFoot acc e (consumeHead ms)) ++
+                        fst (argsCallFoot acc es (consumeTail ms))) = True
+    orGo True pinE _ =
+      placeInJoinLX (evalInModeX {e} {m = consumeHead ms} pinE)
+    orGo False nE pin0 =
+      placeInJoinRX (evalInCallX {es} {ms = consumeTail ms}
+        (placeInSuffTrueX {xs = fst (argFootprint acc e)}
+           {ys = fst (argsEvalFoot acc es)} pin0 nE))
+
+mutual
+  ||| Intern-shift dest is in evaluation writes (Ptr dest, or nested).
+  export
+  shiftToWrites :
+    {acc : List (String, List Consume)} ->
+    {d, q : Place} -> {e : Expr} ->
+    shiftTo d q e = True ->
+    placeIn d (fst (argFootprint acc e)) = True
+  shiftToWrites {e = ELit _} hit = void (trueNotFalseX (sym hit))
+  shiftToWrites {e = ENull _} hit = void (trueNotFalseX (sym hit))
+  shiftToWrites {e = EVar _ _ _} hit = void (trueNotFalseX (sym hit))
+  shiftToWrites {e = EUnsupported _ _} hit = void (trueNotFalseX (sym hit))
+  shiftToWrites {acc} {d} {q} {e = EAssign id n nm Copy rhs} hit =
+    shiftToWrites {acc} {d} {q} {e = rhs} hit
+  shiftToWrites {acc} {d} {q} {e = EAssign id p nm Ptr rhs} hit =
+    pdGo (p == d) Refl hit
+    where
+      pdGo : (eqb : Bool) -> p == d = eqb ->
+             shiftTo d q (EAssign id p nm Ptr rhs) = True ->
+             placeIn d (p :: fst (argFootprint acc rhs)) = True
+      pdGo True pd _ =
+        replace {p = \x => placeIn d (x :: fst (argFootprint acc rhs)) = True}
+          (sym (eqNatTrue p d pd))
+          (placeInHeadX d (fst (argFootprint acc rhs)))
+      pdGo False pd hit0 =
+        placeInTailX (shiftToWrites {acc} {d} {q} {e = rhs}
+          (replace {p = \b => b = True} (shiftToPtrNeq {d} {q} {p} {aid = id} {nm} {rhs} pd) hit0))
+  shiftToWrites {acc} {d} {q} {e = ECall _ callee args} hit =
+    evalInCallX {acc} {p = d} {es = args} {ms = calleeModes acc callee}
+      (shiftTosWrites {acc} {d} {q} {es = args} hit)
+  shiftToWrites {acc} {d} {q} {e = EMalloc _ args} hit =
+    shiftTosWrites {acc} {d} {q} {es = args} hit
+  shiftToWrites {acc} {d} {q} {e = EUse _ args} hit =
+    shiftTosWrites {acc} {d} {q} {es = args} hit
+
+  export
+  shiftTosWrites :
+    {acc : List (String, List Consume)} ->
+    {d, q : Place} -> {es : List Expr} ->
+    shiftTos d q es = True ->
+    placeIn d (fst (argsEvalFoot acc es)) = True
+  shiftTosWrites {es = []} hit = void (trueNotFalseX (sym hit))
+  shiftTosWrites {acc} {d} {q} {es = e :: es} hit =
+    case orTrueX (shiftTo d q e) (shiftTos d q es) hit of
+      Left hitE =>
+        placeInJoinLX (shiftToWrites {acc} {d} {q} {e} hitE)
+      Right hitEs =>
+        placeInJoinRX (shiftTosWrites {acc} {d} {q} {es} hitEs)
+
+||| Leftover intern Unique Own of `a` at START, dest intern a different intern
+||| that already holds `HVPtr a` use-safe Unique Own at START: `uniqueLive`
+||| forces dest intern unsafe, contradicting dest intern `ownSafe`. Closes
+||| `shiftTo`/`keepsDest` False once EnvFrame / useKeepLookupInv recover dest
+||| intern Own of `a` at START (e did not intern-shift leftover intern onto
+||| dest intern). Checker unchanged. Does not edit `uniqueLive`.
+export
+noShiftContra :
+  {env : HEnv} -> {h : Heap} -> {sc : Scopes} -> {a : Addr} ->
+  {d, q : Place} -> {stQ, stD : Status} ->
+  OverApprox env h sc ->
+  q == d = False ->
+  lookupH q env = Just (HVPtr a) ->
+  lookupPlace q sc = Just stQ ->
+  unsafeUse stQ = False ->
+  hasOwned stQ = True ->
+  hasBorrowed stQ = Nothing ->
+  lookupH d env = Just (HVPtr a) ->
+  lookupPlace d sc = Just stD ->
+  unsafeUse stD = False ->
+  Void
+noShiftContra oa ne lookQ lpQ safeQ ownQ nbQ lookD lpD safeD =
+  trueNotFalseX (trans (sym
+    (oa.uniqueLive q d a ne lookQ lookD (oaLive oa q stQ a lpQ lookQ safeQ)
+       stQ lpQ stD lpD safeQ ownQ nbQ))
+    safeD)
+
+export
+shiftToWritesCanary :
+  placeIn 1
+    (fst (argFootprint [] (EAssign 0 1 "n" Ptr (EVar 2 2 "x")))) = True
+shiftToWritesCanary =
+  shiftToWrites {acc = []} {d = 1} {q = 2}
+    {e = EAssign 0 1 "n" Ptr (EVar 2 2 "x")} Refl
+
 export
 internShiftXferModeCanary :
   placeIn 1

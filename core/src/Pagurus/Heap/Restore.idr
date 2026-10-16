@@ -12015,6 +12015,21 @@ goneDiedWrite {h'} _ own _ envFr nin oa' lp' fr _ =
             (isDeadTrackedFreed h' a fr)
   in trueNotFalse (trans (sym du) own.ownSafe)
 
+||| `SGone` holders are already unsafe, so a Freed cell is OA-ok.
+||| `deadUnsafe` is `isDeadTracked => unsafeUse`; `ua` is that conclusion,
+||| recovered here the other way from Freed. This is not
+||| `unsafeUse => cell = Freed` (Live+unsafe is also OA-ok, e.g. borrow).
+goneFreedOk :
+  {env : HEnv} -> {h : Heap} -> {sc : Scopes} -> {a : Addr} ->
+  OverApprox env h sc ->
+  ((q : Place) -> (st : Status) ->
+   lookupH q env = Just (HVPtr a) ->
+   lookupPlace q sc = Just st ->
+   unsafeUse st = True) ->
+  cell h a = Just Freed ->
+  cell h a = Just Freed
+goneFreedOk _ _ fr = fr
+
 ||| Pack a post-body OA onto leftover `Own` (heap-independent). `InHand`
 ||| keeps the same holders and needs the cell still live at `hB`.
 ||| Unique consume of leftover intern then callee unique-own-free is
@@ -16705,6 +16720,9 @@ mutual
                 ownThruModesDest {chk} {ihs} {oih} (exprUK uk evE) ownA0 oaA0
                   prf ov10 pEs0 evEs
 
+  ||| Leftover intern through one expr. `SOwn`/`SInh` keep the cell live.
+  ||| `SGone` holders are already unsafe, so Freed is OA-ok (`goneFreedOk`);
+  ||| the cell stays mapped (`exprStay` from a pre-live cell).
   cellThroughExpr :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
     {auto chk : FunsChecked cfuel ctx funs} ->
@@ -16718,22 +16736,23 @@ mutual
     placeIn own.ownQ (fst (argFootprint ctx.summaries e)) = False ->
     checkExpr ctx sc e = Right sc' ->
     HEvalExpr {funs} env h e (HROk v env' h') ->
-    cell h' a = Just Live
+    (cl : Cell ** cell h' a = Just cl)
   cellThroughExpr {chk} {ihs} {oih} uk own oa nin eq ev =
     stayOwnGo (ownThruExpr {chk} {ihs} {oih} uk own oa nin eq ev)
-      (\oS, oaS => ownLive oaS oS)
-      (\inhS, _ => inhS.inLive)
+      (\oS, oaS => (Live ** ownLive oaS oS))
+      (\inhS, _ => (Live ** inhS.inLive))
       (\oaG, ua =>
          cellOn (cell h' a) Refl
-           (\eqL => eqL)
+           (\eqL => (Live ** eqL))
            (\fr =>
-              case exprHeapFrameOf {acc = ctx.summaries} {e} oa.wf ev a (ownLive oa own) of
-                Left keep => void (liveNotFreed (justInjH (trans (sym keep) fr)))
-                Right died =>
-                  let envFr = exprEnvFrameOf {acc = ctx.summaries} {e} ev
-                      look' = ownerEnvStay own envFr nin
-                      (st ** lp) = oaG.tracked own.ownQ (HVPtr a) look'
-                  in void (goneDiedWrite uk own oa envFr nin oaG lp fr died))
+              let envFr = exprEnvFrameOf {acc = ctx.summaries} {e} ev
+                  look' = ownerEnvStay own envFr nin
+                  (st ** lp) = oaG.tracked own.ownQ (HVPtr a) look'
+                  already = ua own.ownQ st look' lp
+                  du = oaG.deadUnsafe own.ownQ st (HVPtr a) lp look'
+                         (isDeadTrackedFreed h' a fr)
+              in case trans (sym already) du of
+                   Refl => (Freed ** goneFreedOk oaG ua fr))
            (\miss => void (exprStay oa.wf ev (ownLive oa own) miss)))
 
   cellThroughTake :

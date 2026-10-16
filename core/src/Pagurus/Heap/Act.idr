@@ -206,6 +206,18 @@ stepAtomUsePres AEmpty _ _ prf _ = void (falseNotTrue (sym prf))
 stepAtomUsePres (AMoved _) _ _ prf _ = void (falseNotTrue (sym prf))
 stepAtomUsePres (AFreed _) _ _ prf _ = void (falseNotTrue (sym prf))
 
+||| Successful `Use` is the identity on the atom: `AOwned`/`ABorrowed`/`ANull`.
+export
+stepAtomUseId : (a : Atom) -> (nid : Nat) -> (a' : Atom) ->
+                stepAtom a Use nid = Right a' ->
+                a = a'
+stepAtomUseId AOwned _ _ Refl = Refl
+stepAtomUseId (ABorrowed _) _ _ Refl = Refl
+stepAtomUseId ANull _ _ Refl = Refl
+stepAtomUseId AEmpty _ _ Refl impossible
+stepAtomUseId (AMoved _) _ _ Refl impossible
+stepAtomUseId (AFreed _) _ _ Refl impossible
+
 export
 unsafeUseInsertSafe :
   (a : Atom) -> (xs : Status) ->
@@ -346,6 +358,24 @@ insertOwnedHas (ABorrowed n :: xs) = Refl
 insertOwnedHas (AMoved n :: xs) = Refl
 insertOwnedHas (AFreed n :: xs) = Refl
 insertOwnedHas (ANull :: xs) = Refl
+
+||| `AOwned` is strictly before every use-safe non-owned atom (`ABorrowed` /
+||| `ANull`). So `insertSorted AOwned xs = AOwned :: xs` when `xs` is
+||| use-safe, not owned, and not borrowed.
+export
+insertSortedOwnedCons :
+  (xs : Status) ->
+  unsafeUse xs = False ->
+  hasOwned xs = False ->
+  hasBorrowed xs = Nothing ->
+  insertSorted AOwned xs = AOwned :: xs
+insertSortedOwnedCons [] _ _ _ = Refl
+insertSortedOwnedCons (AEmpty :: xs) uns _ _ = void (trueNotFalse uns)
+insertSortedOwnedCons (AOwned :: xs) _ own _ = void (trueNotFalse own)
+insertSortedOwnedCons (ABorrowed n :: xs) _ _ nb = void (nothingNotJustH (sym nb))
+insertSortedOwnedCons (AMoved n :: xs) uns _ _ = void (trueNotFalse uns)
+insertSortedOwnedCons (AFreed n :: xs) uns _ _ = void (trueNotFalse uns)
+insertSortedOwnedCons (ANull :: xs) _ _ _ = Refl
 
 export
 insertBorrowedOwned : (n : Nat) -> (rest : Status) ->

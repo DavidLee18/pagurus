@@ -187,3 +187,84 @@ qTakeSGone {funs} {ctx} {callee} {e} {es} {m} {ms}
                   (sym (callWritesEqAux
                      {acc = ctx.summaries} {es} {ms}))
                   ninW)))
+
+||| Leftover intern SGone after consume-head take. Intern misses mode `W`
+||| of `e` (`nH`); `takeKeepWR` keeps Unique Own status. Twin of extra
+||| Always leftover SGone in `ownerCellGo` (`ms = []`). `doesConsume m`
+||| is `argsModesMoveSplit` (`May` / `Always`).
+export
+qTakeHeadSGone :
+  {funs : List Fun} ->
+  {ctx : Ctx} ->
+  {e : Expr} ->
+  {m : Consume} ->
+  {env, envA : HEnv} ->
+  {h, hA : Heap} ->
+  {sc, scA : Scopes} ->
+  {a : Addr} ->
+  {v : HVal} ->
+  {fl : Flag} ->
+  UniqueKeys env ->
+  (own : Own env sc a) ->
+  OverApprox env h sc ->
+  doesConsume m = True ->
+  placeIn own.ownQ (fst (argModeFoot ctx.summaries e m)) = False ->
+  takeOwner ctx sc e = Right (scA, fl) ->
+  HEvalExpr {funs} env h e (HROk v envA hA) ->
+  OverApprox envA hA scA ->
+  cell hA a = Just Freed ->
+  FreedBy a ->
+  Void
+qTakeHeadSGone {m = Never} _ _ _ cons _ _ _ _ _ _ =
+  void (trueNotFalse (sym cons))
+qTakeHeadSGone {ctx} {e} {m = May} uk own oa Refl nH pT evE oaG fr died =
+  let envFrE = exprEnvFrameOf {acc = ctx.summaries} {e} evE
+      ninW = ninEvalWX {acc = ctx.summaries} {e} {m = May} {p = own.ownQ} nH
+      nHAlways = replace {p = \xs => placeIn own.ownQ xs = False}
+                   (trans (modeWMayEq {acc = ctx.summaries} e)
+                      (sym (modeWAlwaysEq {acc = ctx.summaries} e))) nH
+      ninWR = ninAlwaysWR {acc = ctx.summaries} {e} {p = own.ownQ} nHAlways
+      lp1 = takeKeepWR {e} {p = own.ownQ} ninWR pT own.ownLp
+  in goneDiedWrite uk own oa envFrE ninW oaG lp1 fr died
+qTakeHeadSGone {ctx} {e} {m = Always} uk own oa Refl nH pT evE oaG fr died =
+  let envFrE = exprEnvFrameOf {acc = ctx.summaries} {e} evE
+      ninW = ninEvalWX {acc = ctx.summaries} {e} {m = Always} {p = own.ownQ} nH
+      ninWR = ninAlwaysWR {acc = ctx.summaries} {e} {p = own.ownQ} nH
+      lp1 = takeKeepWR {e} {p = own.ownQ} ninWR pT own.ownLp
+  in goneDiedWrite uk own oa envFrE ninW oaG lp1 fr died
+
+||| `takeOwner` of a call is Ghost or Owner, never Null.
+export
+callNotNull :
+  {ctx : Ctx} -> {sc, scT : Scopes} ->
+  {cid : Nat} -> {callee : String} -> {args : List Expr} ->
+  takeOwner ctx sc (ECall cid callee args) = Right (scT, Null) ->
+  Void
+callNotNull {ctx} {sc} {cid} {callee} {args} eq =
+  cGo (checkCall ctx sc cid callee args) Refl
+  where
+    cGo : (res : Either Diag Scopes) ->
+          checkCall ctx sc cid callee args = res -> Void
+    cGo (Left d) pC =
+      tGo (isRealloc callee && not (isDefined ctx callee)) Refl
+      where
+        tGo : (b : Bool) ->
+              isRealloc callee && not (isDefined ctx callee) = b -> Void
+        tGo False pF =
+          void (Pagurus.Soundness.leftNotRight (trans (sym (takeCallLeft
+            (trans (checkExprCall ctx sc cid callee args) pC))) eq))
+        tGo True pF =
+          void (Pagurus.Soundness.leftNotRight (trans (sym (takeReallocLeft pF pC)) eq))
+    cGo (Right scC) pC =
+      fGo (isRealloc callee && not (isDefined ctx callee)) Refl
+      where
+        fGo : (b : Bool) ->
+              isRealloc callee && not (isDefined ctx callee) = b -> Void
+        fGo False pF =
+          let pE = trans (checkExprCall ctx sc cid callee args) pC
+          in void (Pagurus.Checker.nullNotGhost (sym (cong snd (rightInj
+               (trans (sym (takeCallRight pF pE)) eq)))))
+        fGo True pF =
+          void (Pagurus.Checker.ownerNotNull (cong snd (rightInj
+            (trans (sym (takeReallocRight pF pC)) eq))))
+

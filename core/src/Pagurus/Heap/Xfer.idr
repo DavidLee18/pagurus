@@ -278,6 +278,9 @@ ninEvalWX {m = Never} nin = nin
 ninEvalWX {m = May} nin = placeInPrefX nin
 ninEvalWX {m = Always} nin = placeInPrefX nin
 
+||| leftover intern miss of a call footprint is leftover intern miss of
+||| evaluation writes (nested `ECall` at nestGo False). Checker unchanged.
+export
 callMissEvalX :
   {acc : List (String, List Consume)} -> {p : Place} ->
   {es : List Expr} -> {ms : List Consume} ->
@@ -858,3 +861,8 @@ xferLivePtrNeqCanary :
 xferLivePtrNeqCanary =
   xferLivePtrNeq {d = 1} {p = 3} {live = [2]} {id = 0} {nm = "r"}
     {rhs = EAssign 1 1 "n" Ptr (EVar 2 2 "x")} Refl Refl
+
+export
+callMissEvalXCanary :
+  placeIn 1 (fst (argsEvalFoot [] [])) = False
+callMissEvalXCanary = callMissEvalX {acc = []} {p = 1} {es = []} {ms = []} Refl

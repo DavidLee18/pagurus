@@ -1994,6 +1994,7 @@ ninWritesTailAlways {acc} {e} {es} nin =
 
 ||| Always writes are eval `W ++ R ++ valuePlaces`. Case on `e` so the
 ||| `if doesConsume Always` in `argModeFoot` reduces.
+export
 modeWAlwaysEq :
   {acc : List (String, List Consume)} -> (e : Expr) ->
   fst (argModeFoot acc e Always) =
@@ -2156,6 +2157,7 @@ ninCallArgsConsWR {acc} {e} {es} {ms} {p} nin =
 
 ||| May writes are eval `W ++ R ++ valuePlaces`. Case on `e` so the
 ||| `if doesConsume May` in `argModeFoot` reduces.
+export
 modeWMayEq :
   {acc : List (String, List Consume)} -> (e : Expr) ->
   fst (argModeFoot acc e May) =
@@ -2172,6 +2174,7 @@ modeWMayEq (EUnsupported _ _) = Refl
 
 ||| Mode `W ++ R` miss is an eval `W ++ R` miss. Never writes omit reads;
 ||| Never `R` still includes eval `R`, so the join is honest.
+export
 ninModeEvalWR :
   {acc : List (String, List Consume)} -> {e : Expr} -> {p : Place} ->
   (m : Consume) ->
@@ -3011,6 +3014,7 @@ ninEvalArgsConsW {acc} {e} {es} {p} nin =
 
 ||| Eval `W` of a Ptr assign is `dest :: W_rhs`. A miss is `p != dest`
 ||| and a miss of eval `W` of the rhs.
+export
 ninAsgPtrW :
   {acc : List (String, List Consume)} ->
   {id : Nat} -> {dest : Place} -> {nm : String} -> {rhs : Expr} ->

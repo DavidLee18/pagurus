@@ -325,6 +325,25 @@ mutual
   keepsDests _ _ [] = True
   keepsDests d q (e :: es) = keepsDest d q e && keepsDests d q es
 
+keepsDestPtrEq :
+  {d, q, p : Place} -> {aid : Nat} -> {nm : String} -> {rhs : Expr} ->
+  p == d = True ->
+  keepsDest d q (EAssign aid p nm Ptr rhs) =
+    placeIn q (readPlaces rhs) && keepsDest d q rhs
+keepsDestPtrEq pd = rewrite pd in Refl
+
+keepsDestPtrNeq :
+  {d, q, p : Place} -> {aid : Nat} -> {nm : String} -> {rhs : Expr} ->
+  p == d = False ->
+  keepsDest d q (EAssign aid p nm Ptr rhs) = keepsDest d q rhs
+keepsDestPtrNeq pd = rewrite pd in Refl
+
+shiftToPtrNeq :
+  {d, q, p : Place} -> {aid : Nat} -> {nm : String} -> {rhs : Expr} ->
+  p == d = False ->
+  shiftTo d q (EAssign aid p nm Ptr rhs) = shiftTo d q rhs
+shiftToPtrNeq pd = rewrite pd in Refl
+
 mutual
   ||| leftover intern in `live` and not in evaluation writes stays in `xferLive`.
   export
@@ -373,3 +392,205 @@ mutual
                {ys = fst (argsEvalFoot acc es)} nin
     in xferArgsKeepsX {acc} {live = xferLive live e} {es}
          (xferKeepsX {acc} {e} pin nH) nT
+
+mutual
+  ||| dest intern already in `live` stays in `xferLive` when leftover intern
+  ||| stays captured and dest intern-assigns still read leftover intern.
+  xferKeepDest :
+    {acc : List (String, List Consume)} ->
+    {d, q : Place} -> {live : List Place} -> {e : Expr} ->
+    placeIn d live = True ->
+    placeIn q live = True ->
+    placeIn q (fst (argFootprint acc e)) = False ->
+    keepsDest d q e = True ->
+    placeIn d (xferLive live e) = True
+  xferKeepDest {e = EVar _ _ _} pinD _ _ _ = pinD
+  xferKeepDest {e = ELit _} pinD _ _ _ = pinD
+  xferKeepDest {e = ENull _} pinD _ _ _ = pinD
+  xferKeepDest {e = EUnsupported _ _} pinD _ _ _ = pinD
+  xferKeepDest {acc} {e = EAssign _ _ _ Copy rhs} pinD pinQ nin kd =
+    xferKeepDest {acc} {e = rhs} pinD pinQ nin kd
+  xferKeepDest {acc} {d} {q} {live} {e = EAssign aid p nm Ptr rhs} pinD pinQ nin kd =
+    let (neQ, ninR) = orFX (q == p) (placeIn q (fst (argFootprint acc rhs))) nin
+        recQ = xferKeepsX {acc} {e = rhs} pinQ ninR
+    in pdGo ninR (p == d) Refl kd recQ
+    where
+      afterGo : (b : Bool) ->
+                placesOverlap (readPlaces rhs) (xferLive live rhs) = b ->
+                placeIn d (xferLive live rhs) = True ->
+                d == p = False ->
+                placeIn d (placeAfter p (xferLive live rhs) b) = True
+      afterGo True _ pinR _ =
+        placeInTailX {p = d} {q = p} {qs = xferLive live rhs} pinR
+      afterGo False _ pinR ned = pinForgetX {p = d} {d = p} pinR ned
+      pdGo : (ninR : placeIn q (fst (argFootprint acc rhs)) = False) ->
+             (eqb : Bool) -> p == d = eqb ->
+             keepsDest d q (EAssign aid p nm Ptr rhs) = True ->
+             placeIn q (xferLive live rhs) = True ->
+             placeIn d (placeAfter p (xferLive live rhs)
+                          (placesOverlap (readPlaces rhs) (xferLive live rhs))) = True
+      pdGo _ True pd kd0 recQ =
+        let kd1 = replace {p = \k => k = True} (keepsDestPtrEq {aid} {nm} {rhs} pd) kd0
+            (inR, _) = andTrue kd1
+            asg = asgDestInXfer {d} {q} {live} {id = aid} {nm} {rhs} recQ inR
+        in replace {p = \x => placeIn d (xferLive live (EAssign aid x nm Ptr rhs)) = True}
+             (sym (eqNatTrue p d pd)) asg
+      pdGo ninR False pd kd0 recQ =
+        let kd1 = replace {p = \k => k = True} (keepsDestPtrNeq {aid} {nm} {rhs} pd) kd0
+            recD = xferKeepDest {acc} {e = rhs} pinD pinQ ninR kd1
+        in afterGo (placesOverlap (readPlaces rhs) (xferLive live rhs)) Refl recD
+             (neqNatSymX pd)
+  xferKeepDest {acc} {e = ECall _ callee args} pinD pinQ nin kd =
+    xferKeepDests {acc} pinD pinQ
+      (callMissEvalX {ms = calleeModes acc callee} nin) kd
+  xferKeepDest {acc} {e = EMalloc _ args} pinD pinQ nin kd =
+    xferKeepDests {acc} pinD pinQ nin kd
+  xferKeepDest {acc} {e = EUse _ args} pinD pinQ nin kd =
+    xferKeepDests {acc} pinD pinQ nin kd
+
+  xferKeepDests :
+    {acc : List (String, List Consume)} ->
+    {d, q : Place} -> {live : List Place} -> {es : List Expr} ->
+    placeIn d live = True ->
+    placeIn q live = True ->
+    placeIn q (fst (argsEvalFoot acc es)) = False ->
+    keepsDests d q es = True ->
+    placeIn d (xferArgs live es) = True
+  xferKeepDests {es = []} pinD _ _ _ = pinD
+  xferKeepDests {acc} {live} {es = e :: es} pinD pinQ nin kd =
+    let nH = placeInPrefX {xs = fst (argFootprint acc e)}
+               {ys = fst (argsEvalFoot acc es)} nin
+        nT = placeInSuffX {xs = fst (argFootprint acc e)}
+               {ys = fst (argsEvalFoot acc es)} nin
+        (kdH, kdT) = andTrue kd
+        pinD1 = xferKeepDest {acc} {e} pinD pinQ nH kdH
+        pinQ1 = xferKeepsX {acc} {e} pinQ nH
+    in xferKeepDests {acc} {live = xferLive live e} {es} pinD1 pinQ1 nT kdT
+
+  ||| dest intern of leftover intern is in `xferLive` after destOwn of leftover intern
+  ||| (leftover intern in live, leftover intern not written, dest intern-assign reads leftover intern,
+  ||| dest intern not forgotten).
+  export
+  internShiftXferLive :
+    {acc : List (String, List Consume)} ->
+    {d, q : Place} -> {live : List Place} -> {e : Expr} ->
+    placeIn q live = True ->
+    placeIn q (fst (argFootprint acc e)) = False ->
+    shiftTo d q e = True ->
+    keepsDest d q e = True ->
+    placeIn d (xferLive live e) = True
+  internShiftXferLive {e = EVar _ _ _} _ _ hit _ = void (trueNotFalseX (sym hit))
+  internShiftXferLive {e = ELit _} _ _ hit _ = void (trueNotFalseX (sym hit))
+  internShiftXferLive {e = ENull _} _ _ hit _ = void (trueNotFalseX (sym hit))
+  internShiftXferLive {e = EUnsupported _ _} _ _ hit _ = void (trueNotFalseX (sym hit))
+  internShiftXferLive {acc} {e = EAssign _ _ _ Copy rhs} pin nin hit kd =
+    internShiftXferLive {acc} {e = rhs} pin nin hit kd
+  internShiftXferLive {acc} {d} {q} {live} {e = EAssign aid p nm Ptr rhs} pin nin hit kd =
+    let (neQ, ninR) = orFX (q == p) (placeIn q (fst (argFootprint acc rhs))) nin
+        recQ = xferKeepsX {acc} {e = rhs} pin ninR
+    in hitGo ninR (p == d) Refl hit kd recQ
+    where
+      afterGo : (b : Bool) ->
+                placesOverlap (readPlaces rhs) (xferLive live rhs) = b ->
+                placeIn d (xferLive live rhs) = True ->
+                d == p = False ->
+                placeIn d (placeAfter p (xferLive live rhs) b) = True
+      afterGo True _ pinR _ =
+        placeInTailX {p = d} {q = p} {qs = xferLive live rhs} pinR
+      afterGo False _ pinR ned = pinForgetX {p = d} {d = p} pinR ned
+      hitGo : (ninR : placeIn q (fst (argFootprint acc rhs)) = False) ->
+              (eqb : Bool) -> p == d = eqb ->
+              shiftTo d q (EAssign aid p nm Ptr rhs) = True ->
+              keepsDest d q (EAssign aid p nm Ptr rhs) = True ->
+              placeIn q (xferLive live rhs) = True ->
+              placeIn d (placeAfter p (xferLive live rhs)
+                           (placesOverlap (readPlaces rhs) (xferLive live rhs))) = True
+      hitGo _ True pd hit0 kd0 recQ =
+        let kd1 = replace {p = \k => k = True} (keepsDestPtrEq {aid} {nm} {rhs} pd) kd0
+            (inR, _) = andTrue kd1
+            asg = asgDestInXfer {d} {q} {live} {id = aid} {nm} {rhs} recQ inR
+        in replace {p = \x => placeIn d (xferLive live (EAssign aid x nm Ptr rhs)) = True}
+             (sym (eqNatTrue p d pd)) asg
+      hitGo ninR False pd hit0 kd0 recQ =
+        let hit1 = replace {p = \k => k = True} (shiftToPtrNeq {aid} {nm} {rhs} pd) hit0
+            kd1 = replace {p = \k => k = True} (keepsDestPtrNeq {aid} {nm} {rhs} pd) kd0
+            recD = internShiftXferLive {acc} {e = rhs} pin ninR hit1 kd1
+        in afterGo (placesOverlap (readPlaces rhs) (xferLive live rhs)) Refl recD
+             (neqNatSymX pd)
+  internShiftXferLive {acc} {e = ECall _ callee args} pin nin hit kd =
+    internShiftXferArgs {acc} pin (callMissEvalX {ms = calleeModes acc callee} nin) hit kd
+  internShiftXferLive {acc} {e = EMalloc _ args} pin nin hit kd =
+    internShiftXferArgs {acc} pin nin hit kd
+  internShiftXferLive {acc} {e = EUse _ args} pin nin hit kd =
+    internShiftXferArgs {acc} pin nin hit kd
+
+  ||| dest intern of leftover intern in `xferArgs` of a general argument list.
+  export
+  internShiftXferArgs :
+    {acc : List (String, List Consume)} ->
+    {d, q : Place} -> {live : List Place} -> {es : List Expr} ->
+    placeIn q live = True ->
+    placeIn q (fst (argsEvalFoot acc es)) = False ->
+    shiftTos d q es = True ->
+    keepsDests d q es = True ->
+    placeIn d (xferArgs live es) = True
+  internShiftXferArgs {es = []} _ _ hit _ = void (trueNotFalseX (sym hit))
+  internShiftXferArgs {acc} {d} {q} {live} {es = e :: es} pin nin hit kd =
+    let nH = placeInPrefX {xs = fst (argFootprint acc e)}
+               {ys = fst (argsEvalFoot acc es)} nin
+        nT = placeInSuffX {xs = fst (argFootprint acc e)}
+               {ys = fst (argsEvalFoot acc es)} nin
+        (kdH, kdT) = andTrue kd
+    in orGo nH nT kdH kdT (shiftTo d q e) (shiftTos d q es) Refl Refl hit
+    where
+      orGo : (nH : placeIn q (fst (argFootprint acc e)) = False) ->
+             (nT : placeIn q (fst (argsEvalFoot acc es)) = False) ->
+             (kdH : keepsDest d q e = True) ->
+             (kdT : keepsDests d q es = True) ->
+             (h : Bool) -> (t : Bool) ->
+             shiftTo d q e = h ->
+             shiftTos d q es = t ->
+             (h || Delay t) = True ->
+             placeIn d (xferArgs (xferLive live e) es) = True
+      orGo nH nT kdH kdT True _ ph _ _ =
+        let pinD = internShiftXferLive {acc} {e} pin nH ph kdH
+            pinQ = xferKeepsX {acc} {e} pin nH
+        in xferKeepDests {acc} {live = xferLive live e} {es} pinD pinQ nT kdT
+      orGo nH nT _ kdT False True _ pt _ =
+        let pinQ = xferKeepsX {acc} {e} pin nH
+        in internShiftXferArgs {acc} {live = xferLive live e} {es} pinQ nT pt kdT
+      orGo _ _ _ _ False False _ _ hit0 = void (trueNotFalseX (sym hit0))
+
+||| dest intern of leftover intern is in `valuePlaces ++ xferLive`
+||| (ownerFrameGo nestGo False goal). Checker unchanged.
+export
+internShiftXfer :
+  {acc : List (String, List Consume)} ->
+  {d, q : Place} -> {live : List Place} -> {e : Expr} ->
+  placeIn q live = True ->
+  placeIn q (fst (argFootprint acc e)) = False ->
+  shiftTo d q e = True ->
+  keepsDest d q e = True ->
+  placeIn d (valuePlaces e ++ xferLive live e) = True
+internShiftXfer {acc} {d} {e} pin nin hit kd =
+  placeInJoinRX {p = d} {xs = valuePlaces e} {ys = xferLive live e}
+    (internShiftXferLive {acc} {e} pin nin hit kd)
+
+export
+internShiftXferCanary :
+  placeIn 1
+    (valuePlaces (EUse 2 [EAssign 3 1 "n" Ptr (EVar 4 2 "x")])
+     ++ xferLive [2] (EUse 2 [EAssign 3 1 "n" Ptr (EVar 4 2 "x")])) = True
+internShiftXferCanary =
+  internShiftXfer {acc = []} {d = 1} {q = 2} {live = [2]}
+    {e = EUse 2 [EAssign 3 1 "n" Ptr (EVar 4 2 "x")]} Refl Refl Refl Refl
+
+||| leftover intern dest intern-assign is a later argument, not the head.
+export
+internShiftXferArgsCanary :
+  placeIn 1
+    (xferLive [2]
+      (EUse 5 [ELit 0, EAssign 3 1 "n" Ptr (EVar 4 2 "x")])) = True
+internShiftXferArgsCanary =
+  internShiftXferLive {acc = []} {d = 1} {q = 2} {live = [2]}
+    {e = EUse 5 [ELit 0, EAssign 3 1 "n" Ptr (EVar 4 2 "x")]} Refl Refl Refl Refl

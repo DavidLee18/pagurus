@@ -6,6 +6,9 @@ module Pagurus.Heap.Xfer
 import Pagurus.IR
 import Pagurus.Lattice
 import Pagurus.Checker
+import Pagurus.Status
+import Pagurus.Heap
+import Pagurus.Heap.Fits
 
 %default total
 
@@ -729,6 +732,54 @@ internShiftXferMode :
   placeIn d (valuePlaces e ++ xferLive live e) = True
 internShiftXferMode {acc} {e} {m} pin nin hit kd =
   internShiftXfer {acc} {e} pin (ninEvalWX {acc} {e} {m} nin) hit kd
+
+||| Dest intern Unique Own of leftover `a` after destOwn: the cell is live
+||| (`oaLive`: `ownSafe` vs `deadUnsafe`) and dest intern is in `xferLive`
+||| / `valuePlaces ++ xferLive` (`internShiftXferLive`). Live is at this
+||| heap; a later tail is `ownerCellGo` of this dest intern.
+export
+destOwnsLive :
+  {env : HEnv} -> {h : Heap} -> {sc : Scopes} -> {a : Addr} ->
+  {acc : List (String, List Consume)} ->
+  {d, q : Place} -> {live : List Place} -> {e : Expr} ->
+  {st : Status} ->
+  OverApprox env h sc ->
+  lookupH d env = Just (HVPtr a) ->
+  lookupPlace d sc = Just st ->
+  unsafeUse st = False ->
+  placeIn q live = True ->
+  placeIn q (fst (argFootprint acc e)) = False ->
+  shiftTo d q e = True ->
+  keepsDest d q e = True ->
+  (placeIn d (valuePlaces e ++ xferLive live e) = True,
+   placeIn d (xferLive live e) = True,
+   cell h a = Just Live)
+destOwnsLive {acc} {d} {q} {live} {e} oa look lp safe pin nin hit kd =
+  let pinL = internShiftXferLive {acc} {d} {q} {live} {e} pin nin hit kd
+  in (internShiftXfer {acc} {d} {q} {live} {e} pin nin hit kd,
+      pinL,
+      oaLive oa d st a lp look safe)
+
+||| `nH0` form of `destOwnsLive`: leftover intern miss of `argModeFoot`.
+export
+destOwnsLiveMode :
+  {env : HEnv} -> {h : Heap} -> {sc : Scopes} -> {a : Addr} ->
+  {acc : List (String, List Consume)} ->
+  {d, q : Place} -> {live : List Place} -> {e : Expr} -> {m : Consume} ->
+  {st : Status} ->
+  OverApprox env h sc ->
+  lookupH d env = Just (HVPtr a) ->
+  lookupPlace d sc = Just st ->
+  unsafeUse st = False ->
+  placeIn q live = True ->
+  placeIn q (fst (argModeFoot acc e m)) = False ->
+  shiftTo d q e = True ->
+  keepsDest d q e = True ->
+  (placeIn d (valuePlaces e ++ xferLive live e) = True,
+   placeIn d (xferLive live e) = True,
+   cell h a = Just Live)
+destOwnsLiveMode {acc} {e} {m} oa look lp safe pin nin hit kd =
+  destOwnsLive oa look lp safe pin (ninEvalWX {acc} {e} {m} nin) hit kd
 
 export
 internShiftXferModeCanary :

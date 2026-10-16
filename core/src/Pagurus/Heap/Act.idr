@@ -1949,6 +1949,18 @@ ninVarWRNeq :
   p == n = False
 ninVarWRNeq nin = fst (orFalse {x = p == n} {y = False} nin)
 
+||| Eval `W ++ R` hit of `EVar n` is `p == n`.
+export
+ninVarWRHitEq :
+  {acc : List (String, List Consume)} ->
+  {nid : Nat} -> {n, p : Place} -> {nm : String} ->
+  placeIn p (fst (argFootprint acc (EVar nid n nm)) ++
+             snd (argFootprint acc (EVar nid n nm))) = True ->
+  p == n = True
+ninVarWRHitEq hit = case orTrue {a = p == n} {b = False} hit of
+  Left eq => eq
+  Right contra => void (falseNotTrue contra)
+
 ||| Always miss of a Ptr assign is an eval `W ++ R` miss of the rhs.
 ninAsgWRRhs :
   {acc : List (String, List Consume)} ->
@@ -2808,6 +2820,46 @@ moveHasOwnedFalse (AEmpty :: xs) _ _ eq = void (leftNotRight eq)
 moveHasOwnedFalse (ABorrowed n :: xs) _ _ eq = void (leftNotRight eq)
 moveHasOwnedFalse (AMoved n :: xs) _ _ eq = void (leftNotRight eq)
 moveHasOwnedFalse (AFreed n :: xs) _ _ eq = void (leftNotRight eq)
+
+||| `takeOwner` of `EVar n` cannot leave `n` owned at `sc'`. Ghost miss is
+||| lookup Nothing; Owner hit is `movePlace` and `moveHasOwnedFalse`.
+||| recX dMiss False R-hit of dest intern `d = n` (eval W of EVar is [];
+||| R is `[n]`): Unique Own `hasOwned` at `scX` is Void.
+export
+takeVarHitNotOwned :
+  {ctx : Ctx} -> {sc, sc' : Scopes} ->
+  {nid : Nat} -> {n : Place} -> {nm : String} -> {fl : Flag} ->
+  {st : Status} ->
+  takeOwner ctx sc (EVar nid n nm) = Right (sc', fl) ->
+  lookupPlace n sc' = Just st ->
+  hasOwned st = True ->
+  Void
+takeVarHitNotOwned pT lp' own = vGo (lookupPlace n sc) Refl
+  where
+    vGo : (look : Maybe Status) -> lookupPlace n sc = look -> Void
+    vGo Nothing pL =
+      let scEq = cong fst (rightInj (trans (sym (takeVarMiss ctx nid nm pL)) pT))
+      in void (nothingNotJust (trans (sym pL)
+           (trans (cong (\s => lookupPlace n s) scEq) lp')))
+    vGo (Just st0) pL = mvGo (movePlace sc n nid nm) Refl
+      where
+        mvGo :
+          (res : Either Diag Scopes) ->
+          movePlace sc n nid nm = res ->
+          Void
+        mvGo (Left d) pM =
+          void (leftNotRight (trans (sym (takeVarJustL ctx pL pM)) pT))
+        mvGo (Right sc1) pM with (stepStatus st0 Move nid) proof pS
+          mvGo (Right sc1) pM | Left d =
+            void (leftNotRight (trans (sym (movePlaceJustL pL pS)) pM))
+          mvGo (Right sc1) pM | Right stN =
+            let sc1eq = rightInj (trans (sym (movePlaceJust pL pS)) pM)
+                sc'eq = cong fst (rightInj (trans (sym (takeVarJustR ctx pL pM)) pT))
+                look' = trans (cong (\s => lookupPlace n s) (sym (trans sc1eq sc'eq)))
+                              (lookupPlaceSetHit n stN sc)
+                stEq = justInj (trans (sym lp') look')
+            in trueNotFalse (trans (sym own)
+                 (trans (cong hasOwned stEq) (moveHasOwnedFalse st0 nid stN pS)))
 
 ||| Invert `argVarPlace` of a named argument.
 export

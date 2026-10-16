@@ -25,6 +25,7 @@ import Pagurus.Heap.Xfer
 -- Own / goneDiedWrite, so qTakeSGone does not import Restore
 --------------------------------------------------------------------------------
 
+||| Use-safe unique owner of `a`. `oaLive` reads the cell off this.
 public export
 record Own (env : HEnv) (sc : Scopes) (a : Addr) where
   constructor MkOwn

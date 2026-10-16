@@ -347,6 +347,138 @@ shiftToPtrNeq :
   shiftTo d q (EAssign aid p nm Ptr rhs) = shiftTo d q rhs
 shiftToPtrNeq pd = rewrite pd in Refl
 
+||| dest intern-assign onto dest intern: the destination test is True.
+export
+shiftToPtrEq :
+  {d, q, p : Place} -> {aid : Nat} -> {nm : String} -> {rhs : Expr} ->
+  p == d = True ->
+  shiftTo d q (EAssign aid p nm Ptr rhs) =
+    (True && placeIn q (readPlaces rhs)) || shiftTo d q rhs
+shiftToPtrEq pd = rewrite pd in Refl
+
+||| Leaves never destOwn leftover intern onto dest intern.
+export
+shiftToLit : {d, q : Place} -> {id : Nat} -> shiftTo d q (ELit id) = False
+shiftToLit = Refl
+
+export
+shiftToNull : {d, q : Place} -> {id : Nat} -> shiftTo d q (ENull id) = False
+shiftToNull = Refl
+
+export
+shiftToVar : {d, q : Place} -> {id, n : Nat} -> {nm : String} ->
+  shiftTo d q (EVar id n nm) = False
+shiftToVar = Refl
+
+export
+shiftToUnsup : {d, q : Place} -> {id : Nat} -> {reason : String} ->
+  shiftTo d q (EUnsupported id reason) = False
+shiftToUnsup = Refl
+
+export
+shiftTosNil : {d, q : Place} -> shiftTos d q [] = False
+shiftTosNil = Refl
+
+export
+shiftToUseNil : {d, q : Place} -> {id : Nat} ->
+  shiftTo d q (EUse id []) = False
+shiftToUseNil = Refl
+
+export
+shiftToCallNil : {d, q : Place} -> {id : Nat} -> {callee : String} ->
+  shiftTo d q (ECall id callee []) = False
+shiftToCallNil = Refl
+
+export
+shiftToMallocNil : {d, q : Place} -> {id : Nat} ->
+  shiftTo d q (EMalloc id []) = False
+shiftToMallocNil = Refl
+
+||| Leaves keep dest intern Unique Own of leftover intern (no later store).
+export
+keepsDestLit : {d, q : Place} -> {id : Nat} -> keepsDest d q (ELit id) = True
+keepsDestLit = Refl
+
+export
+keepsDestNull : {d, q : Place} -> {id : Nat} -> keepsDest d q (ENull id) = True
+keepsDestNull = Refl
+
+export
+keepsDestVar : {d, q : Place} -> {id, n : Nat} -> {nm : String} ->
+  keepsDest d q (EVar id n nm) = True
+keepsDestVar = Refl
+
+export
+keepsDestUnsup : {d, q : Place} -> {id : Nat} -> {reason : String} ->
+  keepsDest d q (EUnsupported id reason) = True
+keepsDestUnsup = Refl
+
+export
+keepsDestsNil : {d, q : Place} -> keepsDests d q [] = True
+keepsDestsNil = Refl
+
+||| EUse/ECall/EMalloc intern-shift is the argument-list intern-shift.
+export
+shiftToUse : {d, q : Place} -> {id : Nat} -> {args : List Expr} ->
+  shiftTo d q (EUse id args) = shiftTos d q args
+shiftToUse = Refl
+
+export
+shiftToCall : {d, q : Place} -> {id : Nat} -> {callee : String} -> {args : List Expr} ->
+  shiftTo d q (ECall id callee args) = shiftTos d q args
+shiftToCall = Refl
+
+export
+shiftToMalloc : {d, q : Place} -> {id : Nat} -> {args : List Expr} ->
+  shiftTo d q (EMalloc id args) = shiftTos d q args
+shiftToMalloc = Refl
+
+export
+shiftToCopy : {d, q : Place} -> {id, n : Nat} -> {nm : String} -> {rhs : Expr} ->
+  shiftTo d q (EAssign id n nm Copy rhs) = shiftTo d q rhs
+shiftToCopy = Refl
+
+export
+keepsDestUse : {d, q : Place} -> {id : Nat} -> {args : List Expr} ->
+  keepsDest d q (EUse id args) = keepsDests d q args
+keepsDestUse = Refl
+
+export
+keepsDestCall : {d, q : Place} -> {id : Nat} -> {callee : String} -> {args : List Expr} ->
+  keepsDest d q (ECall id callee args) = keepsDests d q args
+keepsDestCall = Refl
+
+export
+keepsDestMalloc : {d, q : Place} -> {id : Nat} -> {args : List Expr} ->
+  keepsDest d q (EMalloc id args) = keepsDests d q args
+keepsDestMalloc = Refl
+
+export
+keepsDestCopy : {d, q : Place} -> {id, n : Nat} -> {nm : String} -> {rhs : Expr} ->
+  keepsDest d q (EAssign id n nm Copy rhs) = keepsDest d q rhs
+keepsDestCopy = Refl
+
+export
+shiftTosCons : {d, q : Place} -> {e : Expr} -> {es : List Expr} ->
+  shiftTos d q (e :: es) = shiftTo d q e || shiftTos d q es
+shiftTosCons = Refl
+
+export
+keepsDestsCons : {d, q : Place} -> {e : Expr} -> {es : List Expr} ->
+  keepsDests d q (e :: es) = keepsDest d q e && keepsDests d q es
+keepsDestsCons = Refl
+
+||| dest intern assigned from a place already in `xferLive` of the rhs
+||| (chained intern: dest intern = r after r = leftover intern).
+export
+asgDestFromCaptured :
+  {d, r : Place} -> {live : List Place} ->
+  {id : Nat} -> {nm : String} -> {rhs : Expr} ->
+  placeIn r (xferLive live rhs) = True ->
+  placeIn r (readPlaces rhs) = True ->
+  placeIn d (xferLive live (EAssign id d nm Ptr rhs)) = True
+asgDestFromCaptured {id} {nm} inX inR = asgDestInXfer {id} {nm} inX inR
+
 mutual
   ||| leftover intern in `live` and not in evaluation writes stays in `xferLive`.
   export
@@ -621,3 +753,27 @@ internShiftXferArgsCanary :
 internShiftXferArgsCanary =
   internShiftXferLive {acc = []} {d = 1} {q = 2} {live = [2]}
     {e = EUse 5 [ELit 0, EAssign 3 1 "n" Ptr (EVar 4 2 "x")]} Refl Refl Refl Refl
+
+||| Leaves: Unique Own dest intern leftover intern AFTER cannot come from destOwn.
+export
+shiftToLeafCanary :
+  (shiftTo 1 2 (ELit 0) = False,
+   shiftTo 1 2 (ENull 0) = False,
+   shiftTo 1 2 (EVar 0 3 "x") = False,
+   shiftTo 1 2 (EUse 0 []) = False,
+   keepsDest 1 2 (ELit 0) = True,
+   keepsDests 1 2 [] = True)
+shiftToLeafCanary = (Refl, Refl, Refl, Refl, Refl, Refl)
+
+||| dest intern = r after r = leftover intern is dest intern in `xferLive`
+||| even though `shiftTo` dest intern leftover intern is False (chained intern).
+export
+internShiftXferChainCanary :
+  placeIn 1
+    (xferLive [2]
+      (EUse 0
+         [ EAssign 3 3 "r" Ptr (EVar 4 2 "x")
+         , EAssign 5 1 "n" Ptr (EVar 6 3 "r") ])) = True
+internShiftXferChainCanary =
+  asgDestFromCaptured {d = 1} {r = 3} {live = [3, 2]}
+    {id = 5} {nm = "n"} {rhs = EVar 6 3 "r"} Refl Refl

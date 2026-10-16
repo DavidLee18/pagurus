@@ -197,3 +197,179 @@ internShiftXferUseAsgCanary :
 internShiftXferUseAsgCanary =
   internShiftXferUseAsg {d = 1} {q = 2} {live = [2]}
     {uid = 2} {id = 3} {nid = 4} {nm = "n"} {vnm = "x"} Refl
+
+orFX : (x, y : Bool) -> x || y = False -> (x = False, y = False)
+orFX False False Refl = (Refl, Refl)
+orFX True _ prf = void (trueNotFalseX prf)
+
+neqNatSymX : {x, y : Nat} -> x == y = False -> y == x = False
+neqNatSymX {x} {y} ne with (y == x) proof pyx
+  neqNatSymX {x} {y} ne | True =
+    void (eqNatFalse x y ne (sym (eqNatTrue y x pyx)))
+  neqNatSymX {x} {y} ne | False = Refl
+
+placeInTailX : {p, q : Place} -> {qs : List Place} ->
+  placeIn p qs = True -> placeIn p (q :: qs) = True
+placeInTailX {p} {q} pin = rewrite pin in orTrueRight (p == q)
+
+pinForgetX : {p, d : Place} -> {live : List Place} ->
+  placeIn p live = True ->
+  p == d = False ->
+  placeIn p (forgetPlace d live) = True
+pinForgetX {live = []} pin _ = void (trueNotFalseX (sym pin))
+pinForgetX {p} {d} {live = q :: qs} pin ne with (d == q) proof dq
+  pinForgetX {p} {d} {live = q :: qs} pin ne | True =
+    let pq = replace {p = \x => p == x = False} (eqNatTrue d q dq) ne
+        pin1 = replace {p = \b => (b || Delay (placeIn p qs)) = True} pq pin
+    in pinForgetX {p} {d} {live = qs} pin1 ne
+  pinForgetX {p} {d} {live = q :: qs} pin ne | False =
+    keepGo (p == q) Refl pin
+    where
+      keepGo : (eqb : Bool) -> p == q = eqb ->
+               placeIn p (q :: qs) = True ->
+               placeIn p (q :: forgetPlace d qs) = True
+      keepGo True pq _ =
+        replace {p = \x => placeIn x (q :: forgetPlace d qs) = True}
+          (sym (eqNatTrue p q pq))
+          (placeInHeadX q (forgetPlace d qs))
+      keepGo False pq pin1 =
+        let pinT = replace {p = \b => (b || Delay (placeIn p qs)) = True} pq pin1
+        in placeInTailX (pinForgetX {p} {d} {live = qs} pinT ne)
+
+placeInPrefX : {p : Place} -> {xs, ys : List Place} ->
+  placeIn p (xs ++ ys) = False -> placeIn p xs = False
+placeInPrefX {xs = []} _ = Refl
+placeInPrefX {xs = q :: qs} prf =
+  let (hd, tl) = orFX (p == q) (placeIn p (qs ++ ys)) prf
+  in rewrite hd in placeInPrefX tl
+
+placeInSuffX : {p : Place} -> {xs, ys : List Place} ->
+  placeIn p (xs ++ ys) = False -> placeIn p ys = False
+placeInSuffX {xs = []} prf = prf
+placeInSuffX {xs = q :: qs} prf =
+  let (_, rest) = orFX (p == q) (placeIn p (qs ++ ys)) prf
+  in placeInSuffX {xs = qs} rest
+
+placeInJoinFalseX : {p : Place} -> {xs, ys : List Place} ->
+  placeIn p xs = False -> placeIn p ys = False ->
+  placeIn p (xs ++ ys) = False
+placeInJoinFalseX {xs = []} _ ny = ny
+placeInJoinFalseX {p} {xs = q :: qs} {ys} nx ny =
+  let (ne, nrest) = orFX (p == q) (placeIn p qs) nx
+  in replace {p = \b => (b || Delay (placeIn p (qs ++ ys))) = False} (sym ne)
+       (placeInJoinFalseX {xs = qs} nrest ny)
+
+placeInJoinRX : {p : Place} -> {xs, ys : List Place} ->
+  placeIn p ys = True -> placeIn p (xs ++ ys) = True
+placeInJoinRX {xs = []} pin = pin
+placeInJoinRX {p} {xs = q :: qs} {ys} pin =
+  placeInTailX {p} {q} {qs = qs ++ ys}
+    (placeInJoinRX {p} {xs = qs} {ys} pin)
+
+ninEvalWX :
+  {acc : List (String, List Consume)} -> {e : Expr} -> {m : Consume} ->
+  {p : Place} ->
+  placeIn p (fst (argModeFoot acc e m)) = False ->
+  placeIn p (fst (argFootprint acc e)) = False
+ninEvalWX {m = Never} nin = nin
+ninEvalWX {m = May} nin = placeInPrefX nin
+ninEvalWX {m = Always} nin = placeInPrefX nin
+
+callMissEvalX :
+  {acc : List (String, List Consume)} -> {p : Place} ->
+  {es : List Expr} -> {ms : List Consume} ->
+  placeIn p (fst (argsCallFoot acc es ms)) = False ->
+  placeIn p (fst (argsEvalFoot acc es)) = False
+callMissEvalX {es = []} _ = Refl
+callMissEvalX {acc} {p} {es = e :: es} {ms} nin =
+  let nMode = placeInPrefX {xs = fst (argModeFoot acc e (consumeHead ms))}
+                {ys = fst (argsCallFoot acc es (consumeTail ms))} nin
+      nRest = placeInSuffX {xs = fst (argModeFoot acc e (consumeHead ms))}
+                {ys = fst (argsCallFoot acc es (consumeTail ms))} nin
+  in placeInJoinFalseX (ninEvalWX {e} {m = consumeHead ms} nMode)
+       (callMissEvalX {es} {ms = consumeTail ms} nRest)
+
+mutual
+  ||| dest intern is a nested pointer-assignment dest whose rhs reads leftover intern.
+  public export
+  shiftTo : Place -> Place -> Expr -> Bool
+  shiftTo d q (EAssign _ p _ Ptr rhs) =
+    ((p == d) && placeIn q (readPlaces rhs)) || shiftTo d q rhs
+  shiftTo d q (EAssign _ _ _ Copy rhs) = shiftTo d q rhs
+  shiftTo d q (ECall _ _ args) = shiftTos d q args
+  shiftTo d q (EMalloc _ args) = shiftTos d q args
+  shiftTo d q (EUse _ args) = shiftTos d q args
+  shiftTo _ _ _ = False
+
+  public export
+  shiftTos : Place -> Place -> List Expr -> Bool
+  shiftTos _ _ [] = False
+  shiftTos d q (e :: es) = shiftTo d q e || shiftTos d q es
+
+mutual
+  ||| Every later pointer-assignment onto dest intern still reads leftover intern,
+  ||| so dest intern is not forgotten after destOwn.
+  public export
+  keepsDest : Place -> Place -> Expr -> Bool
+  keepsDest d q (EAssign _ p _ Ptr rhs) =
+    if p == d then placeIn q (readPlaces rhs) && keepsDest d q rhs
+              else keepsDest d q rhs
+  keepsDest d q (EAssign _ _ _ Copy rhs) = keepsDest d q rhs
+  keepsDest d q (ECall _ _ args) = keepsDests d q args
+  keepsDest d q (EMalloc _ args) = keepsDests d q args
+  keepsDest d q (EUse _ args) = keepsDests d q args
+  keepsDest _ _ _ = True
+
+  public export
+  keepsDests : Place -> Place -> List Expr -> Bool
+  keepsDests _ _ [] = True
+  keepsDests d q (e :: es) = keepsDest d q e && keepsDests d q es
+
+mutual
+  ||| leftover intern in `live` and not in evaluation writes stays in `xferLive`.
+  export
+  xferKeepsX :
+    {acc : List (String, List Consume)} ->
+    {p : Place} -> {live : List Place} -> {e : Expr} ->
+    placeIn p live = True ->
+    placeIn p (fst (argFootprint acc e)) = False ->
+    placeIn p (xferLive live e) = True
+  xferKeepsX {e = EVar _ _ _} pin _ = pin
+  xferKeepsX {e = ELit _} pin _ = pin
+  xferKeepsX {e = ENull _} pin _ = pin
+  xferKeepsX {e = EUnsupported _ _} pin _ = pin
+  xferKeepsX {acc} {e = EAssign _ _ _ Copy rhs} pin nin =
+    xferKeepsX {acc} {e = rhs} pin nin
+  xferKeepsX {acc} {p} {live} {e = EAssign id d nm Ptr rhs} pin nin =
+    let (ne, ninR) = orFX (p == d) (placeIn p (fst (argFootprint acc rhs))) nin
+        rec = xferKeepsX {acc} {e = rhs} pin ninR
+    in asgGo (placesOverlap (readPlaces rhs) (xferLive live rhs)) Refl rec ne
+    where
+      asgGo : (b : Bool) ->
+              placesOverlap (readPlaces rhs) (xferLive live rhs) = b ->
+              placeIn p (xferLive live rhs) = True ->
+              p == d = False ->
+              placeIn p (placeAfter d (xferLive live rhs) b) = True
+      asgGo True _ rec _ =
+        placeInTailX {p} {q = d} {qs = xferLive live rhs} rec
+      asgGo False _ rec ne = pinForgetX {p} {d} rec ne
+  xferKeepsX {acc} {e = ECall _ callee args} pin nin =
+    xferArgsKeepsX {acc} pin (callMissEvalX {ms = calleeModes acc callee} nin)
+  xferKeepsX {acc} {e = EMalloc _ args} pin nin = xferArgsKeepsX {acc} pin nin
+  xferKeepsX {acc} {e = EUse _ args} pin nin = xferArgsKeepsX {acc} pin nin
+
+  export
+  xferArgsKeepsX :
+    {acc : List (String, List Consume)} ->
+    {p : Place} -> {live : List Place} -> {es : List Expr} ->
+    placeIn p live = True ->
+    placeIn p (fst (argsEvalFoot acc es)) = False ->
+    placeIn p (xferArgs live es) = True
+  xferArgsKeepsX {es = []} pin _ = pin
+  xferArgsKeepsX {acc} {p} {live} {es = e :: es} pin nin =
+    let nH = placeInPrefX {xs = fst (argFootprint acc e)}
+               {ys = fst (argsEvalFoot acc es)} nin
+        nT = placeInSuffX {xs = fst (argFootprint acc e)}
+               {ys = fst (argsEvalFoot acc es)} nin
+    in xferArgsKeepsX {acc} {live = xferLive live e} {es}
+         (xferKeepsX {acc} {e} pin nH) nT

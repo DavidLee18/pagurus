@@ -172,6 +172,7 @@ takeAsgPtrCrashH id n nm ih eq (Left _) pT =
 takeAsgPtrCrashH id n nm ih eq (Right (sc1, fl1)) pT =
   void (htCrashNotOk (ih sc1 fl1 pT))
 
+export
 inHandAfterBindMove :
   {n : Place} -> {id : Nat} -> {nm : String} -> {a : Addr} ->
   {env : HEnv} -> {h : Heap} -> {sc, sc2 : Scopes} ->

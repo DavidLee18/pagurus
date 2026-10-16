@@ -319,6 +319,7 @@ inhSetPlaceEmpty inh = inhSetPlace inh (\_ => emptyUnsafeUse)
 ||| only when the stored status is unsafe (move after bind). A use-safe
 ||| store of leftover `b` is the Never-mode restore; callers discharge
 ||| `v = HVPtr b` separately.
+export
 inhSetHPlace :
   {n : Place} -> {v : HVal} -> {st' : Status} ->
   {env : HEnv} -> {h : Heap} -> {sc : Scopes} -> {b : Addr} ->

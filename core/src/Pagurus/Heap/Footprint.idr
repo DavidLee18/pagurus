@@ -376,6 +376,7 @@ cellCase Nothing eq _ _ miss = miss eq
 
 ||| After a user-call body: still live, or actually dead in this frame.
 ||| A borrow frame that leaves the cell live is `Left`, not `FBFrame`.
+export
 afterUserBody :
   {funs : List Fun} ->
   {frame, envB : HEnv} -> {h1, hB : Heap} -> {ss : List Stmt} ->
@@ -398,6 +399,7 @@ afterUserBody {funs} {frame} {a} wf ev live1 =
       void (liveNotFreed
         (justInjH (trans (sym (framePres {funs} wf ev a nh live1)) ph)))
 
+export
 afterUserBodyRet :
   {funs : List Fun} ->
   {frame, envB : HEnv} -> {h1, hB : Heap} -> {ss : List Stmt} ->

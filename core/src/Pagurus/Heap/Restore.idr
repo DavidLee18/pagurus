@@ -16898,8 +16898,11 @@ mutual
                 let ninW = replace {p = \w => placeIn ownA0.ownQ w = False}
                              (callWritesEq {acc = ctx.summaries} {es} {ms = []})
                              ninD
+                    lp' = argsModesKeepLookupExtraMiss {ctx} {callee} {es}
+                            {p = ownA0.ownQ} {st = ownA0.ownSt}
+                            ninD pEs0 ownA0.ownLp
                 in goneDiedWrite (exprUK uk evE) ownA0 oaA0 envFr ninW oaG0
-                     ownA0.ownLp fr0 died0
+                     lp' fr0 died0
               dw True pinD oaG0 fr0 died0 =
                 goneDiedWrite (exprUK uk evE) ownA0 oaA0 envFr pinD oaG0
                   ownA0.ownLp fr0 died0

@@ -64,6 +64,18 @@ varUseH nid n nm eq oa (HEVarCopy _) =
 varUseH nid n nm eq oa (HEVarMiss _) =
   HROutOk (oaUsePlace oa (varEq nid n nm eq))
 
+||| Explicit `funs` so Restore `exprLN` does not solve `{funs}` at the use site.
+export
+varUseHFuns :
+  (funs : List Fun) ->
+  (nid : Nat) -> (n : Place) -> (nm : String) ->
+  {ctx : Ctx} -> {sc, sc' : Scopes} -> {env : HEnv} -> {h : Heap} -> {o : HResult} ->
+  checkExpr ctx sc (EVar nid n nm) = Right sc' ->
+  OverApprox env h sc ->
+  HEvalExpr {funs} env h (EVar nid n nm) o ->
+  HSafeRes o sc'
+varUseHFuns funs nid n nm eq oa ev = varUseH nid n nm {funs} eq oa ev
+
 --------------------------------------------------------------------------------
 -- takeOwner of a variable
 --------------------------------------------------------------------------------
@@ -262,3 +274,15 @@ takeVarH ctx nid n nm eq oa (HEVarWild a look none) = void (takeVarWildContra ct
 takeVarH ctx nid n nm eq oa (HEVarNone none) = takeVarNoneH ctx nid n nm eq oa none
 takeVarH ctx nid n nm eq oa (HEVarCopy look) = void (takeVarCopyContra ctx nid n nm eq oa look)
 takeVarH ctx nid n nm eq oa (HEVarMiss miss) = takeVarMissH ctx nid n nm eq oa miss
+
+||| Explicit `funs` so Restore `takeLN` does not solve `{funs}` at the take site.
+export
+takeVarHFuns :
+  (funs : List Fun) ->
+  (ctx : Ctx) -> (nid : Nat) -> (n : Place) -> (nm : String) ->
+  {sc, sc' : Scopes} -> {env : HEnv} -> {h : Heap} -> {fl : Flag} -> {o : HResult} ->
+  takeOwner ctx sc (EVar nid n nm) = Right (sc', fl) ->
+  OverApprox env h sc ->
+  HEvalExpr {funs} env h (EVar nid n nm) o ->
+  HTOut fl o sc'
+takeVarHFuns funs ctx nid n nm eq oa ev = takeVarH ctx nid n nm {funs} eq oa ev

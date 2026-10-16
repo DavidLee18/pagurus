@@ -531,6 +531,7 @@ mutual
 mutual
   ||| dest intern already in `live` stays in `xferLive` when leftover intern
   ||| stays captured and dest intern-assigns still read leftover intern.
+  export
   xferKeepDest :
     {acc : List (String, List Consume)} ->
     {d, q : Place} -> {live : List Place} -> {e : Expr} ->
@@ -583,6 +584,7 @@ mutual
   xferKeepDest {acc} {e = EUse _ args} pinD pinQ nin kd =
     xferKeepDests {acc} pinD pinQ nin kd
 
+  export
   xferKeepDests :
     {acc : List (String, List Consume)} ->
     {d, q : Place} -> {live : List Place} -> {es : List Expr} ->

@@ -17,63 +17,15 @@ import Pagurus.Heap.Act
 import Pagurus.Heap.Frame
 import Pagurus.Heap.Footprint
 import Pagurus.Heap.Thm
+import Pagurus.Heap.Unique
 import Pagurus.Heap.Xfer
 
 %default total
 
 --------------------------------------------------------------------------------
--- Own / goneDiedWrite, so qTakeSGone does not import Restore
+-- Own / goneDiedWrite / callNotNull live in Unique and Call.
+-- RestoreAux keeps qTake lemmas only.
 --------------------------------------------------------------------------------
-
-||| Use-safe unique owner of `a`. `oaLive` reads the cell off this.
-public export
-record Own (env : HEnv) (sc : Scopes) (a : Addr) where
-  constructor MkOwn
-  ownQ : Place
-  ownSt : Status
-  ownLook : lookupH ownQ env = Just (HVPtr a)
-  ownLp : lookupPlace ownQ sc = Just ownSt
-  ownSafe : unsafeUse ownSt = False
-  ownHas : hasOwned ownSt = True
-  ownNb : hasBorrowed ownSt = Nothing
-
-||| Frame lemma for the owner place: outside `W`, the lookup is unchanged.
-export
-ownerEnvStay :
-  {env, env' : HEnv} -> {w : List Place} -> {sc : Scopes} -> {a : Addr} ->
-  (own : Own env sc a) ->
-  EnvFrame env env' w ->
-  placeIn own.ownQ w = False ->
-  lookupH own.ownQ env' = Just (HVPtr a)
-ownerEnvStay own fr nin = trans (fr own.ownQ nin) own.ownLook
-
-||| Unique Own leftover intern whose lookup and Unique Own status both
-||| survive evaluation cannot die: `deadUnsafe` of the post OA vs `ownSafe`.
-||| `nin` + `EnvFrame` keep `lookupH intern = HVPtr a`. The remaining
-||| premise is `lookupPlace intern sc' = Just own.ownSt` (intern not
-||| consumed and not borrowed — EVar borrow writes `[]` and only reads).
-||| `internShiftXfer` / `useKeepLookupInv` / `useKeepSelfSafe` transport
-||| dest intern Unique Own / `xferLive`; they do not restore leftover
-||| intern Unique Own at `sc'`.
-export
-goneDiedWrite :
-  {env, env' : HEnv} -> {h, h' : Heap} -> {sc, sc' : Scopes} ->
-  {w : List Place} -> {a : Addr} ->
-  UniqueKeys env ->
-  (own : Own env sc a) ->
-  OverApprox env h sc ->
-  EnvFrame env env' w ->
-  placeIn own.ownQ w = False ->
-  OverApprox env' h' sc' ->
-  lookupPlace own.ownQ sc' = Just own.ownSt ->
-  cell h' a = Just Freed ->
-  FreedBy a ->
-  Void
-goneDiedWrite {h'} _ own _ envFr nin oa' lp' fr _ =
-  let look' = ownerEnvStay own envFr nin
-      du = oa'.deadUnsafe own.ownQ own.ownSt (HVPtr a) lp' look'
-            (isDeadTrackedFreed h' a fr)
-  in trueNotFalse (trans (sym du) own.ownSafe)
 
 placeInPrefAux : {p : Place} -> {xs, ys : List Place} ->
   placeIn p (xs ++ ys) = False -> placeIn p xs = False
@@ -232,39 +184,4 @@ qTakeHeadSGone {ctx} {e} {m = Always} uk own oa Refl nH pT evE oaG fr died =
       ninWR = ninAlwaysWR {acc = ctx.summaries} {e} {p = own.ownQ} nH
       lp1 = takeKeepWR {e} {p = own.ownQ} ninWR pT own.ownLp
   in goneDiedWrite uk own oa envFrE ninW oaG lp1 fr died
-
-||| `takeOwner` of a call is Ghost or Owner, never Null.
-export
-callNotNull :
-  {ctx : Ctx} -> {sc, scT : Scopes} ->
-  {cid : Nat} -> {callee : String} -> {args : List Expr} ->
-  takeOwner ctx sc (ECall cid callee args) = Right (scT, Null) ->
-  Void
-callNotNull {ctx} {sc} {cid} {callee} {args} eq =
-  cGo (checkCall ctx sc cid callee args) Refl
-  where
-    cGo : (res : Either Diag Scopes) ->
-          checkCall ctx sc cid callee args = res -> Void
-    cGo (Left d) pC =
-      tGo (isRealloc callee && not (isDefined ctx callee)) Refl
-      where
-        tGo : (b : Bool) ->
-              isRealloc callee && not (isDefined ctx callee) = b -> Void
-        tGo False pF =
-          void (Pagurus.Soundness.leftNotRight (trans (sym (takeCallLeft
-            (trans (checkExprCall ctx sc cid callee args) pC))) eq))
-        tGo True pF =
-          void (Pagurus.Soundness.leftNotRight (trans (sym (takeReallocLeft pF pC)) eq))
-    cGo (Right scC) pC =
-      fGo (isRealloc callee && not (isDefined ctx callee)) Refl
-      where
-        fGo : (b : Bool) ->
-              isRealloc callee && not (isDefined ctx callee) = b -> Void
-        fGo False pF =
-          let pE = trans (checkExprCall ctx sc cid callee args) pC
-          in void (Pagurus.Checker.nullNotGhost (sym (cong snd (rightInj
-               (trans (sym (takeCallRight pF pE)) eq)))))
-        fGo True pF =
-          void (Pagurus.Checker.ownerNotNull (cong snd (rightInj
-            (trans (sym (takeReallocRight pF pC)) eq))))
 

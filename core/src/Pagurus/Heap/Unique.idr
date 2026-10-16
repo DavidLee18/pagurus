@@ -20,6 +20,7 @@ import Pagurus.Heap.Fits
 import Pagurus.Heap.Update
 import Pagurus.Heap.Act
 import Pagurus.Heap.Frame
+import Pagurus.Heap.Footprint
 import Pagurus.Heap.Thm
 import Pagurus.Heap.Lit
 import Pagurus.Heap.Var
@@ -60,6 +61,56 @@ record LiveNuo (env : HEnv) (h : Heap) (sc : Scopes) (a : Addr) where
   oaLN : OverApprox env h sc
   nuoLN : NoUniqueOwner env sc a
   liveLN : cell h a = Just Live
+
+||| Use-safe unique owner of `a`. `oaLive` reads the cell off this.
+public export
+record Own (env : HEnv) (sc : Scopes) (a : Addr) where
+  constructor MkOwn
+  ownQ : Place
+  ownSt : Status
+  ownLook : lookupH ownQ env = Just (HVPtr a)
+  ownLp : lookupPlace ownQ sc = Just ownSt
+  ownSafe : unsafeUse ownSt = False
+  ownHas : hasOwned ownSt = True
+  ownNb : hasBorrowed ownSt = Nothing
+
+||| Frame lemma for the owner place: outside `W`, the lookup is unchanged.
+export
+ownerEnvStay :
+  {env, env' : HEnv} -> {w : List Place} -> {sc : Scopes} -> {a : Addr} ->
+  (own : Own env sc a) ->
+  EnvFrame env env' w ->
+  placeIn own.ownQ w = False ->
+  lookupH own.ownQ env' = Just (HVPtr a)
+ownerEnvStay own fr nin = trans (fr own.ownQ nin) own.ownLook
+
+||| Unique Own leftover intern whose lookup and Unique Own status both
+||| survive evaluation cannot die: `deadUnsafe` of the post OA vs `ownSafe`.
+||| `nin` + `EnvFrame` keep `lookupH intern = HVPtr a`. The remaining
+||| premise is `lookupPlace intern sc' = Just own.ownSt` (intern not
+||| consumed and not borrowed — EVar borrow writes `[]` and only reads).
+||| `internShiftXfer` / `useKeepLookupInv` / `useKeepSelfSafe` transport
+||| dest intern Unique Own / `xferLive`; they do not restore leftover
+||| intern Unique Own at `sc'`.
+export
+goneDiedWrite :
+  {env, env' : HEnv} -> {h, h' : Heap} -> {sc, sc' : Scopes} ->
+  {w : List Place} -> {a : Addr} ->
+  UniqueKeys env ->
+  (own : Own env sc a) ->
+  OverApprox env h sc ->
+  EnvFrame env env' w ->
+  placeIn own.ownQ w = False ->
+  OverApprox env' h' sc' ->
+  lookupPlace own.ownQ sc' = Just own.ownSt ->
+  cell h' a = Just Freed ->
+  FreedBy a ->
+  Void
+goneDiedWrite {h'} _ own _ envFr nin oa' lp' fr _ =
+  let look' = ownerEnvStay own envFr nin
+      du = oa'.deadUnsafe own.ownQ own.ownSt (HVPtr a) lp' look'
+            (isDeadTrackedFreed h' a fr)
+  in trueNotFalse (trans (sym du) own.ownSafe)
 
 ||| Expression, take, leftover-InHand, and leftover-LiveNuo IHs from the
 ||| Dispatch mutual. Restore threads this from `restoreFromBind`; Dispatch

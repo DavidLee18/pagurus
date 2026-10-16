@@ -645,32 +645,11 @@ consumeQuietTail {q} {e} {es} {ms} pc pin pa =
       cs = aliasConsumeBorrowR {e} {es} {ms} pc
   in replace {p = \ps => placeIn q ps = False} cs miss
 
-||| Use-safe unique owner of `a`. `oaLive` reads the cell off this.
-public export
-record Own (env : HEnv) (sc : Scopes) (a : Addr) where
-  constructor MkOwn
-  ownQ : Place
-  ownSt : Status
-  ownLook : lookupH ownQ env = Just (HVPtr a)
-  ownLp : lookupPlace ownQ sc = Just ownSt
-  ownSafe : unsafeUse ownSt = False
-  ownHas : hasOwned ownSt = True
-  ownNb : hasBorrowed ownSt = Nothing
-
+||| Own / ownerEnvStay / goneDiedWrite live in Unique.
 ownLive : {env : HEnv} -> {h : Heap} -> {sc : Scopes} -> {a : Addr} ->
   OverApprox env h sc -> Own env sc a -> cell h a = Just Live
 ownLive oa own =
   oaLive oa own.ownQ own.ownSt a own.ownLp own.ownLook own.ownSafe
-
-||| Frame lemma for the owner place: outside `W`, the lookup is unchanged.
-export
-ownerEnvStay :
-  {env, env' : HEnv} -> {w : List Place} -> {sc : Scopes} -> {a : Addr} ->
-  (own : Own env sc a) ->
-  EnvFrame env env' w ->
-  placeIn own.ownQ w = False ->
-  lookupH own.ownQ env' = Just (HVPtr a)
-ownerEnvStay own fr nin = trans (fr own.ownQ nin) own.ownLook
 
 ownRewrite : {env : HEnv} -> {sc1, sc2 : Scopes} -> {a : Addr} ->
   sc1 = sc2 -> Own env sc1 a -> Own env sc2 a
@@ -11989,33 +11968,6 @@ goneStayBorrow ua oa noMiss eq evs =
               oa1.deadUnsafe q stQ (HVPtr a) lp look (isDeadTrackedFreed h1 a fr1)))
         (\miss1 => void (exprsStay oa.wf evs fr miss1))
 
-||| Unique Own leftover intern whose lookup and Unique Own status both
-||| survive evaluation cannot die: `deadUnsafe` of the post OA vs `ownSafe`.
-||| `nin` + `EnvFrame` keep `lookupH intern = HVPtr a`. The remaining
-||| premise is `lookupPlace intern sc' = Just own.ownSt` (intern not
-||| consumed and not borrowed — EVar borrow writes `[]` and only reads).
-||| `internShiftXfer` / `useKeepLookupInv` / `useKeepSelfSafe` transport
-||| dest intern Unique Own / `xferLive`; they do not restore leftover
-||| intern Unique Own at `sc'`.
-goneDiedWrite :
-  {env, env' : HEnv} -> {h, h' : Heap} -> {sc, sc' : Scopes} ->
-  {w : List Place} -> {a : Addr} ->
-  UniqueKeys env ->
-  (own : Own env sc a) ->
-  OverApprox env h sc ->
-  EnvFrame env env' w ->
-  placeIn own.ownQ w = False ->
-  OverApprox env' h' sc' ->
-  lookupPlace own.ownQ sc' = Just own.ownSt ->
-  cell h' a = Just Freed ->
-  FreedBy a ->
-  Void
-goneDiedWrite {h'} _ own _ envFr nin oa' lp' fr _ =
-  let look' = ownerEnvStay own envFr nin
-      du = oa'.deadUnsafe own.ownQ own.ownSt (HVPtr a) lp' look'
-            (isDeadTrackedFreed h' a fr)
-  in trueNotFalse (trans (sym du) own.ownSafe)
-
 ||| `SGone` holders are already unsafe, so a Freed cell is OA-ok.
 ||| `deadUnsafe` is `isDeadTracked => unsafeUse`; `ua` is that conclusion,
 ||| recovered here the other way from Freed. This is not
@@ -13097,40 +13049,6 @@ callFootModes {ctx} {callee} {es} = footGo (calleeModesFunModes ctx callee)
                                  fst (argsCallFoot ctx.summaries es (funModes ctx callee))}
            (argsCallFootNilAlways {acc = ctx.summaries} {es})
            (cong (\ms => fst (argsCallFoot ctx.summaries es ms)) (sym funNil)))
-
-||| `takeOwner` of a call is Ghost or Owner, never Null.
-callNotNull :
-  {ctx : Ctx} -> {sc, scT : Scopes} ->
-  {id : Nat} -> {callee : String} -> {args : List Expr} ->
-  takeOwner ctx sc (ECall id callee args) = Right (scT, Null) ->
-  Void
-callNotNull {ctx} {sc} {id} {callee} {args} eq =
-  cGo (checkCall ctx sc id callee args) Refl
-  where
-    cGo : (res : Either Diag Scopes) ->
-          checkCall ctx sc id callee args = res -> Void
-    cGo (Left d) pC =
-      tGo (isRealloc callee && not (isDefined ctx callee)) Refl
-      where
-        tGo : (b : Bool) ->
-              isRealloc callee && not (isDefined ctx callee) = b -> Void
-        tGo False pF =
-          void (leftNotRight (trans (sym (takeCallLeft
-            (trans (checkExprCall ctx sc id callee args) pC))) eq))
-        tGo True pF =
-          void (leftNotRight (trans (sym (takeReallocLeft pF pC)) eq))
-    cGo (Right scC) pC =
-      fGo (isRealloc callee && not (isDefined ctx callee)) Refl
-      where
-        fGo : (b : Bool) ->
-              isRealloc callee && not (isDefined ctx callee) = b -> Void
-        fGo False pF =
-          let pE = trans (checkExprCall ctx sc id callee args) pC
-          in void (Pagurus.Checker.nullNotGhost (sym (cong snd (rightInj
-               (trans (sym (takeCallRight pF pE)) eq)))))
-        fGo True pF =
-          void (Pagurus.Checker.ownerNotNull (cong snd (rightInj
-            (trans (sym (takeReallocRight pF pC)) eq))))
 
 mutual
   callMissEval :

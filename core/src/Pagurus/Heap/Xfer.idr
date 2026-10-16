@@ -92,3 +92,108 @@ asgDestInXferVar :
 asgDestInXferVar =
   asgDestInXfer {d = 1} {q = 2} {live = [2]} {id = 0} {nm = "n"}
     {rhs = EVar 3 2 "x"} Refl Refl
+
+||| `nestAssigns` of EUse/ECall/EMalloc is empty, so internShiftXfer's
+||| nestGo False is the dest-intern path (dest intern is not a
+||| nestAssigns destination). Checker unchanged.
+export
+nestNoneUse :
+  {p : Place} -> {id : Nat} -> {args : List Expr} ->
+  placeIn p (nestAssigns (EUse id args)) = False
+nestNoneUse = Refl
+
+export
+nestNoneCall :
+  {p : Place} -> {id : Nat} -> {callee : String} -> {args : List Expr} ->
+  placeIn p (nestAssigns (ECall id callee args)) = False
+nestNoneCall = Refl
+
+export
+nestNoneMalloc :
+  {p : Place} -> {id : Nat} -> {args : List Expr} ->
+  placeIn p (nestAssigns (EMalloc id args)) = False
+nestNoneMalloc = Refl
+
+||| leftover intern in `live` is leftover intern in `xferLive` of that
+||| leftover intern's variable (`xferLive` is identity on EVar).
+export
+xferKeepVar :
+  {q : Place} -> {live : List Place} ->
+  {id : Nat} -> {nm : String} ->
+  placeIn q live = True ->
+  placeIn q (xferLive live (EVar id q nm)) = True
+xferKeepVar pin = pin
+
+||| dest intern of leftover intern: leftover intern in `live`, rhs is
+||| that leftover intern's variable. dest intern is in `xferLive` of the
+||| pointer assignment via `placeAfter` True.
+export
+asgDestFromLive :
+  {d, q : Place} -> {live : List Place} ->
+  {id, nid : Nat} -> {nm, vnm : String} ->
+  placeIn q live = True ->
+  placeIn d (xferLive live (EAssign id d nm Ptr (EVar nid q vnm))) = True
+asgDestFromLive {d} {q} {live} {id} {nid} {nm} {vnm} pin =
+  asgDestInXfer {d} {q} {live} {id} {nm} {rhs = EVar nid q vnm}
+    pin (placeInHeadX q [])
+
+||| dest intern of leftover intern in a singleton EUse argument
+||| (`n = use(n = x)` inner). `valuePlaces` of EUse is empty, so the
+||| internShiftXfer goal `valuePlaces ++ xferLive` is `xferArgs`.
+export
+internShiftXferUseAsg :
+  {d, q : Place} -> {live : List Place} ->
+  {uid, id, nid : Nat} -> {nm, vnm : String} ->
+  placeIn q live = True ->
+  placeIn d
+    (valuePlaces (EUse uid [EAssign id d nm Ptr (EVar nid q vnm)])
+     ++ xferLive live (EUse uid [EAssign id d nm Ptr (EVar nid q vnm)])) = True
+internShiftXferUseAsg {id} {nid} {nm} {vnm} pin =
+  asgDestFromLive {id} {nid} {nm} {vnm} pin
+
+export
+internShiftXferCallAsg :
+  {d, q : Place} -> {live : List Place} ->
+  {cid, id, nid : Nat} -> {callee, nm, vnm : String} ->
+  placeIn q live = True ->
+  placeIn d
+    (valuePlaces (ECall cid callee [EAssign id d nm Ptr (EVar nid q vnm)])
+     ++ xferLive live
+          (ECall cid callee [EAssign id d nm Ptr (EVar nid q vnm)])) = True
+internShiftXferCallAsg {id} {nid} {nm} {vnm} pin =
+  asgDestFromLive {id} {nid} {nm} {vnm} pin
+
+export
+internShiftXferMallocAsg :
+  {d, q : Place} -> {live : List Place} ->
+  {mid, id, nid : Nat} -> {nm, vnm : String} ->
+  placeIn q live = True ->
+  placeIn d
+    (valuePlaces (EMalloc mid [EAssign id d nm Ptr (EVar nid q vnm)])
+     ++ xferLive live
+          (EMalloc mid [EAssign id d nm Ptr (EVar nid q vnm)])) = True
+internShiftXferMallocAsg {id} {nid} {nm} {vnm} pin =
+  asgDestFromLive {id} {nid} {nm} {vnm} pin
+
+||| dest intern survives a non-overwriting ELit tail in `xferArgs`.
+export
+internShiftXferUseAsgLit :
+  {d, q : Place} -> {live : List Place} ->
+  {uid, id, nid, lid : Nat} -> {nm, vnm : String} ->
+  placeIn q live = True ->
+  placeIn d
+    (xferLive live
+      (EUse uid [EAssign id d nm Ptr (EVar nid q vnm), ELit lid])) = True
+internShiftXferUseAsgLit {id} {nid} {nm} {vnm} pin =
+  asgDestFromLive {id} {nid} {nm} {vnm} pin
+
+||| Checker `n = use(n = x)`: leftover intern 2 in live, dest intern 1
+||| in `xferLive` of the EUse (internShiftXferArgs).
+export
+internShiftXferUseAsgCanary :
+  placeIn 1
+    (valuePlaces (EUse 2 [EAssign 3 1 "n" Ptr (EVar 4 2 "x")])
+     ++ xferLive [2] (EUse 2 [EAssign 3 1 "n" Ptr (EVar 4 2 "x")])) = True
+internShiftXferUseAsgCanary =
+  internShiftXferUseAsg {d = 1} {q = 2} {live = [2]}
+    {uid = 2} {id = 3} {nid = 4} {nm = "n"} {vnm = "x"} Refl

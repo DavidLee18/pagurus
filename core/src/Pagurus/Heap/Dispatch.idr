@@ -30,6 +30,7 @@ import Pagurus.Heap.If
 import Pagurus.Heap.Seq
 import Pagurus.Heap.Ended
 import Pagurus.Heap.Restore
+import Pagurus.Heap.RestoreCall
 import Pagurus.Heap.Unique
 import Pagurus.Heap.Inh
 
@@ -637,7 +638,7 @@ mutual
         out = stmtsHSafe {funs} {chk} evBody cfuel (paramScopes ctx f) scB pBdy oaF
         leftoverSafe = uniqueOwnFrom pB eq oa bok evs
     in restoreCaller oa1 (hOutWf out)
-         (restoreFromBind {funs} oa1 oaBind bok leftoverSafe pBdyP evBody)
+         (restoreFromBind {funs} {nln = nestedLNIHs} oa1 oaBind bok leftoverSafe pBdyP evBody)
     where
       uniqueOwnFrom :
         isBuiltinName callee = False ->
@@ -843,7 +844,7 @@ mutual
         pBdyP = replace {p = \sc0 => checkStmts cfuel ctx sc0 f.body = Right scB}
                   (paramScopesEq ctx f) pBdy
         leftoverSafe = uniqueOwnRet pB eq oa bok evs
-    in restoreCaller oa1 (hRetWf out) (restoreFromBindRet {funs} oa1 oaBind bok leftoverSafe pBdyP evBody)
+    in restoreCaller oa1 (hRetWf out) (restoreFromBindRet {funs} {nln = nestedLNIHs} oa1 oaBind bok leftoverSafe pBdyP evBody)
     where
       uniqueOwnRet :
         isBuiltinName callee = False ->

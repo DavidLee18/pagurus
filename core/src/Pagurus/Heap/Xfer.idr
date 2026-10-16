@@ -266,6 +266,9 @@ placeInJoinRX {p} {xs = q :: qs} {ys} pin =
   placeInTailX {p} {q} {qs = qs ++ ys}
     (placeInJoinRX {p} {xs = qs} {ys} pin)
 
+||| leftover intern miss of a mode footprint is leftover intern miss of
+||| evaluation writes (`nH0` at nestGo False). Checker unchanged.
+export
 ninEvalWX :
   {acc : List (String, List Consume)} -> {e : Expr} -> {m : Consume} ->
   {p : Place} ->
@@ -575,6 +578,30 @@ internShiftXfer :
 internShiftXfer {acc} {d} {e} pin nin hit kd =
   placeInJoinRX {p = d} {xs = valuePlaces e} {ys = xferLive live e}
     (internShiftXferLive {acc} {e} pin nin hit kd)
+
+||| `nH0` form: leftover intern miss of `argModeFoot` (borrow/consume)
+||| is leftover intern miss of evaluation writes.
+export
+internShiftXferMode :
+  {acc : List (String, List Consume)} ->
+  {d, q : Place} -> {live : List Place} -> {e : Expr} -> {m : Consume} ->
+  placeIn q live = True ->
+  placeIn q (fst (argModeFoot acc e m)) = False ->
+  shiftTo d q e = True ->
+  keepsDest d q e = True ->
+  placeIn d (valuePlaces e ++ xferLive live e) = True
+internShiftXferMode {acc} {e} {m} pin nin hit kd =
+  internShiftXfer {acc} {e} pin (ninEvalWX {acc} {e} {m} nin) hit kd
+
+export
+internShiftXferModeCanary :
+  placeIn 1
+    (valuePlaces (EUse 2 [EAssign 3 1 "n" Ptr (EVar 4 2 "x")])
+     ++ xferLive [2] (EUse 2 [EAssign 3 1 "n" Ptr (EVar 4 2 "x")])) = True
+internShiftXferModeCanary =
+  internShiftXferMode {acc = []} {d = 1} {q = 2} {live = [2]}
+    {e = EUse 2 [EAssign 3 1 "n" Ptr (EVar 4 2 "x")]} {m = Never}
+    Refl Refl Refl Refl
 
 export
 internShiftXferCanary :

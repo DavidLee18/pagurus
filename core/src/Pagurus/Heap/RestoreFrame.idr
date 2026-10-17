@@ -39,6 +39,8 @@ record FrameLNIHs (funs : List Fun) (ctx : Ctx) where
     {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
     {env, env' : HEnv} -> {h, h' : Heap} ->
     {e : Expr} -> {v : HVal} -> {sc, sc' : Scopes} -> {a : Addr} ->
+    UniqueKeys env ->
+    BindLNIHs funs ctx ->
     LiveNuo env h sc a ->
     checkExpr ctx sc e = Right sc' ->
     HEvalExpr {funs} env h e (HROk v env' h') ->
@@ -93,7 +95,7 @@ mutual
     frameOwnerVoid {ps = MkParam id pl nm Copy :: ps} {es = e :: es1} {ms = m :: ms}
         ln eq (HEArgsCons v envA hA evE evEs) pno | False =
       let (sc1 ** (pE, pEs)) = argsModesBorrowSplit pc eq
-          ln1 = fln.exprLNIH {funs} {chk} ln pE evE
+          ln1 = ihs.lnIH evE pE ln
       in frameOwnerVoid {funs} {chk} {ps} {es = es1} {ms} ln1 pEs evEs pno
     frameOwnerVoid {ps = MkParam id pl nm Copy :: ps} {es = e :: es1} {ms = m :: ms}
         ln eq (HEArgsCons v envA hA evE evEs) pno | True =
@@ -105,19 +107,19 @@ mutual
     frameOwnerVoid {ps = MkParam id pl nm Ptr :: ps} {es = e :: es1} {ms = m :: ms}
         ln eq (HEArgsCons HVNone envA hA evE evEs) pno | False =
       let (sc1 ** (pE, pEs)) = argsModesBorrowSplit pc eq
-          ln1 = fln.exprLNIH {funs} {chk} ln pE evE
+          ln1 = ihs.lnIH evE pE ln
           pno1 = noOwnerHereSkipPtrNone fid id pl nm ps m ms (collectArgVals evEs) a pno
       in frameOwnerVoid {funs} {chk} {ps} {es = es1} {ms} ln1 pEs evEs pno1
     frameOwnerVoid {ps = MkParam id pl nm Ptr :: ps} {es = e :: es1} {ms = m :: ms}
         ln eq (HEArgsCons HVCopy envA hA evE evEs) pno | False =
       let (sc1 ** (pE, pEs)) = argsModesBorrowSplit pc eq
-          ln1 = fln.exprLNIH {funs} {chk} ln pE evE
+          ln1 = ihs.lnIH evE pE ln
           pno1 = noOwnerHereSkipPtrCopy fid id pl nm ps m ms (collectArgVals evEs) a pno
       in frameOwnerVoid {funs} {chk} {ps} {es = es1} {ms} ln1 pEs evEs pno1
     frameOwnerVoid {ps = MkParam id pl nm Ptr :: ps} {es = e :: es1} {ms = m :: ms}
         ln eq (HEArgsCons (HVPtr b) envA hA evE evEs) pno | False =
       let (sc1 ** (pE, pEs)) = argsModesBorrowSplit pc eq
-          ln1 = fln.exprLNIH {funs} {chk} ln pE evE
+          ln1 = ihs.lnIH evE pE ln
       in ptrB (a == b) Refl sc1 ln1 pE pEs
       where
         ptrB : (eqb : Bool) -> a == b = eqb -> (sc1 : Scopes) ->

@@ -42,6 +42,7 @@ import Pagurus.Heap.Call
 import Pagurus.Heap.Args
 import Pagurus.Heap.Unique
 import Pagurus.Heap.Inh
+import Pagurus.Heap.RestoreBind
 
 %default total
 
@@ -66,6 +67,7 @@ record WalkLNIHs (funs : List Fun) (ctx : Ctx) where
     {env, envB : HEnv} -> {h, hB : Heap} ->
     {ss : List Stmt} -> {sc, scB : Scopes} -> {a : Addr} ->
     UniqueKeys env ->
+    BindLNIHs funs ctx ->
     LiveNuo env h sc a ->
     checkStmts fuel ctx sc ss = Right scB ->
     HEvalStmts {funs} env h ss (HOk envB hB) ->
@@ -77,6 +79,7 @@ record WalkLNIHs (funs : List Fun) (ctx : Ctx) where
     {env, envB : HEnv} -> {h, hB : Heap} ->
     {ss : List Stmt} -> {sc, scB : Scopes} -> {a : Addr} ->
     UniqueKeys env ->
+    BindLNIHs funs ctx ->
     LiveNuo env h sc a ->
     checkStmts fuel ctx sc ss = Right scB ->
     HEvalStmts {funs} env h ss (HReturned envB hB) ->
@@ -116,12 +119,18 @@ record WalkLNIHs (funs : List Fun) (ctx : Ctx) where
     checkExpr ctx sc (EAssign id n nm Ptr rhs) = Right sc' ->
     HEvalExpr {funs} env h rhs (HROk v env1 h1) ->
     LiveNuo (setH n v env1) h1 sc' a
+  -- UniqueKeys + BindLNIHs are explicit (not {auto}): packing these
+  -- fields as function values re-triggers Idris 0.8.0 multiple-solutions
+  -- (CallIHs / FunsChecked, runs #52/#58). Callers pass the caller-env
+  -- UniqueKeys and the packed BindLNIHs; they are never searched.
   nestedCallLNIH :
     {cfuel : Nat} ->
     {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
     {env, env1, envB : HEnv} -> {h, h1, hB : Heap} ->
     {sc, sc' : Scopes} -> {a : Addr} ->
     {id : Nat} -> {callee : String} -> {args : List Expr} ->
+    UniqueKeys env ->
+    BindLNIHs funs ctx ->
     LiveNuo env h sc a ->
     checkCall ctx sc id callee args = Right sc' ->
     isBuiltinName callee = False ->
@@ -137,6 +146,8 @@ record WalkLNIHs (funs : List Fun) (ctx : Ctx) where
     {env, env1, envB : HEnv} -> {h, h1, hB : Heap} ->
     {sc, sc' : Scopes} -> {a : Addr} ->
     {id : Nat} -> {callee : String} -> {args : List Expr} ->
+    UniqueKeys env ->
+    BindLNIHs funs ctx ->
     LiveNuo env h sc a ->
     checkCall ctx sc id callee args = Right sc' ->
     isBuiltinName callee = False ->
@@ -335,61 +346,63 @@ mutual
     {wln : WalkLNIHs funs ctx} ->
     {env, env' : HEnv} -> {h, h' : Heap} ->
     {e : Expr} -> {v : HVal} -> {sc, sc' : Scopes} -> {a : Addr} ->
+    UniqueKeys env ->
+    BindLNIHs funs ctx ->
     LiveNuo env h sc a ->
     checkExpr ctx sc e = Right sc' ->
     HEvalExpr {funs} env h e (HROk v env' h') ->
     LiveNuo env' h' sc' a
-  exprLN ln eq HELit {e = ELit id} =
+  exprLN uk bln ln eq HELit {e = ELit id} =
     let scEq = rightInj (trans (sym (checkExprLit ctx sc id)) eq)
     in MkLN (hrFromOk (litH id eq ln.oaLN)) (nuoRewrite scEq ln.nuoLN) ln.liveLN
-  exprLN ln eq HENull {e = ENull id} =
+  exprLN uk bln ln eq HENull {e = ENull id} =
     let scEq = rightInj (trans (sym (checkExprNull ctx sc id)) eq)
     in MkLN (hrFromOk (nullH id eq ln.oaLN)) (nuoRewrite scEq ln.nuoLN) ln.liveLN
-  exprLN ln eq (HEVarLive b look cl) {e = EVar nid n nm} =
+  exprLN uk bln ln eq (HEVarLive b look cl) {e = EVar nid n nm} =
     MkLN (hrFromOk (varUseHFuns funs nid n nm eq ln.oaLN (HEVarLive b look cl)))
       (nuoUse ln.nuoLN (trans (sym (checkExprVar ctx sc nid n nm)) eq) look)
       ln.liveLN
-  exprLN ln eq (HEVarNone look) {e = EVar nid n nm} =
+  exprLN uk bln ln eq (HEVarNone look) {e = EVar nid n nm} =
     MkLN (hrFromOk (varUseHFuns funs nid n nm eq ln.oaLN (HEVarNone look)))
       (nuoUse ln.nuoLN (trans (sym (checkExprVar ctx sc nid n nm)) eq) look)
       ln.liveLN
-  exprLN ln eq (HEVarCopy look) {e = EVar nid n nm} =
+  exprLN uk bln ln eq (HEVarCopy look) {e = EVar nid n nm} =
     MkLN (hrFromOk (varUseHFuns funs nid n nm eq ln.oaLN (HEVarCopy look)))
       (nuoUse ln.nuoLN (trans (sym (checkExprVar ctx sc nid n nm)) eq) look)
       ln.liveLN
-  exprLN ln eq (HEVarMiss miss) {e = EVar nid n nm} =
+  exprLN uk bln ln eq (HEVarMiss miss) {e = EVar nid n nm} =
     MkLN (hrFromOk (varUseHFuns funs nid n nm eq ln.oaLN (HEVarMiss miss)))
       (nuoUseMiss ln.nuoLN (trans (sym (checkExprVar ctx sc nid n nm)) eq) miss)
       ln.liveLN
-  exprLN ln eq HEUnsup {e = EUnsupported nid reason} =
+  exprLN uk bln ln eq HEUnsup {e = EUnsupported nid reason} =
     void (unsupExprContraH nid reason eq)
-  exprLN ln eq (HEMalloc env1 h1 evs) {e = EMalloc mid args} =
-    let ln1 = exprsBorrowLN {funs} {chk} {wln} ln
+  exprLN uk bln ln eq (HEMalloc env1 h1 evs) {e = EMalloc mid args} =
+    let ln1 = exprsBorrowLN {funs} {chk} {wln} uk bln ln
                 (trans (sym (checkExprMalloc ctx sc mid args)) eq) evs
         nf = liveNotFresh h1 ln1.oaLN.wf a ln1.liveLN
     in MkLN (oaAlloc ln1.oaLN) ln1.nuoLN (trans (allocPresCell h1 a nf) ln1.liveLN)
-  exprLN ln eq (HEAsgCopy w env1 h1 ev) {e = EAssign id n nm Copy rhs} =
-    exprLN {funs} {chk} {wln} ln (trans (sym (checkExprAsgCopy id n nm)) eq) ev
-  exprLN ln eq (HEUse env1 h1 evs) {e = EUse uid args} =
-    exprsBorrowLN {funs} {chk} {wln} ln
+  exprLN uk bln ln eq (HEAsgCopy w env1 h1 ev) {e = EAssign id n nm Copy rhs} =
+    exprLN {funs} {chk} {wln} uk bln ln (trans (sym (checkExprAsgCopy id n nm)) eq) ev
+  exprLN uk bln ln eq (HEUse env1 h1 evs) {e = EUse uid args} =
+    exprsBorrowLN {funs} {chk} {wln} uk bln ln
       (trans (sym (checkExprUse ctx sc uid args)) eq) evs
-  exprLN ln eq (HECall unk env1 h1 evs) {e = ECall id callee args} =
-    exprsCallLN {funs} {chk} {wln} ln
+  exprLN uk bln ln eq (HECall unk env1 h1 evs) {e = ECall id callee args} =
+    exprsCallLN {funs} {chk} {wln} uk bln ln
       (trans (sym (checkExprCall ctx sc id callee args)) eq) evs
-  exprLN ln eq (HECallUser pB f look pDef env1 h1 evs envB hB evBody)
+  exprLN uk bln ln eq (HECallUser pB f look pDef env1 h1 evs envB hB evBody)
       {e = ECall id callee args} =
-    wln.nestedCallLNIH {funs} {chk} ln
+    wln.nestedCallLNIH {funs} {chk} uk bln ln
       (trans (sym (checkExprCall ctx sc id callee args)) eq)
       pB f look pDef evs evBody
-  exprLN ln eq (HECallUserRet pB f look pDef env1 h1 evs envB hB evBody)
+  exprLN uk bln ln eq (HECallUserRet pB f look pDef env1 h1 evs envB hB evBody)
       {e = ECall id callee args} =
-    wln.nestedCallRetLNIH {funs} {chk} ln
+    wln.nestedCallRetLNIH {funs} {chk} uk bln ln
       (trans (sym (checkExprCall ctx sc id callee args)) eq)
       pB f look pDef evs evBody
-  exprLN ln eq (HERealloc pName pMiss env1 h1 evs) {e = ECall id callee args} =
-    reallocLN {funs} {chk} {wln} ln
+  exprLN uk bln ln eq (HERealloc pName pMiss env1 h1 evs) {e = ECall id callee args} =
+    reallocLN {funs} {chk} {wln} uk bln ln
       (trans (sym (checkExprCall ctx sc id callee args)) eq) pName evs
-  exprLN ln eq (HEAsgPtr w env1 h1 ev) {e = EAssign id n nm Ptr rhs} =
+  exprLN uk bln ln eq (HEAsgPtr w env1 h1 ev) {e = EAssign id n nm Ptr rhs} =
     wln.asgPtrExprLNIH {funs} {chk} ln eq ev
 
   export
@@ -418,6 +431,7 @@ mutual
               nuo' = nuoUseSet {n} {nid} {v} {st0} {stN} nuo pL lookV pS
           in replace {p = \s => NoUniqueOwner env s a} scEq nuo'
 
+  export
   nuoUseMiss :
     {env : HEnv} -> {sc, sc' : Scopes} -> {a : Addr} ->
     {n : Place} -> {nid : Nat} -> {nm : String} ->
@@ -450,21 +464,66 @@ mutual
     {wln : WalkLNIHs funs ctx} ->
     {env, env' : HEnv} -> {h, h' : Heap} ->
     {es : List Expr} -> {v : HVal} -> {sc, sc' : Scopes} -> {a : Addr} ->
+    UniqueKeys env ->
+    BindLNIHs funs ctx ->
     LiveNuo env h sc a ->
     checkArgsBorrow ctx sc es = Right sc' ->
     HEvalExprs {funs} env h es (HROk v env' h') ->
     LiveNuo env' h' sc' a
-  exprsBorrowLN ln eq HEArgsNil =
+  exprsBorrowLN uk bln ln eq HEArgsNil =
     let scEq = rightInj (trans (sym (checkArgsBorrowNil ctx sc)) eq)
     in MkLN (hrFromOk (argsBorrowNilH eq ln.oaLN))
          (nuoRewrite scEq ln.nuoLN) ln.liveLN
-  exprsBorrowLN ln eq (HEArgsCons w env1 h1 evE evEs) {es = e :: es} =
+  exprsBorrowLN uk bln ln eq (HEArgsCons w env1 h1 evE evEs) {es = e :: es} =
     let (sc1 ** (pE, pEs)) = argsBorrowSplit eq
-        ln1 = exprLN {funs} {chk} {wln} ln pE evE
-    in exprsBorrowLN {funs} {chk} {wln} ln1 pEs evEs
+        ln1 = exprLN {funs} {chk} {wln} uk bln ln pE evE
+    in exprsBorrowLN {funs} {chk} {wln} (exprUK uk evE) bln ln1 pEs evEs
+
+  ||| UK-free leftover LiveNuo through borrow args via `CallIHs.lnIH`.
+  ||| `takeLN` / `CallIHs.takeLnIH` cannot carry UniqueKeys (HARD STOP a).
+  export
+  exprsBorrowLNBare :
+    {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
+    {wln : WalkLNIHs funs ctx} ->
+    {env, env' : HEnv} -> {h, h' : Heap} ->
+    {es : List Expr} -> {v : HVal} -> {sc, sc' : Scopes} -> {a : Addr} ->
+    LiveNuo env h sc a ->
+    checkArgsBorrow ctx sc es = Right sc' ->
+    HEvalExprs {funs} env h es (HROk v env' h') ->
+    LiveNuo env' h' sc' a
+  exprsBorrowLNBare ln eq HEArgsNil =
+    let scEq = rightInj (trans (sym (checkArgsBorrowNil ctx sc)) eq)
+    in MkLN (hrFromOk (argsBorrowNilH eq ln.oaLN))
+         (nuoRewrite scEq ln.nuoLN) ln.liveLN
+  exprsBorrowLNBare ln eq (HEArgsCons w env1 h1 evE evEs) {es = e :: es} =
+    let (sc1 ** (pE, pEs)) = argsBorrowSplit eq
+        ln1 = ihs.lnIH evE pE ln
+    in exprsBorrowLNBare {funs} {chk} {wln} ln1 pEs evEs
 
   export
   exprsCallLN :
+    {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
+    {wln : WalkLNIHs funs ctx} ->
+    {env, env' : HEnv} -> {h, h' : Heap} ->
+    {callee : String} -> {args : List Expr} -> {id : Nat} ->
+    {sc, sc' : Scopes} -> {a : Addr} ->
+    UniqueKeys env ->
+    BindLNIHs funs ctx ->
+    LiveNuo env h sc a ->
+    checkCall ctx sc id callee args = Right sc' ->
+    HEvalExprs {funs} env h args (HROk HVNone env' h') ->
+    LiveNuo env' h' sc' a
+  exprsCallLN uk bln ln eq HEArgsNil =
+    let scEq = callNilScope eq
+    in MkLN (oaRewrite (sym scEq) ln.oaLN) (nuoRewrite (sym scEq) ln.nuoLN) ln.liveLN
+  exprsCallLN uk bln ln eq (HEArgsCons w env1 h1 evE evEs) {args = e :: es} =
+    exprsCallConsLN {funs} {chk} {wln} uk bln ln eq evE evEs
+
+  ||| UK-free leftover LiveNuo through call args via `CallIHs.lnIH`.
+  export
+  exprsCallLNBare :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
     {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
     {wln : WalkLNIHs funs ctx} ->
@@ -475,11 +534,11 @@ mutual
     checkCall ctx sc id callee args = Right sc' ->
     HEvalExprs {funs} env h args (HROk HVNone env' h') ->
     LiveNuo env' h' sc' a
-  exprsCallLN ln eq HEArgsNil =
+  exprsCallLNBare ln eq HEArgsNil =
     let scEq = callNilScope eq
     in MkLN (oaRewrite (sym scEq) ln.oaLN) (nuoRewrite (sym scEq) ln.nuoLN) ln.liveLN
-  exprsCallLN ln eq (HEArgsCons w env1 h1 evE evEs) {args = e :: es} =
-    exprsCallConsLN {funs} {chk} {wln} ln eq evE evEs
+  exprsCallLNBare ln eq (HEArgsCons w env1 h1 evE evEs) {args = e :: es} =
+    exprsCallConsLNBare {funs} {chk} {wln} ln eq evE evEs
 
   reallocLN :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
@@ -488,13 +547,15 @@ mutual
     {env, env1 : HEnv} -> {h, h1 : Heap} ->
     {id : Nat} -> {callee : String} -> {args : List Expr} ->
     {sc, sc' : Scopes} -> {a : Addr} ->
+    UniqueKeys env ->
+    BindLNIHs funs ctx ->
     LiveNuo env h sc a ->
     checkCall ctx sc id callee args = Right sc' ->
     isReallocName callee = True ->
     HEvalReallocArgs {funs} env h args (HROk HVNone env1 h1) ->
     LiveNuo env1 (snd (alloc h1)) sc' a
-  reallocLN ln eq pName evs =
-    let ln1 = reallocArgsLN {funs} {chk} {wln} ln eq evs
+  reallocLN uk bln ln eq pName evs =
+    let ln1 = reallocArgsLN {funs} {chk} {wln} uk bln ln eq evs
         nf = liveNotFresh h1 ln1.oaLN.wf a ln1.liveLN
     in MkLN (oaAlloc ln1.oaLN) ln1.nuoLN
          (trans (allocPresCell h1 a nf) ln1.liveLN)
@@ -507,15 +568,17 @@ mutual
     {env, env1 : HEnv} -> {h, h1 : Heap} ->
     {id : Nat} -> {callee : String} -> {args : List Expr} ->
     {sc, sc' : Scopes} -> {a : Addr} ->
+    UniqueKeys env ->
+    BindLNIHs funs ctx ->
     LiveNuo env h sc a ->
     checkCall ctx sc id callee args = Right sc' ->
     HEvalReallocArgs {funs} env h args (HROk HVNone env1 h1) ->
     LiveNuo env1 h1 sc' a
-  reallocArgsLN ln eq HRNil =
+  reallocArgsLN uk bln ln eq HRNil =
     let scEq = callNilScope eq
     in MkLN (oaRewrite (sym scEq) ln.oaLN) (nuoRewrite (sym scEq) ln.nuoLN) ln.liveLN
-  reallocArgsLN ln eq (HRHeadOk w env0 h0 evE evEs) {args = e :: es} =
-    reallocHeadLN {funs} {chk} {wln} ln eq evE evEs
+  reallocArgsLN uk bln ln eq (HRHeadOk w env0 h0 evE evEs) {args = e :: es} =
+    reallocHeadLN {funs} {chk} {wln} uk bln ln eq evE evEs
 
   reallocHeadLN :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
@@ -524,12 +587,14 @@ mutual
     {env, env0, env1 : HEnv} -> {h, h0, h1 : Heap} ->
     {id : Nat} -> {callee : String} -> {e : Expr} -> {es : List Expr} ->
     {sc, sc' : Scopes} -> {a : Addr} -> {w : HVal} ->
+    UniqueKeys env ->
+    BindLNIHs funs ctx ->
     LiveNuo env h sc a ->
     checkCall ctx sc id callee (e :: es) = Right sc' ->
     HEvalExpr {funs} env h e (HROk w env0 h0) ->
     HEvalExprs {funs} env0 h0 es (HROk HVNone env1 h1) ->
     LiveNuo env1 h1 sc' a
-  reallocHeadLN ln eq evE evEs =
+  reallocHeadLN uk bln ln eq evE evEs =
     reallocHeadGo (isBuiltin callee) Refl
     where
       reallocHeadGo : (b : Bool) -> isBuiltin callee = b ->
@@ -537,17 +602,17 @@ mutual
       reallocHeadGo True pb =
         let (scA ** (pE, pEs)) = argsBorrowSplit
               (trans (sym (checkCallBuiltin {args = e :: es} pb)) eq)
-            ln1 = exprLN {funs} {chk} {wln} ln pE evE
-        in exprsBorrowLN {funs} {chk} {wln} ln1 pEs evEs
+            ln1 = exprLN {funs} {chk} {wln} uk bln ln pE evE
+        in exprsBorrowLN {funs} {chk} {wln} (exprUK uk evE) bln ln1 pEs evEs
       reallocHeadGo False pb with (isDefined ctx callee) proof pd
         reallocHeadGo False pb | True =
-          exprsCallConsLN {funs} {chk} {wln} ln eq evE evEs
+          exprsCallConsLN {funs} {chk} {wln} uk bln ln eq evE evEs
         reallocHeadGo False pb | False with (isRealloc callee) proof pr
           reallocHeadGo False pb | False | False =
             void (callOpaqueContraH pb pr pd eq)
           reallocHeadGo False pb | False | True =
             let pCall = trans (sym (checkCallRealloc pb pr pd)) eq
-            in reallocTailLN {funs} {chk} {wln} ln pCall evE evEs
+            in reallocTailLN {funs} {chk} {wln} uk bln ln pCall evE evEs
 
   reallocTailLN :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
@@ -556,12 +621,14 @@ mutual
     {env, env0, env1 : HEnv} -> {h, h0, h1 : Heap} ->
     {e : Expr} -> {es : List Expr} ->
     {sc, sc' : Scopes} -> {a : Addr} -> {w : HVal} ->
+    UniqueKeys env ->
+    BindLNIHs funs ctx ->
     LiveNuo env h sc a ->
     checkRealloc ctx sc (e :: es) = Right sc' ->
     HEvalExpr {funs} env h e (HROk w env0 h0) ->
     HEvalExprs {funs} env0 h0 es (HROk HVNone env1 h1) ->
     LiveNuo env1 h1 sc' a
-  reallocTailLN ln eq evE evEs = tGo (takeOwner ctx sc e) Refl
+  reallocTailLN uk bln ln eq evE evEs = tGo (takeOwner ctx sc e) Refl
     where
       tGo : (res : Either Diag (Scopes, Flag)) ->
             takeOwner ctx sc e = res ->
@@ -570,7 +637,7 @@ mutual
         void (leftNotRight (trans (sym (reallocTailLeft es pT)) eq))
       tGo (Right (sc1, fl)) pT =
         let lnT = wln.takeLNIH {funs} {chk} ln pT evE
-        in exprsBorrowLN {funs} {chk} {wln} lnT
+        in exprsBorrowLN {funs} {chk} {wln} (exprUK uk evE) bln lnT
              (trans (sym (reallocTailRight es pT)) eq) evEs
 
   exprsCallConsLN :
@@ -580,30 +647,104 @@ mutual
     {env, env1, env' : HEnv} -> {h, h1, h' : Heap} ->
     {callee : String} -> {e : Expr} -> {es : List Expr} -> {id : Nat} ->
     {sc, sc' : Scopes} -> {a : Addr} -> {w : HVal} ->
+    UniqueKeys env ->
+    BindLNIHs funs ctx ->
     LiveNuo env h sc a ->
     checkCall ctx sc id callee (e :: es) = Right sc' ->
     HEvalExpr {funs} env h e (HROk w env1 h1) ->
     HEvalExprs {funs} env1 h1 es (HROk HVNone env' h') ->
     LiveNuo env' h' sc' a
-  exprsCallConsLN ln eq evE evEs with (isBuiltin callee) proof pb
-    exprsCallConsLN ln eq evE evEs | True =
+  exprsCallConsLN uk bln ln eq evE evEs with (isBuiltin callee) proof pb
+    exprsCallConsLN uk bln ln eq evE evEs | True =
       let (scA ** (pE, pEs)) = argsBorrowSplit
             (trans (sym (checkCallBuiltin {args = e :: es} pb)) eq)
-          ln1 = exprLN {funs} {chk} {wln} ln pE evE
-      in exprsBorrowLN {funs} {chk} {wln} ln1 pEs evEs
-    exprsCallConsLN ln eq evE evEs | False with (isDefined ctx callee) proof pd
-      exprsCallConsLN ln eq evE evEs | False | False with (isRealloc callee) proof pr
-        exprsCallConsLN ln eq evE evEs | False | False | False =
+          ln1 = exprLN {funs} {chk} {wln} uk bln ln pE evE
+      in exprsBorrowLN {funs} {chk} {wln} (exprUK uk evE) bln ln1 pEs evEs
+    exprsCallConsLN uk bln ln eq evE evEs | False with (isDefined ctx callee) proof pd
+      exprsCallConsLN uk bln ln eq evE evEs | False | False with (isRealloc callee) proof pr
+        exprsCallConsLN uk bln ln eq evE evEs | False | False | False =
           void (callOpaqueContraH pb pr pd eq)
-        exprsCallConsLN ln eq evE evEs | False | False | True =
-          reallocTailLN {funs} {chk} {wln} ln
+        exprsCallConsLN uk bln ln eq evE evEs | False | False | True =
+          reallocTailLN {funs} {chk} {wln} uk bln ln
             (trans (sym (checkCallRealloc pb pr pd)) eq) evE evEs
-      exprsCallConsLN ln eq evE evEs | False | True =
+      exprsCallConsLN uk bln ln eq evE evEs | False | True =
         let pbad = callDefinedNoAlias eq pb pd
             pModes = trans (sym (checkCallDefined pb pd pbad)) eq
-        in exprsModesLN {funs} {chk} {wln} ln pModes evE evEs
+        in exprsModesLN {funs} {chk} {wln} uk bln ln pModes evE evEs
 
   exprsModesLN :
+    {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
+    {wln : WalkLNIHs funs ctx} ->
+    {env, env1, env' : HEnv} -> {h, h1, h' : Heap} ->
+    {callee : String} -> {e : Expr} -> {es : List Expr} ->
+    {sc, sc' : Scopes} -> {a : Addr} -> {w : HVal} ->
+    {modes : List Consume} ->
+    UniqueKeys env ->
+    BindLNIHs funs ctx ->
+    LiveNuo env h sc a ->
+    checkArgsModes ctx sc callee (e :: es) modes = Right sc' ->
+    HEvalExpr {funs} env h e (HROk w env1 h1) ->
+    HEvalExprs {funs} env1 h1 es (HROk HVNone env' h') ->
+    LiveNuo env' h' sc' a
+  exprsModesLN uk bln ln eq evE evEs {modes = []} =
+    let (sc1 ** (fl ** (pT, pEs))) = argsModesExtraSplit eq
+        ln1 = wln.takeLNIH {funs} {chk} ln pT evE
+    in exprsModesRest {funs} {chk} {wln} {modes = []} (exprUK uk evE) bln ln1 pEs evEs
+  exprsModesLN uk bln ln eq evE evEs {modes = m :: ms} with (doesConsume m) proof pc
+    exprsModesLN uk bln ln eq evE evEs {modes = m :: ms} | False =
+      let (sc1 ** (pE, pEs)) = argsModesBorrowSplit pc eq
+          ln1 = exprLN {funs} {chk} {wln} uk bln ln pE evE
+      in exprsModesRest {funs} {chk} {wln} {modes = ms} (exprUK uk evE) bln ln1 pEs evEs
+    exprsModesLN uk bln ln eq evE evEs {modes = m :: ms} | True =
+      let (sc1 ** (fl ** (pT, pEs))) = argsModesMoveSplit pc eq
+          ln1 = wln.takeLNIH {funs} {chk} ln pT evE
+      in exprsModesRest {funs} {chk} {wln} {modes = ms} (exprUK uk evE) bln ln1 pEs evEs
+
+  export
+  exprsModesRest :
+    {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
+    {wln : WalkLNIHs funs ctx} ->
+    {env, env' : HEnv} -> {h, h' : Heap} ->
+    {callee : String} -> {es : List Expr} ->
+    {sc, sc' : Scopes} -> {a : Addr} ->
+    {modes : List Consume} ->
+    UniqueKeys env ->
+    BindLNIHs funs ctx ->
+    LiveNuo env h sc a ->
+    checkArgsModes ctx sc callee es modes = Right sc' ->
+    HEvalExprs {funs} env h es (HROk HVNone env' h') ->
+    LiveNuo env' h' sc' a
+  exprsModesRest uk bln ln eq HEArgsNil =
+    let scEq = rightInj (trans (sym (checkArgsModesNil ctx sc callee modes)) eq)
+    in MkLN (oaRewrite scEq ln.oaLN) (nuoRewrite scEq ln.nuoLN) ln.liveLN
+  exprsModesRest uk bln ln eq (HEArgsCons w env1 h1 evE evEs) {es = e :: es} =
+    exprsModesLN {funs} {chk} {wln} uk bln ln eq evE evEs
+
+  ||| BindLNIHs.exprsModesRestIH inhabitant: leftover LiveNuo through
+  ||| remaining modes via `CallIHs.lnIH` / `takeLNIH` (UK-free). Cannot
+  ||| mention BindLNIHs in that field (positivity, run #58 / #59).
+  export
+  exprsModesRestBare :
+    {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
+    {wln : WalkLNIHs funs ctx} ->
+    {env, env' : HEnv} -> {h, h' : Heap} ->
+    {callee : String} -> {es : List Expr} ->
+    {sc, sc' : Scopes} -> {a : Addr} ->
+    {modes : List Consume} ->
+    LiveNuo env h sc a ->
+    checkArgsModes ctx sc callee es modes = Right sc' ->
+    HEvalExprs {funs} env h es (HROk HVNone env' h') ->
+    LiveNuo env' h' sc' a
+  exprsModesRestBare ln eq HEArgsNil =
+    let scEq = rightInj (trans (sym (checkArgsModesNil ctx sc callee modes)) eq)
+    in MkLN (oaRewrite scEq ln.oaLN) (nuoRewrite scEq ln.nuoLN) ln.liveLN
+  exprsModesRestBare ln eq (HEArgsCons w env1 h1 evE evEs) {es = e :: es} =
+    exprsModesLNBare {funs} {chk} {wln} ln eq evE evEs
+
+  exprsModesLNBare :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
     {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
     {wln : WalkLNIHs funs ctx} ->
@@ -616,35 +757,121 @@ mutual
     HEvalExpr {funs} env h e (HROk w env1 h1) ->
     HEvalExprs {funs} env1 h1 es (HROk HVNone env' h') ->
     LiveNuo env' h' sc' a
-  exprsModesLN ln eq evE evEs {modes = []} =
+  exprsModesLNBare ln eq evE evEs {modes = []} =
     let (sc1 ** (fl ** (pT, pEs))) = argsModesExtraSplit eq
         ln1 = wln.takeLNIH {funs} {chk} ln pT evE
-    in exprsModesRest {funs} {chk} {wln} {modes = []} ln1 pEs evEs
-  exprsModesLN ln eq evE evEs {modes = m :: ms} with (doesConsume m) proof pc
-    exprsModesLN ln eq evE evEs {modes = m :: ms} | False =
+    in exprsModesRestBare {funs} {chk} {wln} {modes = []} ln1 pEs evEs
+  exprsModesLNBare ln eq evE evEs {modes = m :: ms} with (doesConsume m) proof pc
+    exprsModesLNBare ln eq evE evEs {modes = m :: ms} | False =
       let (sc1 ** (pE, pEs)) = argsModesBorrowSplit pc eq
-          ln1 = exprLN {funs} {chk} {wln} ln pE evE
-      in exprsModesRest {funs} {chk} {wln} {modes = ms} ln1 pEs evEs
-    exprsModesLN ln eq evE evEs {modes = m :: ms} | True =
+          ln1 = ihs.lnIH evE pE ln
+      in exprsModesRestBare {funs} {chk} {wln} {modes = ms} ln1 pEs evEs
+    exprsModesLNBare ln eq evE evEs {modes = m :: ms} | True =
       let (sc1 ** (fl ** (pT, pEs))) = argsModesMoveSplit pc eq
           ln1 = wln.takeLNIH {funs} {chk} ln pT evE
-      in exprsModesRest {funs} {chk} {wln} {modes = ms} ln1 pEs evEs
+      in exprsModesRestBare {funs} {chk} {wln} {modes = ms} ln1 pEs evEs
 
+  ||| UK-free leftover LiveNuo through realloc args via `CallIHs.lnIH`.
   export
-  exprsModesRest :
+  reallocArgsLNBare :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
     {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
     {wln : WalkLNIHs funs ctx} ->
-    {env, env' : HEnv} -> {h, h' : Heap} ->
-    {callee : String} -> {es : List Expr} ->
+    {env, env1 : HEnv} -> {h, h1 : Heap} ->
+    {id : Nat} -> {callee : String} -> {args : List Expr} ->
     {sc, sc' : Scopes} -> {a : Addr} ->
-    {modes : List Consume} ->
     LiveNuo env h sc a ->
-    checkArgsModes ctx sc callee es modes = Right sc' ->
-    HEvalExprs {funs} env h es (HROk HVNone env' h') ->
+    checkCall ctx sc id callee args = Right sc' ->
+    HEvalReallocArgs {funs} env h args (HROk HVNone env1 h1) ->
+    LiveNuo env1 h1 sc' a
+  reallocArgsLNBare ln eq HRNil =
+    let scEq = callNilScope eq
+    in MkLN (oaRewrite (sym scEq) ln.oaLN) (nuoRewrite (sym scEq) ln.nuoLN) ln.liveLN
+  reallocArgsLNBare ln eq (HRHeadOk w env0 h0 evE evEs) {args = e :: es} =
+    reallocHeadLNBare {funs} {chk} {wln} ln eq evE evEs
+
+  reallocHeadLNBare :
+    {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
+    {wln : WalkLNIHs funs ctx} ->
+    {env, env0, env1 : HEnv} -> {h, h0, h1 : Heap} ->
+    {id : Nat} -> {callee : String} -> {e : Expr} -> {es : List Expr} ->
+    {sc, sc' : Scopes} -> {a : Addr} -> {w : HVal} ->
+    LiveNuo env h sc a ->
+    checkCall ctx sc id callee (e :: es) = Right sc' ->
+    HEvalExpr {funs} env h e (HROk w env0 h0) ->
+    HEvalExprs {funs} env0 h0 es (HROk HVNone env1 h1) ->
+    LiveNuo env1 h1 sc' a
+  reallocHeadLNBare ln eq evE evEs =
+    reallocHeadGoBare (isBuiltin callee) Refl
+    where
+      reallocHeadGoBare : (b : Bool) -> isBuiltin callee = b ->
+                          LiveNuo env1 h1 sc' a
+      reallocHeadGoBare True pb =
+        let (scA ** (pE, pEs)) = argsBorrowSplit
+              (trans (sym (checkCallBuiltin {args = e :: es} pb)) eq)
+            ln1 = ihs.lnIH evE pE ln
+        in exprsBorrowLNBare {funs} {chk} {wln} ln1 pEs evEs
+      reallocHeadGoBare False pb with (isDefined ctx callee) proof pd
+        reallocHeadGoBare False pb | True =
+          exprsCallConsLNBare {funs} {chk} {wln} ln eq evE evEs
+        reallocHeadGoBare False pb | False with (isRealloc callee) proof pr
+          reallocHeadGoBare False pb | False | False =
+            void (callOpaqueContraH pb pr pd eq)
+          reallocHeadGoBare False pb | False | True =
+            let pCall = trans (sym (checkCallRealloc pb pr pd)) eq
+            in reallocTailLNBare {funs} {chk} {wln} ln pCall evE evEs
+
+  reallocTailLNBare :
+    {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
+    {wln : WalkLNIHs funs ctx} ->
+    {env, env0, env1 : HEnv} -> {h, h0, h1 : Heap} ->
+    {e : Expr} -> {es : List Expr} ->
+    {sc, sc' : Scopes} -> {a : Addr} -> {w : HVal} ->
+    LiveNuo env h sc a ->
+    checkRealloc ctx sc (e :: es) = Right sc' ->
+    HEvalExpr {funs} env h e (HROk w env0 h0) ->
+    HEvalExprs {funs} env0 h0 es (HROk HVNone env1 h1) ->
+    LiveNuo env1 h1 sc' a
+  reallocTailLNBare ln eq evE evEs = tGo (takeOwner ctx sc e) Refl
+    where
+      tGo : (res : Either Diag (Scopes, Flag)) ->
+            takeOwner ctx sc e = res ->
+            LiveNuo env1 h1 sc' a
+      tGo (Left d) pT =
+        void (leftNotRight (trans (sym (reallocTailLeft es pT)) eq))
+      tGo (Right (sc1, fl)) pT =
+        let lnT = wln.takeLNIH {funs} {chk} ln pT evE
+        in exprsBorrowLNBare {funs} {chk} {wln} lnT
+             (trans (sym (reallocTailRight es pT)) eq) evEs
+
+  exprsCallConsLNBare :
+    {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
+    {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
+    {wln : WalkLNIHs funs ctx} ->
+    {env, env1, env' : HEnv} -> {h, h1, h' : Heap} ->
+    {callee : String} -> {e : Expr} -> {es : List Expr} -> {id : Nat} ->
+    {sc, sc' : Scopes} -> {a : Addr} -> {w : HVal} ->
+    LiveNuo env h sc a ->
+    checkCall ctx sc id callee (e :: es) = Right sc' ->
+    HEvalExpr {funs} env h e (HROk w env1 h1) ->
+    HEvalExprs {funs} env1 h1 es (HROk HVNone env' h') ->
     LiveNuo env' h' sc' a
-  exprsModesRest ln eq HEArgsNil =
-    let scEq = rightInj (trans (sym (checkArgsModesNil ctx sc callee modes)) eq)
-    in MkLN (oaRewrite scEq ln.oaLN) (nuoRewrite scEq ln.nuoLN) ln.liveLN
-  exprsModesRest ln eq (HEArgsCons w env1 h1 evE evEs) {es = e :: es} =
-    exprsModesLN {funs} {chk} {wln} ln eq evE evEs
+  exprsCallConsLNBare ln eq evE evEs with (isBuiltin callee) proof pb
+    exprsCallConsLNBare ln eq evE evEs | True =
+      let (scA ** (pE, pEs)) = argsBorrowSplit
+            (trans (sym (checkCallBuiltin {args = e :: es} pb)) eq)
+          ln1 = ihs.lnIH evE pE ln
+      in exprsBorrowLNBare {funs} {chk} {wln} ln1 pEs evEs
+    exprsCallConsLNBare ln eq evE evEs | False with (isDefined ctx callee) proof pd
+      exprsCallConsLNBare ln eq evE evEs | False | False with (isRealloc callee) proof pr
+        exprsCallConsLNBare ln eq evE evEs | False | False | False =
+          void (callOpaqueContraH pb pr pd eq)
+        exprsCallConsLNBare ln eq evE evEs | False | False | True =
+          reallocTailLNBare {funs} {chk} {wln} ln
+            (trans (sym (checkCallRealloc pb pr pd)) eq) evE evEs
+      exprsCallConsLNBare ln eq evE evEs | False | True =
+        let pbad = callDefinedNoAlias eq pb pd
+            pModes = trans (sym (checkCallDefined pb pd pbad)) eq
+        in exprsModesLNBare {funs} {chk} {wln} ln pModes evE evEs

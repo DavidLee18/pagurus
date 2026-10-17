@@ -190,10 +190,10 @@ mutual
           mGo (Left d) pA =
             void (leftNotRight (trans (sym (takeMallocLeft mid pA)) pT))
           mGo (Right sc1) pA =
-            let ln1 = exprsBorrowLN {funs} {chk} {wln} ln0 pA evs0
+            let ln1 = exprsBorrowLNBare {funs} {chk} {wln} ln0 pA evs0
                 nf = liveNotFresh h1 ln1.oaLN.wf a ln1.liveLN
                 scEq = cong fst (rightInj (trans (sym (takeMallocRight mid pA)) pT))
-                ht = takeMallocOkH mid args (\scX, pX => HROutOk (exprsBorrowLN {funs} {chk} {wln} ln0 pX evs0).oaLN)
+                ht = takeMallocOkH mid args (\scX, pX => HROutOk (exprsBorrowLNBare {funs} {chk} {wln} ln0 pX evs0).oaLN)
                        pT (Right sc1) pA
             in MkTLN (MkLN (oaRewrite scEq (oaAlloc ln1.oaLN))
                        (nuoRewrite scEq ln1.nuoLN)
@@ -214,9 +214,9 @@ mutual
           cGo (Left d) pE =
             void (leftNotRight (trans (sym (takeAsgCopyLeft id n nm pE)) pT))
           cGo (Right scE) pE =
-            let ln1 = exprLN {funs} {chk} {wln} ln0 pE ev0
+            let ln1 = ihs.lnIH ev0 pE ln0
                 scEq = cong fst (rightInj (trans (sym (takeAsgCopyRight id n nm pE)) pT))
-                ht = takeAsgCopyH id n nm (\pX => HROutOk (exprLN {funs} {chk} {wln} ln0 pX ev0).oaLN)
+                ht = takeAsgCopyH id n nm (\pX => HROutOk (ihs.lnIH ev0 pX ln0).oaLN)
                        pT (Right scE) pE
             in MkTLN (MkLN (oaRewrite scEq ln1.oaLN) (nuoRewrite scEq ln1.nuoLN) ln1.liveLN)
                  (htTaken ht)
@@ -235,9 +235,9 @@ mutual
           uGo (Left d) pA =
             void (leftNotRight (trans (sym (takeUseLeft uid pA)) pT))
           uGo (Right scA) pA =
-            let ln1 = exprsBorrowLN {funs} {chk} {wln} ln0 pA evs0
+            let ln1 = exprsBorrowLNBare {funs} {chk} {wln} ln0 pA evs0
                 scEq = cong fst (rightInj (trans (sym (takeUseRight uid pA)) pT))
-                ht = takeUseOkH uid (\scX, pX => HROutOk (exprsBorrowLN {funs} {chk} {wln} ln0 pX evs0).oaLN)
+                ht = takeUseOkH uid (\scX, pX => HROutOk (exprsBorrowLNBare {funs} {chk} {wln} ln0 pX evs0).oaLN)
                        pT (Right scA) pA
             in MkTLN (MkLN (oaRewrite scEq ln1.oaLN) (nuoRewrite scEq ln1.nuoLN) ln1.liveLN)
                  (htTaken ht)
@@ -295,7 +295,7 @@ mutual
       mGo (Left d) pA _ =
         void (leftNotRight (trans (sym (takeMallocLeft mid pA)) pT))
       mGo (Right scA) pA veq1 =
-        let ln1 = exprsBorrowLN {funs} {chk} {wln} ln pA evs
+        let ln1 = exprsBorrowLNBare {funs} {chk} {wln} ln pA evs
             nf = liveNotFresh h1 ln1.oaLN.wf a ln1.liveLN
         in eqNatFalse a h1.next nf (hvPtrInj (sym veq1))
   nuoNoTakeLeftover (HEAsgCopy w env1 h1 evR) {e = EAssign id n nm Copy rhs} pT ln veq =
@@ -329,7 +329,7 @@ mutual
         void (leftNotRight (trans (sym (takeCallLeft
           (trans (checkExprCall ctx sc id callee args) pC))) pT))
       rGo (Right scA) pC veq1 =
-        let ln1 = reallocArgsLN {funs} {chk} {wln} ln pC evs
+        let ln1 = reallocArgsLNBare {funs} {chk} {wln} ln pC evs
             nf = liveNotFresh h1 ln1.oaLN.wf a ln1.liveLN
         in eqNatFalse a h1.next nf (hvPtrInj (sym veq1))
   nuoNoTakeLeftover (HEAsgPtr w env1 h1 evR) {e = EAssign id n nm Ptr rhs} pT ln veq =
@@ -380,7 +380,7 @@ mutual
         tGo (Left d) pE =
           void (leftNotRight (trans (sym (takeCallLeft pE)) eq))
         tGo (Right sc1) pE =
-          let ln1 = exprLN {funs} {chk} {wln} ln pE ev
+          let ln1 = ihs.lnIH ev pE ln
           in tFl (isRealloc callee && not (isDefined ctx callee)) Refl ln1 pE
 
         tFl : {sc1 : Scopes} -> (fresh : Bool) ->
@@ -492,7 +492,7 @@ mutual
           void (leftNotRight (trans (sym (takeCallLeft
             (trans (checkExprCall ctx sc id callee args) pC))) eq))
         rGo (Right sc1) pC =
-          let ln1 = reallocArgsLN {funs} {chk} {wln} ln pC evs
+          let ln1 = reallocArgsLNBare {funs} {chk} {wln} ln pC evs
               nf = liveNotFresh h1 ln1.oaLN.wf a ln1.liveLN
               pF = trans (cong (\r => r && Delay (not (isDefined ctx callee)))
                              (reallocNameEq callee))

@@ -1335,19 +1335,20 @@ mutual
     {env, envB : HEnv} -> {h, hB : Heap} ->
     {ss : List Stmt} -> {sc, scB : Scopes} -> {a : Addr} ->
     UniqueKeys env ->
+    BindLNIHs funs ctx ->
     LiveNuo env h sc a ->
     checkStmts fuel ctx sc ss = Right scB ->
     HEvalStmts {funs} env h ss (HOk envB hB) ->
     LiveNuo envB hB scB a
-  stmtsLN uk ln eq HSNil =
+  stmtsLN uk bln ln eq HSNil =
     let scEq = rightInj (trans (sym (checkStmtsNil fuel ctx sc)) eq)
     in MkLN (oaRewrite scEq ln.oaLN) (nuoRewrite scEq ln.nuoLN) ln.liveLN
-  stmtsLN uk ln eq (HSConsOk {s} {ss = rest} envS hS evS evSS) {fuel = Z} =
+  stmtsLN uk bln ln eq (HSConsOk {s} {ss = rest} envS hS evS evSS) {fuel = Z} =
     void (stmtsZeroContraH ctx sc s rest eq)
-  stmtsLN uk ln eq (HSConsOk {s} {ss = rest} envS hS evS evSS) {fuel = S k} =
+  stmtsLN uk bln ln eq (HSConsOk {s} {ss = rest} envS hS evS evSS) {fuel = S k} =
     let (sc1 ** (pS, pRest)) = splitStmtsOk {funs} eq evS
-        lnS = stmtLN {funs} {chk} {fuel = k} uk ln pS evS
-    in stmtsLN {funs} {chk} {fuel = k} (stmtUK uk evS) lnS pRest evSS
+        lnS = stmtLN {funs} {chk} {fuel = k} uk bln ln pS evS
+    in stmtsLN {funs} {chk} {fuel = k} (stmtUK uk evS) bln lnS pRest evSS
 
   export
   stmtsLNRet :
@@ -1357,21 +1358,22 @@ mutual
     {env, envB : HEnv} -> {h, hB : Heap} ->
     {ss : List Stmt} -> {sc, scB : Scopes} -> {a : Addr} ->
     UniqueKeys env ->
+    BindLNIHs funs ctx ->
     LiveNuo env h sc a ->
     checkStmts fuel ctx sc ss = Right scB ->
     HEvalStmts {funs} env h ss (HReturned envB hB) ->
     cell hB a = Just Live
-  stmtsLNRet uk ln eq (HSConsRet {s} {ss = rest} envS hS evS) {fuel = Z} =
+  stmtsLNRet uk bln ln eq (HSConsRet {s} {ss = rest} envS hS evS) {fuel = Z} =
     void (stmtsZeroContraH ctx sc s rest eq)
-  stmtsLNRet uk ln eq (HSConsOk {s} {ss = rest} envS hS evS evSS) {fuel = Z} =
+  stmtsLNRet uk bln ln eq (HSConsOk {s} {ss = rest} envS hS evS evSS) {fuel = Z} =
     void (stmtsZeroContraH ctx sc s rest eq)
-  stmtsLNRet uk ln eq (HSConsRet {s} {ss = rest} envS hS evS) {fuel = S k} =
+  stmtsLNRet uk bln ln eq (HSConsRet {s} {ss = rest} envS hS evS) {fuel = S k} =
     let (sc1 ** pS) = splitStmtsRet {funs} eq evS
-    in stmtLNRet {funs} {chk} {fuel = k} uk ln pS evS
-  stmtsLNRet uk ln eq (HSConsOk {s} {ss = rest} envS hS evS evSS) {fuel = S k} =
+    in stmtLNRet {funs} {chk} {fuel = k} uk bln ln pS evS
+  stmtsLNRet uk bln ln eq (HSConsOk {s} {ss = rest} envS hS evS evSS) {fuel = S k} =
     let (sc1 ** (pS, pRest)) = splitStmtsOk {funs} eq evS
-        lnS = stmtLN {funs} {chk} {fuel = k} uk ln pS evS
-    in stmtsLNRet {funs} {chk} {fuel = k} (stmtUK uk evS) lnS pRest evSS
+        lnS = stmtLN {funs} {chk} {fuel = k} uk bln ln pS evS
+    in stmtsLNRet {funs} {chk} {fuel = k} (stmtUK uk evS) bln lnS pRest evSS
 
   stmtLN :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
@@ -1380,18 +1382,19 @@ mutual
     {env, envS : HEnv} -> {h, hS : Heap} ->
     {s : Stmt} -> {sc, sc1 : Scopes} -> {a : Addr} ->
     UniqueKeys env ->
+    BindLNIHs funs ctx ->
     LiveNuo env h sc a ->
     checkStmt fuel ctx sc s = Right sc1 ->
     HEvalStmt {funs} env h s (HOk envS hS) ->
     LiveNuo envS hS sc1 a
-  stmtLN uk ln eq ev {fuel = Z} =
+  stmtLN uk bln ln eq ev {fuel = Z} =
     void (stmtZeroContraH ctx sc s eq)
-  stmtLN uk ln eq (HSDropLive {n} {nid} {nm} b lookB cl) {fuel = S k} {a} {env} {envS = env} with (a == b) proof pab
-    stmtLN uk ln eq (HSDropLive {n} {nid} {nm} b lookB cl) {fuel = S k} {a} {env} {envS = env} | True =
+  stmtLN uk bln ln eq (HSDropLive {n} {nid} {nm} b lookB cl) {fuel = S k} {a} {env} {envS = env} with (a == b) proof pab
+    stmtLN uk bln ln eq (HSDropLive {n} {nid} {nm} b lookB cl) {fuel = S k} {a} {env} {envS = env} | True =
       void (dropUniqueContra ln.oaLN ln.nuoLN
         (trans (sym (checkStmtDrop k ctx sc nid n nm)) eq)
         (replace {p = \x => lookupH n env = Just (HVPtr x)} (sym (eqNatTrue a b pab)) lookB))
-    stmtLN uk ln eq (HSDropLive {n} {nid} {nm} b lookB cl) {fuel = S k} {a} {env} {envS = env} | False =
+    stmtLN uk bln ln eq (HSDropLive {n} {nid} {nm} b lookB cl) {fuel = S k} {a} {env} {envS = env} | False =
       let out = dropLiveH k ctx nid n nm {sc' = sc1} eq ln.oaLN lookB cl
           live' = trans (markFreedMiss a b h pab) ln.liveLN
           pDrop = trans (sym (checkStmtDrop k ctx sc nid n nm)) eq
@@ -1413,7 +1416,7 @@ mutual
               nuo' = nuoRewrite scEq
                        (nuoSetPlaceMiss {st' = stD} ln.nuoLN (lookNotPtrOther pab lookB))
           in MkLN (hFromOk out0) nuo' live0
-  stmtLN uk ln eq (HSDropNone {n} {nid} {nm} none) {fuel = S k} =
+  stmtLN uk bln ln eq (HSDropNone {n} {nid} {nm} none) {fuel = S k} =
     let out = dropNoneH k ctx nid n nm eq ln.oaLN none
         pDrop = trans (sym (checkStmtDrop k ctx sc nid n nm)) eq
     in dropNoneNuo (lookupPlace n sc) Refl pDrop out
@@ -1441,7 +1444,7 @@ mutual
                 nuo' = nuoRewrite scEq
                          (nuoSetPlaceMiss {st' = stD} ln.nuoLN (lookNotPtrNone none))
             in MkLN (hFromOk out1) nuo' ln.liveLN
-  stmtLN uk ln eq (HSDropMiss {n} {nid} {nm} miss) {fuel = S k} =
+  stmtLN uk bln ln eq (HSDropMiss {n} {nid} {nm} miss) {fuel = S k} =
     let out = dropMissH k ctx nid n nm eq ln.oaLN miss
         pDrop = trans (sym (checkStmtDrop k ctx sc nid n nm)) eq
     in dropMissNuo (lookupPlace n sc) Refl pDrop out
@@ -1469,11 +1472,11 @@ mutual
                 nuo' = nuoRewrite scEq
                          (nuoSetPlaceMiss {st' = stD} ln.nuoLN (lookNotPtrMiss miss))
             in MkLN (hFromOk out1) nuo' ln.liveLN
-  stmtLN uk ln eq HSDeclNoneCopy {fuel = S k} {s = SDecl id n nm Copy Nothing} =
+  stmtLN uk bln ln eq HSDeclNoneCopy {fuel = S k} {s = SDecl id n nm Copy Nothing} =
     let out = declCopyNoneH k id n nm eq ln.oaLN
         scEq = rightInj (trans (sym (checkStmtDeclCopyNone k ctx sc id n nm)) eq)
     in MkLN (hFromOk out) (nuoRewrite scEq ln.nuoLN) ln.liveLN
-  stmtLN uk ln eq HSDeclNonePtr {fuel = S k} {s = SDecl id n nm Ptr Nothing} =
+  stmtLN uk bln ln eq HSDeclNonePtr {fuel = S k} {s = SDecl id n nm Ptr Nothing} =
     let out = declPtrNoneH k id n nm eq ln.oaLN
         scEq = rightInj (trans (sym (checkStmtDeclPtrNone k ctx sc id n nm)) eq)
     in MkLN (hFromOk out)
@@ -1481,43 +1484,43 @@ mutual
             (nuoSetHPlaceNot {st' = Pagurus.Status.singleton AEmpty}
                ln.nuoLN noneNotPtrA))
          ln.liveLN
-  stmtLN uk ln eq HSLoopZ {fuel = S k} {s = SLoop lid bod} =
+  stmtLN uk bln ln eq HSLoopZ {fuel = S k} {s = SLoop lid bod} =
     let sub = loopFixSub k ctx sc lid bod sc1
                 (trans (sym (checkStmtLoop k ctx sc lid bod)) eq)
     in MkLN (oaWeaken sub ln.oaLN) (nuoSub ln.oaLN ln.nuoLN sub) ln.liveLN
-  stmtLN uk ln eq HSUnsup {fuel = S k} {s = SUnsupported id reason} =
+  stmtLN uk bln ln eq HSUnsup {fuel = S k} {s = SUnsupported id reason} =
     void (stmtUnsupContraH k ctx sc id reason eq)
-  stmtLN uk ln eq (HSBlock ev) {fuel = S k} {s = SBlock id body} =
-    stmtsLN {funs} {chk} {fuel = k} uk ln
+  stmtLN uk bln ln eq (HSBlock ev) {fuel = S k} {s = SBlock id body} =
+    stmtsLN {funs} {chk} {fuel = k} uk bln ln
       (trans (sym (checkStmtBlock k ctx sc id body)) eq) ev
-  stmtLN uk ln eq (HSAsgCopy v env1 h1 ev) {fuel = S k} {s = SAssign id n nm Copy rhs} =
-    exprLN {funs} {chk} {wln = walkLNIHs} ln (trans (sym (checkStmtAsgCopy k id n nm)) eq) ev
-  stmtLN uk ln eq (HSDeclJustCopy v env1 h1 ev) {fuel = S k} {s = SDecl id n nm Copy (Just e)} =
-    exprLN {funs} {chk} {wln = walkLNIHs} ln (trans (sym (checkStmtDeclCopyJust k id n nm)) eq) ev
-  stmtLN uk ln eq (HSExpr v env1 h1 ev) {fuel = S k} {s = SExpr id e} =
-    exprLN {funs} {chk} {wln = walkLNIHs} ln (trans (sym (checkStmtExpr k ctx sc id e)) eq) ev
-  stmtLN uk ln eq (HSCall unk env1 h1 evs) {fuel = S k} {s = SCall id callee args} =
-    exprsCallLN {funs} {chk} {wln = walkLNIHs} ln
+  stmtLN uk bln ln eq (HSAsgCopy v env1 h1 ev) {fuel = S k} {s = SAssign id n nm Copy rhs} =
+    exprLN {funs} {chk} {wln = walkLNIHs} uk bln ln (trans (sym (checkStmtAsgCopy k id n nm)) eq) ev
+  stmtLN uk bln ln eq (HSDeclJustCopy v env1 h1 ev) {fuel = S k} {s = SDecl id n nm Copy (Just e)} =
+    exprLN {funs} {chk} {wln = walkLNIHs} uk bln ln (trans (sym (checkStmtDeclCopyJust k id n nm)) eq) ev
+  stmtLN uk bln ln eq (HSExpr v env1 h1 ev) {fuel = S k} {s = SExpr id e} =
+    exprLN {funs} {chk} {wln = walkLNIHs} uk bln ln (trans (sym (checkStmtExpr k ctx sc id e)) eq) ev
+  stmtLN uk bln ln eq (HSCall unk env1 h1 evs) {fuel = S k} {s = SCall id callee args} =
+    exprsCallLN {funs} {chk} {wln = walkLNIHs} uk bln ln
       (trans (sym (checkStmtCall k ctx sc id callee args)) eq) evs
-  stmtLN uk ln eq (HSCallUser pB f look pDef env1 h1 evs envB hB evBody)
+  stmtLN uk bln ln eq (HSCallUser pB f look pDef env1 h1 evs envB hB evBody)
       {fuel = S k} {s = SCall id callee args} =
-    nestedCallLN {funs} {chk} {nln = nestedLNIHs} ln
+    nestedCallLN {funs} {chk} {nln = nestedLNIHs} uk bln ln
       (trans (sym (checkStmtCall k ctx sc id callee args)) eq)
       pB f look pDef evs evBody
-  stmtLN uk ln eq (HSCallUserRet pB f look pDef env1 h1 evs envB hB evBody)
+  stmtLN uk bln ln eq (HSCallUserRet pB f look pDef env1 h1 evs envB hB evBody)
       {fuel = S k} {s = SCall id callee args} =
-    nestedCallRetLN {funs} {chk} {nln = nestedLNIHs} ln
+    nestedCallRetLN {funs} {chk} {nln = nestedLNIHs} uk bln ln
       (trans (sym (checkStmtCall k ctx sc id callee args)) eq)
       pB f look pDef evs evBody
-  stmtLN uk ln eq (HSAsgPtr v env1 h1 ev) {fuel = S k} {s = SAssign id n nm Ptr rhs} =
+  stmtLN uk bln ln eq (HSAsgPtr v env1 h1 ev) {fuel = S k} {s = SAssign id n nm Ptr rhs} =
     asgPtrLN {funs} {chk} {k} {wln = walkLNIHs} ln eq ev
-  stmtLN uk ln eq (HSDeclJustPtr v env1 h1 ev) {fuel = S k} {s = SDecl id n nm Ptr (Just e)} =
+  stmtLN uk bln ln eq (HSDeclJustPtr v env1 h1 ev) {fuel = S k} {s = SDecl id n nm Ptr (Just e)} =
     declPtrLN {funs} {chk} {k} {wln = walkLNIHs} ln eq ev
-  stmtLN uk ln eq (HSIfThen v env0 h0 evC evT) {fuel = S k} {s = SIf iid cond thn els} =
+  stmtLN uk bln ln eq (HSIfThen v env0 h0 evC evT) {fuel = S k} {s = SIf iid cond thn els} =
     ifThenLN {funs} {chk} {k} {iid} {cond} {thn} {els} {iln = ifLNIHs} {wln = walkLNIHs} uk ln eq evC evT
-  stmtLN uk ln eq (HSIfElse v env0 h0 evC evE) {fuel = S k} {s = SIf iid cond thn els} =
+  stmtLN uk bln ln eq (HSIfElse v env0 h0 evC evE) {fuel = S k} {s = SIf iid cond thn els} =
     ifElseLN {funs} {chk} {k} {iid} {cond} {thn} {els} {iln = ifLNIHs} {wln = walkLNIHs} uk ln eq evC evE
-  stmtLN uk ln eq (HSLoopS env1 h1 evB evR) {fuel = S k} {s = SLoop lid bod} =
+  stmtLN uk bln ln eq (HSLoopS env1 h1 evB evR) {fuel = S k} {s = SLoop lid bod} =
     loopSLN {funs} {chk} {k} {lid} {bod} {iln = ifLNIHs} uk ln eq evB evR
 
   stmtLNRet :
@@ -1527,26 +1530,27 @@ mutual
     {env, envS : HEnv} -> {h, hS : Heap} ->
     {s : Stmt} -> {sc, sc1 : Scopes} -> {a : Addr} ->
     UniqueKeys env ->
+    BindLNIHs funs ctx ->
     LiveNuo env h sc a ->
     checkStmt fuel ctx sc s = Right sc1 ->
     HEvalStmt {funs} env h s (HReturned envS hS) ->
     cell hS a = Just Live
-  stmtLNRet uk ln eq ev {fuel = Z} =
+  stmtLNRet uk bln ln eq ev {fuel = Z} =
     void (stmtZeroContraH ctx sc s eq)
-  stmtLNRet uk ln eq HSRetNone {fuel = S k} {s = SReturn nid Nothing} =
+  stmtLNRet uk bln ln eq HSRetNone {fuel = S k} {s = SReturn nid Nothing} =
     ln.liveLN
-  stmtLNRet uk ln eq (HSRet v env1 h1 ev) {fuel = S k} {s = SReturn nid (Just e)} =
-    retJustLN {funs} {chk} {k} {wln = walkLNIHs} ln eq ev
-  stmtLNRet uk ln eq (HSBlock ev) {fuel = S k} {s = SBlock id body} =
-    stmtsLNRet {funs} {chk} {fuel = k} uk ln
+  stmtLNRet uk bln ln eq (HSRet v env1 h1 ev) {fuel = S k} {s = SReturn nid (Just e)} =
+    retJustLN {funs} {chk} {k} {wln = walkLNIHs} uk ln eq ev
+  stmtLNRet uk bln ln eq (HSBlock ev) {fuel = S k} {s = SBlock id body} =
+    stmtsLNRet {funs} {chk} {fuel = k} uk bln ln
       (trans (sym (checkStmtBlock k ctx sc id body)) eq) ev
-  stmtLNRet uk ln eq (HSIfThen v env0 h0 evC evT) {fuel = S k} {s = SIf iid cond thn els} =
+  stmtLNRet uk bln ln eq (HSIfThen v env0 h0 evC evT) {fuel = S k} {s = SIf iid cond thn els} =
     ifThenLNRet {funs} {chk} {k} {iln = ifLNIHs} {wln = walkLNIHs} uk ln eq evC evT
-  stmtLNRet uk ln eq (HSIfElse v env0 h0 evC evE) {fuel = S k} {s = SIf iid cond thn els} =
+  stmtLNRet uk bln ln eq (HSIfElse v env0 h0 evC evE) {fuel = S k} {s = SIf iid cond thn els} =
     ifElseLNRet {funs} {chk} {k} {iln = ifLNIHs} {wln = walkLNIHs} uk ln eq evC evE
-  stmtLNRet uk ln eq (HSLoopRet env1 h1 evB) {fuel = S k} {s = SLoop lid bod} =
+  stmtLNRet uk bln ln eq (HSLoopRet env1 h1 evB) {fuel = S k} {s = SLoop lid bod} =
     loopRetLN {funs} {chk} {k} {iln = ifLNIHs} uk ln eq evB
-  stmtLNRet uk ln eq (HSLoopS env1 h1 evB evR) {fuel = S k} {s = SLoop lid bod} =
+  stmtLNRet uk bln ln eq (HSLoopS env1 h1 evB evR) {fuel = S k} {s = SLoop lid bod} =
     loopSLNRet {funs} {chk} {k} {iln = ifLNIHs} uk ln eq evB evR
 
 
@@ -1555,7 +1559,7 @@ mutual
     {funs : List Fun} -> {ctx : Ctx} ->
     NestedLNIHs funs ctx
   nestedLNIHs = MkNestedLNIHs stmtsLN stmtsLNRet
-    (\ln, eq, evs => exprsCallLN {wln = walkLNIHs} ln eq evs)
+    (\uk, bln, ln, eq, evs => exprsCallLN {wln = walkLNIHs} uk bln ln eq evs)
     noneFrameLN noneFrameLNRet
 
   export
@@ -1600,6 +1604,8 @@ mutual
     {env, env1, envB : HEnv} -> {h, h1, hB : Heap} ->
     {sc, sc' : Scopes} -> {a : Addr} ->
     {id : Nat} -> {callee : String} -> {args : List Expr} ->
+    UniqueKeys env ->
+    BindLNIHs funs ctx ->
     LiveNuo env h sc a ->
     checkCall ctx sc id callee args = Right sc' ->
     isBuiltinName callee = False ->
@@ -1609,8 +1615,8 @@ mutual
     (evs : HEvalExprs {funs} env h args (HROk HVNone env1 h1)) ->
     HEvalStmts {funs} (bindFrame f.params (collectArgVals evs)) h1 f.body (HOk envB hB) ->
     LiveNuo env1 hB sc' a
-  nestedCallPacked ln eq pB f look pDef evs evBody {chk} {ihs} =
-    nestedCallLN {funs} {chk} {ihs} {nln = nestedLNIHs} ln eq pB f look pDef evs evBody
+  nestedCallPacked uk bln ln eq pB f look pDef evs evBody {chk} {ihs} =
+    nestedCallLN {funs} {chk} {ihs} {nln = nestedLNIHs} uk bln ln eq pB f look pDef evs evBody
 
   nestedCallRetPacked :
     {cfuel : Nat} ->
@@ -1618,6 +1624,8 @@ mutual
     {env, env1, envB : HEnv} -> {h, h1, hB : Heap} ->
     {sc, sc' : Scopes} -> {a : Addr} ->
     {id : Nat} -> {callee : String} -> {args : List Expr} ->
+    UniqueKeys env ->
+    BindLNIHs funs ctx ->
     LiveNuo env h sc a ->
     checkCall ctx sc id callee args = Right sc' ->
     isBuiltinName callee = False ->
@@ -1627,8 +1635,8 @@ mutual
     (evs : HEvalExprs {funs} env h args (HROk HVNone env1 h1)) ->
     HEvalStmts {funs} (bindFrame f.params (collectArgVals evs)) h1 f.body (HReturned envB hB) ->
     LiveNuo env1 hB sc' a
-  nestedCallRetPacked ln eq pB f look pDef evs evBody {chk} {ihs} =
-    nestedCallRetLN {funs} {chk} {ihs} {nln = nestedLNIHs} ln eq pB f look pDef evs evBody
+  nestedCallRetPacked uk bln ln eq pB f look pDef evs evBody {chk} {ihs} =
+    nestedCallRetLN {funs} {chk} {ihs} {nln = nestedLNIHs} uk bln ln eq pB f look pDef evs evBody
 
   -- restoreFromBind / nestedCall family lives in RestoreCall (not this SCC).
   restoreOwnLN :
@@ -1738,7 +1746,7 @@ mutual
     {funs : List Fun} -> {ctx : Ctx} ->
     FrameLNIHs funs ctx
   frameLNIHs = MkFrameLNIHs
-    (exprLN {wln = walkLNIHs})
+    (\uk, bln, ln, eq, ev => exprLN {wln = walkLNIHs} uk bln ln eq ev)
     (\ln, pT, ev => (takeLN {wln = walkLNIHs} ln pT ev).lnTLN)
     (nuoNoTakeLeftover {wln = walkLNIHs})
 
@@ -19879,10 +19887,10 @@ ownerIhs {chk} {ihs} = MkOwnerIHs
 ||| re-triggers Idris 0.8.0 multiple-solutions / FunsChecked at pack time
 ||| (groups 3/4). Callers supply those IHs at the use site.
 |||
-||| This inhabitant is not available inside the stmtsLN mutual, so
-||| `nestedBoundLN` (RestoreCall, invoked from `nestedCallLN` during that
-||| SCC) cannot take `bln` without either growing the SCC or adding
-||| BindLNIHs to `nestedCallLNIH` (Dispatch / exprLN — not authorised).
+||| BindLNIHs is an explicit function argument on `nestedCallLN` /
+||| `exprLN` / `stmtsLN` (higher-order, not constructed inside the SCC).
+||| Callers pass the packed value from this definition (Dispatch) or
+||| thread it from `restoreFromBind`.
 export
 bindLNIHs :
   {funs : List Fun} -> {ctx : Ctx} ->
@@ -19896,7 +19904,7 @@ bindLNIHs {chk} {ihs} {fln} {wln} = MkBindLNIHs
   (\ln, eq, evs, pno =>
      frameOwnerVoid {funs} {chk} {ihs} {fln} ln eq evs pno)
   (\ln, eq, evs =>
-     exprsModesRest {funs} {chk} {ihs} {wln} ln eq evs)
+     exprsModesRestBare {funs} {chk} {ihs} {wln} ln eq evs)
   (\own, oa, eq, ev, oa0 =>
      headNamesOwner {funs} {ihs} own oa eq ev oa0)
   (\uk, own, oa, live, pin, sb, ov, qw, eq, evs =>

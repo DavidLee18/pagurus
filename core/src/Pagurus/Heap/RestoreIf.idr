@@ -95,6 +95,7 @@ record IfLNIHs (funs : List Fun) (ctx : Ctx) where
     {env, envB : HEnv} -> {h, hB : Heap} ->
     {ss : List Stmt} -> {sc, scB : Scopes} -> {a : Addr} ->
     UniqueKeys env ->
+    BindLNIHs funs ctx ->
     LiveNuo env h sc a ->
     checkStmts fuel ctx sc ss = Right scB ->
     HEvalStmts {funs} env h ss (HOk envB hB) ->
@@ -106,6 +107,7 @@ record IfLNIHs (funs : List Fun) (ctx : Ctx) where
     {env, envB : HEnv} -> {h, hB : Heap} ->
     {ss : List Stmt} -> {sc, scB : Scopes} -> {a : Addr} ->
     UniqueKeys env ->
+    BindLNIHs funs ctx ->
     LiveNuo env h sc a ->
     checkStmts fuel ctx sc ss = Right scB ->
     HEvalStmts {funs} env h ss (HReturned envB hB) ->
@@ -117,6 +119,7 @@ record IfLNIHs (funs : List Fun) (ctx : Ctx) where
     {env, envS : HEnv} -> {h, hS : Heap} ->
     {s : Stmt} -> {sc, sc1 : Scopes} -> {a : Addr} ->
     UniqueKeys env ->
+    BindLNIHs funs ctx ->
     LiveNuo env h sc a ->
     checkStmt fuel ctx sc s = Right sc1 ->
     HEvalStmt {funs} env h s (HOk envS hS) ->
@@ -128,6 +131,7 @@ record IfLNIHs (funs : List Fun) (ctx : Ctx) where
     {env, envS : HEnv} -> {h, hS : Heap} ->
     {s : Stmt} -> {sc, sc1 : Scopes} -> {a : Addr} ->
     UniqueKeys env ->
+    BindLNIHs funs ctx ->
     LiveNuo env h sc a ->
     checkStmt fuel ctx sc s = Right sc1 ->
     HEvalStmt {funs} env h s (HReturned envS hS) ->
@@ -140,6 +144,7 @@ mutual
     {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
     {auto iln : IfLNIHs funs ctx} ->
     {wln : WalkLNIHs funs ctx} ->
+    {auto bln : BindLNIHs funs ctx} ->
     {k : Nat} -> {iid : Nat} -> {cond : Expr} -> {thn, els : List Stmt} ->
     {env, env0, envS : HEnv} -> {h, h0, hS : Heap} ->
     {sc, sc1 : Scopes} -> {a : Addr} -> {v : HVal} ->
@@ -165,7 +170,7 @@ mutual
         ifThenLNGo (Left d) pC _ _ _ _ eq0 =
           void (leftNotRight (trans (sym (ifExprLeft k iid thn els pC)) eq0))
         ifThenLNGo (Right sc0) pC uk0 ln0 evC0 evT0 eq0 =
-          let lnC = exprLN {funs} {chk} {wln} ln0 pC evC0
+          let lnC = exprLN {funs} {chk} {wln} uk0 bln ln0 pC evC0
           in ifThenLNT (checkStmts k ctx sc0 thn) Refl (exprUK uk0 evC0) lnC evT0 eq0 pC
 
         ifThenLNT :
@@ -197,7 +202,7 @@ mutual
         ifThenLNE (Left d) pE _ _ _ eq0 pC pT =
           void (leftNotRight (trans (sym (ifElseLeft iid pC pT pE)) eq0))
         ifThenLNE (Right scE) pE ukC lnC evT0 eq0 pC pT =
-          let lnT = iln.stmtsLNIH {funs} {chk} {fuel = k} ukC lnC pT evT0
+          let lnT = iln.stmtsLNIH {funs} {chk} {fuel = k} ukC bln lnC pT evT0
           in ifThenLNJoin (stmtsEnded thn) (stmtsEnded els) Refl Refl lnT eq0 pC pT pE
 
         ifThenLNJoin :
@@ -229,6 +234,7 @@ mutual
     {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
     {auto iln : IfLNIHs funs ctx} ->
     {wln : WalkLNIHs funs ctx} ->
+    {auto bln : BindLNIHs funs ctx} ->
     {k : Nat} -> {iid : Nat} -> {cond : Expr} -> {thn, els : List Stmt} ->
     {env, env0, envS : HEnv} -> {h, h0, hS : Heap} ->
     {sc, sc1 : Scopes} -> {a : Addr} -> {v : HVal} ->
@@ -254,7 +260,7 @@ mutual
         ifElseLNGo (Left d) pC _ _ _ _ eq0 =
           void (leftNotRight (trans (sym (ifExprLeft k iid thn els pC)) eq0))
         ifElseLNGo (Right sc0) pC uk0 ln0 evC0 evE0 eq0 =
-          let lnC = exprLN {funs} {chk} {wln} ln0 pC evC0
+          let lnC = exprLN {funs} {chk} {wln} uk0 bln ln0 pC evC0
           in ifElseLNT (checkStmts k ctx sc0 thn) Refl (exprUK uk0 evC0) lnC evE0 eq0 pC
 
         ifElseLNT :
@@ -286,7 +292,7 @@ mutual
         ifElseLNE (Left d) pE _ _ _ eq0 pC pT =
           void (leftNotRight (trans (sym (ifElseLeft iid pC pT pE)) eq0))
         ifElseLNE (Right scE) pE ukC lnC evE0 eq0 pC pT =
-          let lnE = iln.stmtsLNIH {funs} {chk} {fuel = k} ukC lnC pE evE0
+          let lnE = iln.stmtsLNIH {funs} {chk} {fuel = k} ukC bln lnC pE evE0
           in ifElseLNJoin (stmtsEnded thn) (stmtsEnded els) Refl Refl lnE eq0 pC pT pE
 
         ifElseLNJoin :
@@ -318,6 +324,7 @@ mutual
     {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
     {auto iln : IfLNIHs funs ctx} ->
     {wln : WalkLNIHs funs ctx} ->
+    {auto bln : BindLNIHs funs ctx} ->
     {k : Nat} -> {iid : Nat} -> {cond : Expr} -> {thn, els : List Stmt} ->
     {env, env0, envS : HEnv} -> {h, h0, hS : Heap} ->
     {sc, sc1 : Scopes} -> {a : Addr} -> {v : HVal} ->
@@ -335,7 +342,7 @@ mutual
         retGo (Left d) pC =
           void (leftNotRight (trans (sym (ifExprLeft k iid thn els pC)) eq))
         retGo (Right sc0) pC =
-          let lnC = exprLN {funs} {chk} {wln} ln pC evC
+          let lnC = exprLN {funs} {chk} {wln} uk bln ln pC evC
           in retT (checkStmts k ctx sc0 thn) Refl lnC pC
         retT : {sc0 : Scopes} ->
                (resT : Either Diag Scopes) ->
@@ -346,7 +353,7 @@ mutual
         retT (Left d) pT _ pC =
           void (leftNotRight (trans (sym (ifThenLeft iid els pC pT)) eq))
         retT (Right scT) pT lnC _ =
-          iln.stmtsLNRetIH {funs} {chk} {fuel = k} (exprUK uk evC) lnC pT evT
+          iln.stmtsLNRetIH {funs} {chk} {fuel = k} (exprUK uk evC) bln lnC pT evT
 
   export
   ifElseLNRet :
@@ -354,6 +361,7 @@ mutual
     {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
     {auto iln : IfLNIHs funs ctx} ->
     {wln : WalkLNIHs funs ctx} ->
+    {auto bln : BindLNIHs funs ctx} ->
     {k : Nat} -> {iid : Nat} -> {cond : Expr} -> {thn, els : List Stmt} ->
     {env, env0, envS : HEnv} -> {h, h0, hS : Heap} ->
     {sc, sc1 : Scopes} -> {a : Addr} -> {v : HVal} ->
@@ -371,7 +379,7 @@ mutual
         retGo (Left d) pC =
           void (leftNotRight (trans (sym (ifExprLeft k iid thn els pC)) eq))
         retGo (Right sc0) pC =
-          let lnC = exprLN {funs} {chk} {wln} ln pC evC
+          let lnC = exprLN {funs} {chk} {wln} uk bln ln pC evC
           in retT (checkStmts k ctx sc0 thn) Refl lnC pC
 
         retT : {sc0 : Scopes} ->
@@ -395,13 +403,14 @@ mutual
         retE (Left d) pE _ pC pT =
           void (leftNotRight (trans (sym (ifElseLeft iid pC pT pE)) eq))
         retE (Right scE) pE lnC _ _ =
-          iln.stmtsLNRetIH {funs} {chk} {fuel = k} (exprUK uk evC) lnC pE evE
+          iln.stmtsLNRetIH {funs} {chk} {fuel = k} (exprUK uk evC) bln lnC pE evE
 
   export
   loopSLN :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
     {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
     {auto iln : IfLNIHs funs ctx} ->
+    {auto bln : BindLNIHs funs ctx} ->
     {k : Nat} -> {lid : Nat} -> {bod : List Stmt} ->
     {env, env1, envS : HEnv} -> {h, h1, hS : Heap} ->
     {sc, sc1 : Scopes} -> {a : Addr} ->
@@ -429,16 +438,16 @@ mutual
         loopGo (Right scB) pB | False with
             (eqScopes (joinScopes sc scB) sc) proof pEq
           loopGo (Right scB) pB | False | True =
-            let lnB = iln.stmtsLNIH {funs} {chk} {fuel = m} uk ln pB evB
+            let lnB = iln.stmtsLNIH {funs} {chk} {fuel = m} uk bln ln pB evB
                 lnJ = MkLN (oaEqScopes pEq (oaJoinRight lnB.oaLN))
                         (nuoEqScopes pEq (nuoJoinRight lnB.oaLN lnB.nuoLN))
                         lnB.liveLN
-            in iln.stmtLNIH {funs} {chk} {fuel = S (S m)} (stmtsUK uk evB) lnJ eq evR
+            in iln.stmtLNIH {funs} {chk} {fuel = S (S m)} (stmtsUK uk evB) bln lnJ eq evR
           loopGo (Right scB) pB | False | False =
-            let lnB = iln.stmtsLNIH {funs} {chk} {fuel = m} uk ln pB evB
+            let lnB = iln.stmtsLNIH {funs} {chk} {fuel = m} uk bln ln pB evB
                 lnJ = MkLN (oaJoinRight lnB.oaLN)
                         (nuoJoinRight lnB.oaLN lnB.nuoLN) lnB.liveLN
-            in iln.stmtLNIH {funs} {chk} {fuel = S m} (stmtsUK uk evB) lnJ
+            in iln.stmtLNIH {funs} {chk} {fuel = S m} (stmtsUK uk evB) bln lnJ
                  (trans (checkStmtLoop m ctx (joinScopes sc scB) lid bod)
                     (trans (sym (loopFixFalse lid pEnd pB pEq))
                       (trans (sym (checkStmtLoop (S m) ctx sc lid bod)) eq)))
@@ -449,6 +458,7 @@ mutual
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
     {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
     {auto iln : IfLNIHs funs ctx} ->
+    {auto bln : BindLNIHs funs ctx} ->
     {k : Nat} -> {lid : Nat} -> {bod : List Stmt} ->
     {env, env1 : HEnv} -> {h, h1 : Heap} ->
     {sc, sc1 : Scopes} -> {a : Addr} ->
@@ -470,13 +480,14 @@ mutual
         void (leftNotRight (trans (sym (loopFixLeft lid pB))
           (trans (sym (checkStmtLoop (S m) ctx sc lid bod)) eq)))
       retGo (Right scB) pB =
-        iln.stmtsLNRetIH {funs} {chk} {fuel = m} uk ln pB evB
+        iln.stmtsLNRetIH {funs} {chk} {fuel = m} uk bln ln pB evB
 
   export
   loopSLNRet :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
     {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
     {auto iln : IfLNIHs funs ctx} ->
+    {auto bln : BindLNIHs funs ctx} ->
     {k : Nat} -> {lid : Nat} -> {bod : List Stmt} ->
     {env, env1, envS : HEnv} -> {h, h1, hS : Heap} ->
     {sc, sc1 : Scopes} -> {a : Addr} ->
@@ -504,16 +515,16 @@ mutual
         loopGo (Right scB) pB | False with
             (eqScopes (joinScopes sc scB) sc) proof pEq
           loopGo (Right scB) pB | False | True =
-            let lnB = iln.stmtsLNIH {funs} {chk} {fuel = m} uk ln pB evB
+            let lnB = iln.stmtsLNIH {funs} {chk} {fuel = m} uk bln ln pB evB
                 lnJ = MkLN (oaEqScopes pEq (oaJoinRight lnB.oaLN))
                         (nuoEqScopes pEq (nuoJoinRight lnB.oaLN lnB.nuoLN))
                         lnB.liveLN
-            in iln.stmtLNRetIH {funs} {chk} {fuel = S (S m)} (stmtsUK uk evB) lnJ eq evR
+            in iln.stmtLNRetIH {funs} {chk} {fuel = S (S m)} (stmtsUK uk evB) bln lnJ eq evR
           loopGo (Right scB) pB | False | False =
-            let lnB = iln.stmtsLNIH {funs} {chk} {fuel = m} uk ln pB evB
+            let lnB = iln.stmtsLNIH {funs} {chk} {fuel = m} uk bln ln pB evB
                 lnJ = MkLN (oaJoinRight lnB.oaLN)
                         (nuoJoinRight lnB.oaLN lnB.nuoLN) lnB.liveLN
-            in iln.stmtLNRetIH {funs} {chk} {fuel = S m} (stmtsUK uk evB) lnJ
+            in iln.stmtLNRetIH {funs} {chk} {fuel = S m} (stmtsUK uk evB) bln lnJ
                  (trans (checkStmtLoop m ctx (joinScopes sc scB) lid bod)
                     (trans (sym (loopFixFalse lid pEnd pB pEq))
                       (trans (sym (checkStmtLoop (S m) ctx sc lid bod)) eq)))
@@ -524,14 +535,16 @@ mutual
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
     {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
     {wln : WalkLNIHs funs ctx} ->
+    {auto bln : BindLNIHs funs ctx} ->
     {k : Nat} -> {nid : Nat} -> {e : Expr} ->
     {env, env1 : HEnv} -> {h, h1 : Heap} -> {v : HVal} ->
     {sc, sc1 : Scopes} -> {a : Addr} ->
+    UniqueKeys env ->
     LiveNuo env h sc a ->
     checkStmt (S k) ctx sc (SReturn nid (Just e)) = Right sc1 ->
     HEvalExpr {funs} env h e (HROk v env1 h1) ->
     cell h1 a = Just Live
-  retJustLN ln eq ev {e = EVar vid n nm} =
+  retJustLN uk ln eq ev {e = EVar vid n nm} =
     retVarLN (takeOwner ctx sc (EVar vid n nm)) Refl
     where
       retVarLN :
@@ -544,17 +557,17 @@ mutual
         let tln = takeLN {funs} {chk} {wln} ln pT ev
             ln1 = tln.lnTLN
         in ln1.liveLN
-  retJustLN ln eq ev {e = ELit id} =
-    (exprLN {funs} {chk} {wln} ln (trans (sym (checkStmtRetLit k ctx sc nid id)) eq) ev).liveLN
-  retJustLN ln eq ev {e = ENull id} =
-    (exprLN {funs} {chk} {wln} ln (trans (sym (checkStmtRetNull k ctx sc nid id)) eq) ev).liveLN
-  retJustLN ln eq ev {e = EMalloc mid args} =
-    (exprLN {funs} {chk} {wln} ln (trans (sym (checkStmtRetMalloc k ctx sc nid mid args)) eq) ev).liveLN
-  retJustLN ln eq ev {e = ECall id callee args} =
-    (exprLN {funs} {chk} {wln} ln (trans (sym (checkStmtRetCall k ctx sc nid id callee args)) eq) ev).liveLN
-  retJustLN ln eq ev {e = EUse uid args} =
-    (exprLN {funs} {chk} {wln} ln (trans (sym (checkStmtRetUse k ctx sc nid uid args)) eq) ev).liveLN
-  retJustLN ln eq ev {e = EAssign id n nm ty rhs} =
-    (exprLN {funs} {chk} {wln} ln (trans (sym (checkStmtRetAsg k ctx sc nid id n nm ty rhs)) eq) ev).liveLN
-  retJustLN ln eq ev {e = EUnsupported id reason} =
+  retJustLN uk ln eq ev {e = ELit id} =
+    (exprLN {funs} {chk} {wln} uk bln ln (trans (sym (checkStmtRetLit k ctx sc nid id)) eq) ev).liveLN
+  retJustLN uk ln eq ev {e = ENull id} =
+    (exprLN {funs} {chk} {wln} uk bln ln (trans (sym (checkStmtRetNull k ctx sc nid id)) eq) ev).liveLN
+  retJustLN uk ln eq ev {e = EMalloc mid args} =
+    (exprLN {funs} {chk} {wln} uk bln ln (trans (sym (checkStmtRetMalloc k ctx sc nid mid args)) eq) ev).liveLN
+  retJustLN uk ln eq ev {e = ECall id callee args} =
+    (exprLN {funs} {chk} {wln} uk bln ln (trans (sym (checkStmtRetCall k ctx sc nid id callee args)) eq) ev).liveLN
+  retJustLN uk ln eq ev {e = EUse uid args} =
+    (exprLN {funs} {chk} {wln} uk bln ln (trans (sym (checkStmtRetUse k ctx sc nid uid args)) eq) ev).liveLN
+  retJustLN uk ln eq ev {e = EAssign id n nm ty rhs} =
+    (exprLN {funs} {chk} {wln} uk bln ln (trans (sym (checkStmtRetAsg k ctx sc nid id n nm ty rhs)) eq) ev).liveLN
+  retJustLN uk ln eq ev {e = EUnsupported id reason} =
     void (retUnsupContraH k ctx sc nid id reason eq)

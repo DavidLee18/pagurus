@@ -88,12 +88,15 @@ definedFromCall eq pb =
 public export
 record NestedLNIHs (funs : List Fun) (ctx : Ctx) where
   constructor MkNestedLNIHs
+  -- UniqueKeys is an explicit argument (not {auto}): packing functions
+  -- as record values re-triggers Idris 0.8.0 auto-search multiple-solutions.
   stmtsLNIH :
     {cfuel : Nat} ->
     {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
     {fuel : Nat} ->
     {env, envB : HEnv} -> {h, hB : Heap} ->
     {ss : List Stmt} -> {sc, scB : Scopes} -> {a : Addr} ->
+    UniqueKeys env ->
     LiveNuo env h sc a ->
     checkStmts fuel ctx sc ss = Right scB ->
     HEvalStmts {funs} env h ss (HOk envB hB) ->
@@ -104,6 +107,7 @@ record NestedLNIHs (funs : List Fun) (ctx : Ctx) where
     {fuel : Nat} ->
     {env, envB : HEnv} -> {h, hB : Heap} ->
     {ss : List Stmt} -> {sc, scB : Scopes} -> {a : Addr} ->
+    UniqueKeys env ->
     LiveNuo env h sc a ->
     checkStmts fuel ctx sc ss = Right scB ->
     HEvalStmts {funs} env h ss (HReturned envB hB) ->
@@ -212,7 +216,7 @@ mutual
         cell hB a = Just Live
       restoreNuo (Left nuoF) =
         let lnF = MkLN oaF nuoF live
-            lnB = nln.stmtsLNIH {funs} {chk} {fuel} lnF pBdy evBody
+            lnB = nln.stmtsLNIH {funs} {chk} {fuel} (bindFrameUK ps vs) lnF pBdy evBody
         in lnB.liveLN
       restoreNuo (Right pnoF) =
         ownGo pnoF (hasOwned st) Refl (hasBorrowed st) Refl
@@ -293,7 +297,7 @@ mutual
         cell hB a = Just Live
       restoreNuoR (Left nuoF) =
         let lnF = MkLN oaF nuoF live
-        in nln.stmtsLNRetIH {funs} {chk} {fuel} lnF pBdy evBody
+        in nln.stmtsLNRetIH {funs} {chk} {fuel} (bindFrameUK ps vs) lnF pBdy evBody
       restoreNuoR (Right pnoF) =
         ownGoR pnoF (hasOwned st) Refl (hasBorrowed st) Refl
 
@@ -475,7 +479,8 @@ mutual
               pBdyP = replace {p = \sc0 => checkStmts cfuel ctx sc0 f.body = Right scB}
                         (paramScopesEq ctx f) pBdy
               lnF = MkLN oaBind nuoF ln1.liveLN
-              lnB = nln.stmtsLNIH {funs} {chk} {fuel = cfuel} lnF pBdyP evBody
+              lnB = nln.stmtsLNIH {funs} {chk} {fuel = cfuel}
+                      (bindFrameUK f.params (collectArgVals evs)) lnF pBdyP evBody
               pres = restoreFromBind {funs} {chk} {fuel = cfuel} ln1.oaLN oaBind bok ls pBdyP evBody
           in MkLN (oaKeepEnv ln1.oaLN (stmtsWf {funs} ln1.oaLN.wf evBody) pres)
                ln1.nuoLN lnB.liveLN
@@ -578,7 +583,8 @@ mutual
               pBdyP = replace {p = \sc0 => checkStmts cfuel ctx sc0 f.body = Right scB}
                         (paramScopesEq ctx f) pBdy
               lnF = MkLN oaBind nuoF ln1.liveLN
-              liveB = nln.stmtsLNRetIH {funs} {chk} {fuel = cfuel} lnF pBdyP evBody
+              liveB = nln.stmtsLNRetIH {funs} {chk} {fuel = cfuel}
+                        (bindFrameUK f.params (collectArgVals evs)) lnF pBdyP evBody
               pres = restoreFromBindRet {funs} {chk} {fuel = cfuel} ln1.oaLN oaBind bok ls pBdyP evBody
           in MkLN (oaKeepEnv ln1.oaLN (stmtsWfRet {funs} ln1.oaLN.wf evBody) pres)
                ln1.nuoLN liveB

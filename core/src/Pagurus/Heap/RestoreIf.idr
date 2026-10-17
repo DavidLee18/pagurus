@@ -33,6 +33,7 @@ import Pagurus.Heap.Unique
 import Pagurus.Heap.Inh
 import Pagurus.Heap.RestoreWalk
 import Pagurus.Heap.RestoreTake
+import Pagurus.Heap.RestoreBind
 
 %default total
 
@@ -85,12 +86,15 @@ nuoEqScopes eq nuo p st look lp safe own nb =
 public export
 record IfLNIHs (funs : List Fun) (ctx : Ctx) where
   constructor MkIfLNIHs
+  -- UniqueKeys is an explicit argument (not {auto}): packing functions
+  -- as record values re-triggers Idris 0.8.0 auto-search multiple-solutions.
   stmtsLNIH :
     {cfuel : Nat} ->
     {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
     {fuel : Nat} ->
     {env, envB : HEnv} -> {h, hB : Heap} ->
     {ss : List Stmt} -> {sc, scB : Scopes} -> {a : Addr} ->
+    UniqueKeys env ->
     LiveNuo env h sc a ->
     checkStmts fuel ctx sc ss = Right scB ->
     HEvalStmts {funs} env h ss (HOk envB hB) ->
@@ -101,6 +105,7 @@ record IfLNIHs (funs : List Fun) (ctx : Ctx) where
     {fuel : Nat} ->
     {env, envB : HEnv} -> {h, hB : Heap} ->
     {ss : List Stmt} -> {sc, scB : Scopes} -> {a : Addr} ->
+    UniqueKeys env ->
     LiveNuo env h sc a ->
     checkStmts fuel ctx sc ss = Right scB ->
     HEvalStmts {funs} env h ss (HReturned envB hB) ->
@@ -111,6 +116,7 @@ record IfLNIHs (funs : List Fun) (ctx : Ctx) where
     {fuel : Nat} ->
     {env, envS : HEnv} -> {h, hS : Heap} ->
     {s : Stmt} -> {sc, sc1 : Scopes} -> {a : Addr} ->
+    UniqueKeys env ->
     LiveNuo env h sc a ->
     checkStmt fuel ctx sc s = Right sc1 ->
     HEvalStmt {funs} env h s (HOk envS hS) ->
@@ -121,6 +127,7 @@ record IfLNIHs (funs : List Fun) (ctx : Ctx) where
     {fuel : Nat} ->
     {env, envS : HEnv} -> {h, hS : Heap} ->
     {s : Stmt} -> {sc, sc1 : Scopes} -> {a : Addr} ->
+    UniqueKeys env ->
     LiveNuo env h sc a ->
     checkStmt fuel ctx sc s = Right sc1 ->
     HEvalStmt {funs} env h s (HReturned envS hS) ->
@@ -136,57 +143,61 @@ mutual
     {k : Nat} -> {iid : Nat} -> {cond : Expr} -> {thn, els : List Stmt} ->
     {env, env0, envS : HEnv} -> {h, h0, hS : Heap} ->
     {sc, sc1 : Scopes} -> {a : Addr} -> {v : HVal} ->
+    UniqueKeys env ->
     LiveNuo env h sc a ->
     checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
     HEvalExpr {funs} env h cond (HROk v env0 h0) ->
     HEvalStmts {funs} env0 h0 thn (HOk envS hS) ->
     LiveNuo envS hS sc1 a
-  ifThenLN ln eq evC evT =
-    ifThenLNGo (checkExpr ctx sc cond) Refl ln evC evT eq
+  ifThenLN uk ln eq evC evT =
+    ifThenLNGo (checkExpr ctx sc cond) Refl uk ln evC evT eq
     where
       mutual
         ifThenLNGo :
           (resC : Either Diag Scopes) ->
           checkExpr ctx sc cond = resC ->
+          UniqueKeys env ->
           LiveNuo env h sc a ->
           HEvalExpr {funs} env h cond (HROk v env0 h0) ->
           HEvalStmts {funs} env0 h0 thn (HOk envS hS) ->
           checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
           LiveNuo envS hS sc1 a
-        ifThenLNGo (Left d) pC _ _ _ eq0 =
+        ifThenLNGo (Left d) pC _ _ _ _ eq0 =
           void (leftNotRight (trans (sym (ifExprLeft k iid thn els pC)) eq0))
-        ifThenLNGo (Right sc0) pC ln0 evC0 evT0 eq0 =
+        ifThenLNGo (Right sc0) pC uk0 ln0 evC0 evT0 eq0 =
           let lnC = exprLN {funs} {chk} {wln} ln0 pC evC0
-          in ifThenLNT (checkStmts k ctx sc0 thn) Refl lnC evT0 eq0 pC
+          in ifThenLNT (checkStmts k ctx sc0 thn) Refl (exprUK uk0 evC0) lnC evT0 eq0 pC
 
         ifThenLNT :
           {sc0 : Scopes} -> {env0 : HEnv} -> {h0 : Heap} ->
           (resT : Either Diag Scopes) ->
           checkStmts k ctx sc0 thn = resT ->
+          UniqueKeys env0 ->
           LiveNuo env0 h0 sc0 a ->
           HEvalStmts {funs} env0 h0 thn (HOk envS hS) ->
           checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
           checkExpr ctx sc cond = Right sc0 ->
           LiveNuo envS hS sc1 a
-        ifThenLNT (Left d) pT _ _ eq0 pC =
+        ifThenLNT (Left d) pT _ _ _ eq0 pC =
           void (leftNotRight (trans (sym (ifThenLeft iid els pC pT)) eq0))
-        ifThenLNT (Right scT) pT lnC evT0 eq0 pC =
-          ifThenLNE (checkStmts k ctx sc0 els) Refl lnC evT0 eq0 pC pT
+        ifThenLNT (Right scT) pT ukC lnC evT0 eq0 pC =
+          ifThenLNE (checkStmts k ctx sc0 els) Refl ukC lnC evT0 eq0 pC pT
 
         ifThenLNE :
           {sc0, scT : Scopes} -> {env0 : HEnv} -> {h0 : Heap} ->
           (resE : Either Diag Scopes) ->
           checkStmts k ctx sc0 els = resE ->
+          UniqueKeys env0 ->
           LiveNuo env0 h0 sc0 a ->
           HEvalStmts {funs} env0 h0 thn (HOk envS hS) ->
           checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
           checkExpr ctx sc cond = Right sc0 ->
           checkStmts k ctx sc0 thn = Right scT ->
           LiveNuo envS hS sc1 a
-        ifThenLNE (Left d) pE _ _ eq0 pC pT =
+        ifThenLNE (Left d) pE _ _ _ eq0 pC pT =
           void (leftNotRight (trans (sym (ifElseLeft iid pC pT pE)) eq0))
-        ifThenLNE (Right scE) pE lnC evT0 eq0 pC pT =
-          let lnT = iln.stmtsLNIH {funs} {chk} {fuel = k} lnC pT evT0
+        ifThenLNE (Right scE) pE ukC lnC evT0 eq0 pC pT =
+          let lnT = iln.stmtsLNIH {funs} {chk} {fuel = k} ukC lnC pT evT0
           in ifThenLNJoin (stmtsEnded thn) (stmtsEnded els) Refl Refl lnT eq0 pC pT pE
 
         ifThenLNJoin :
@@ -221,57 +232,61 @@ mutual
     {k : Nat} -> {iid : Nat} -> {cond : Expr} -> {thn, els : List Stmt} ->
     {env, env0, envS : HEnv} -> {h, h0, hS : Heap} ->
     {sc, sc1 : Scopes} -> {a : Addr} -> {v : HVal} ->
+    UniqueKeys env ->
     LiveNuo env h sc a ->
     checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
     HEvalExpr {funs} env h cond (HROk v env0 h0) ->
     HEvalStmts {funs} env0 h0 els (HOk envS hS) ->
     LiveNuo envS hS sc1 a
-  ifElseLN ln eq evC evE =
-    ifElseLNGo (checkExpr ctx sc cond) Refl ln evC evE eq
+  ifElseLN uk ln eq evC evE =
+    ifElseLNGo (checkExpr ctx sc cond) Refl uk ln evC evE eq
     where
       mutual
         ifElseLNGo :
           (resC : Either Diag Scopes) ->
           checkExpr ctx sc cond = resC ->
+          UniqueKeys env ->
           LiveNuo env h sc a ->
           HEvalExpr {funs} env h cond (HROk v env0 h0) ->
           HEvalStmts {funs} env0 h0 els (HOk envS hS) ->
           checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
           LiveNuo envS hS sc1 a
-        ifElseLNGo (Left d) pC _ _ _ eq0 =
+        ifElseLNGo (Left d) pC _ _ _ _ eq0 =
           void (leftNotRight (trans (sym (ifExprLeft k iid thn els pC)) eq0))
-        ifElseLNGo (Right sc0) pC ln0 evC0 evE0 eq0 =
+        ifElseLNGo (Right sc0) pC uk0 ln0 evC0 evE0 eq0 =
           let lnC = exprLN {funs} {chk} {wln} ln0 pC evC0
-          in ifElseLNT (checkStmts k ctx sc0 thn) Refl lnC evE0 eq0 pC
+          in ifElseLNT (checkStmts k ctx sc0 thn) Refl (exprUK uk0 evC0) lnC evE0 eq0 pC
 
         ifElseLNT :
           {sc0 : Scopes} -> {env0 : HEnv} -> {h0 : Heap} ->
           (resT : Either Diag Scopes) ->
           checkStmts k ctx sc0 thn = resT ->
+          UniqueKeys env0 ->
           LiveNuo env0 h0 sc0 a ->
           HEvalStmts {funs} env0 h0 els (HOk envS hS) ->
           checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
           checkExpr ctx sc cond = Right sc0 ->
           LiveNuo envS hS sc1 a
-        ifElseLNT (Left d) pT _ _ eq0 pC =
+        ifElseLNT (Left d) pT _ _ _ eq0 pC =
           void (leftNotRight (trans (sym (ifThenLeft iid els pC pT)) eq0))
-        ifElseLNT (Right scT) pT lnC evE0 eq0 pC =
-          ifElseLNE (checkStmts k ctx sc0 els) Refl lnC evE0 eq0 pC pT
+        ifElseLNT (Right scT) pT ukC lnC evE0 eq0 pC =
+          ifElseLNE (checkStmts k ctx sc0 els) Refl ukC lnC evE0 eq0 pC pT
 
         ifElseLNE :
           {sc0, scT : Scopes} -> {env0 : HEnv} -> {h0 : Heap} ->
           (resE : Either Diag Scopes) ->
           checkStmts k ctx sc0 els = resE ->
+          UniqueKeys env0 ->
           LiveNuo env0 h0 sc0 a ->
           HEvalStmts {funs} env0 h0 els (HOk envS hS) ->
           checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
           checkExpr ctx sc cond = Right sc0 ->
           checkStmts k ctx sc0 thn = Right scT ->
           LiveNuo envS hS sc1 a
-        ifElseLNE (Left d) pE _ _ eq0 pC pT =
+        ifElseLNE (Left d) pE _ _ _ eq0 pC pT =
           void (leftNotRight (trans (sym (ifElseLeft iid pC pT pE)) eq0))
-        ifElseLNE (Right scE) pE lnC evE0 eq0 pC pT =
-          let lnE = iln.stmtsLNIH {funs} {chk} {fuel = k} lnC pE evE0
+        ifElseLNE (Right scE) pE ukC lnC evE0 eq0 pC pT =
+          let lnE = iln.stmtsLNIH {funs} {chk} {fuel = k} ukC lnC pE evE0
           in ifElseLNJoin (stmtsEnded thn) (stmtsEnded els) Refl Refl lnE eq0 pC pT pE
 
         ifElseLNJoin :
@@ -306,12 +321,13 @@ mutual
     {k : Nat} -> {iid : Nat} -> {cond : Expr} -> {thn, els : List Stmt} ->
     {env, env0, envS : HEnv} -> {h, h0, hS : Heap} ->
     {sc, sc1 : Scopes} -> {a : Addr} -> {v : HVal} ->
+    UniqueKeys env ->
     LiveNuo env h sc a ->
     checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
     HEvalExpr {funs} env h cond (HROk v env0 h0) ->
     HEvalStmts {funs} env0 h0 thn (HReturned envS hS) ->
     cell hS a = Just Live
-  ifThenLNRet ln eq evC evT = retGo (checkExpr ctx sc cond) Refl
+  ifThenLNRet uk ln eq evC evT = retGo (checkExpr ctx sc cond) Refl
     where
       mutual
         retGo : (resC : Either Diag Scopes) -> checkExpr ctx sc cond = resC ->
@@ -330,7 +346,7 @@ mutual
         retT (Left d) pT _ pC =
           void (leftNotRight (trans (sym (ifThenLeft iid els pC pT)) eq))
         retT (Right scT) pT lnC _ =
-          iln.stmtsLNRetIH {funs} {chk} {fuel = k} lnC pT evT
+          iln.stmtsLNRetIH {funs} {chk} {fuel = k} (exprUK uk evC) lnC pT evT
 
   export
   ifElseLNRet :
@@ -341,12 +357,13 @@ mutual
     {k : Nat} -> {iid : Nat} -> {cond : Expr} -> {thn, els : List Stmt} ->
     {env, env0, envS : HEnv} -> {h, h0, hS : Heap} ->
     {sc, sc1 : Scopes} -> {a : Addr} -> {v : HVal} ->
+    UniqueKeys env ->
     LiveNuo env h sc a ->
     checkStmt (S k) ctx sc (SIf iid cond thn els) = Right sc1 ->
     HEvalExpr {funs} env h cond (HROk v env0 h0) ->
     HEvalStmts {funs} env0 h0 els (HReturned envS hS) ->
     cell hS a = Just Live
-  ifElseLNRet ln eq evC evE = retGo (checkExpr ctx sc cond) Refl
+  ifElseLNRet uk ln eq evC evE = retGo (checkExpr ctx sc cond) Refl
     where
       mutual
         retGo : (resC : Either Diag Scopes) -> checkExpr ctx sc cond = resC ->
@@ -378,7 +395,7 @@ mutual
         retE (Left d) pE _ pC pT =
           void (leftNotRight (trans (sym (ifElseLeft iid pC pT pE)) eq))
         retE (Right scE) pE lnC _ _ =
-          iln.stmtsLNRetIH {funs} {chk} {fuel = k} lnC pE evE
+          iln.stmtsLNRetIH {funs} {chk} {fuel = k} (exprUK uk evC) lnC pE evE
 
   export
   loopSLN :
@@ -388,15 +405,16 @@ mutual
     {k : Nat} -> {lid : Nat} -> {bod : List Stmt} ->
     {env, env1, envS : HEnv} -> {h, h1, hS : Heap} ->
     {sc, sc1 : Scopes} -> {a : Addr} ->
+    UniqueKeys env ->
     LiveNuo env h sc a ->
     checkStmt (S k) ctx sc (SLoop lid bod) = Right sc1 ->
     HEvalStmts {funs} env h bod (HOk env1 h1) ->
     HEvalStmt {funs} env1 h1 (SLoop lid bod) (HOk envS hS) ->
     LiveNuo envS hS sc1 a
-  loopSLN ln eq evB evR {k = Z} =
+  loopSLN uk ln eq evB evR {k = Z} =
     void (leftNotRight (trans (sym (loopFixZero ctx sc lid bod))
       (trans (sym (checkStmtLoop Z ctx sc lid bod)) eq)))
-  loopSLN ln eq evB evR {k = S m} =
+  loopSLN uk ln eq evB evR {k = S m} =
     loopGo (checkStmts m ctx sc bod) Refl
     where
       loopGo : (resB : Either Diag Scopes) ->
@@ -411,16 +429,16 @@ mutual
         loopGo (Right scB) pB | False with
             (eqScopes (joinScopes sc scB) sc) proof pEq
           loopGo (Right scB) pB | False | True =
-            let lnB = iln.stmtsLNIH {funs} {chk} {fuel = m} ln pB evB
+            let lnB = iln.stmtsLNIH {funs} {chk} {fuel = m} uk ln pB evB
                 lnJ = MkLN (oaEqScopes pEq (oaJoinRight lnB.oaLN))
                         (nuoEqScopes pEq (nuoJoinRight lnB.oaLN lnB.nuoLN))
                         lnB.liveLN
-            in iln.stmtLNIH {funs} {chk} {fuel = S (S m)} lnJ eq evR
+            in iln.stmtLNIH {funs} {chk} {fuel = S (S m)} (stmtsUK uk evB) lnJ eq evR
           loopGo (Right scB) pB | False | False =
-            let lnB = iln.stmtsLNIH {funs} {chk} {fuel = m} ln pB evB
+            let lnB = iln.stmtsLNIH {funs} {chk} {fuel = m} uk ln pB evB
                 lnJ = MkLN (oaJoinRight lnB.oaLN)
                         (nuoJoinRight lnB.oaLN lnB.nuoLN) lnB.liveLN
-            in iln.stmtLNIH {funs} {chk} {fuel = S m} lnJ
+            in iln.stmtLNIH {funs} {chk} {fuel = S m} (stmtsUK uk evB) lnJ
                  (trans (checkStmtLoop m ctx (joinScopes sc scB) lid bod)
                     (trans (sym (loopFixFalse lid pEnd pB pEq))
                       (trans (sym (checkStmtLoop (S m) ctx sc lid bod)) eq)))
@@ -434,14 +452,15 @@ mutual
     {k : Nat} -> {lid : Nat} -> {bod : List Stmt} ->
     {env, env1 : HEnv} -> {h, h1 : Heap} ->
     {sc, sc1 : Scopes} -> {a : Addr} ->
+    UniqueKeys env ->
     LiveNuo env h sc a ->
     checkStmt (S k) ctx sc (SLoop lid bod) = Right sc1 ->
     HEvalStmts {funs} env h bod (HReturned env1 h1) ->
     cell h1 a = Just Live
-  loopRetLN ln eq evB {k = Z} =
+  loopRetLN uk ln eq evB {k = Z} =
     void (leftNotRight (trans (sym (loopFixZero ctx sc lid bod))
       (trans (sym (checkStmtLoop Z ctx sc lid bod)) eq)))
-  loopRetLN ln eq evB {k = S m} =
+  loopRetLN uk ln eq evB {k = S m} =
     retGo (checkStmts m ctx sc bod) Refl
     where
       retGo : (resB : Either Diag Scopes) ->
@@ -451,7 +470,7 @@ mutual
         void (leftNotRight (trans (sym (loopFixLeft lid pB))
           (trans (sym (checkStmtLoop (S m) ctx sc lid bod)) eq)))
       retGo (Right scB) pB =
-        iln.stmtsLNRetIH {funs} {chk} {fuel = m} ln pB evB
+        iln.stmtsLNRetIH {funs} {chk} {fuel = m} uk ln pB evB
 
   export
   loopSLNRet :
@@ -461,15 +480,16 @@ mutual
     {k : Nat} -> {lid : Nat} -> {bod : List Stmt} ->
     {env, env1, envS : HEnv} -> {h, h1, hS : Heap} ->
     {sc, sc1 : Scopes} -> {a : Addr} ->
+    UniqueKeys env ->
     LiveNuo env h sc a ->
     checkStmt (S k) ctx sc (SLoop lid bod) = Right sc1 ->
     HEvalStmts {funs} env h bod (HOk env1 h1) ->
     HEvalStmt {funs} env1 h1 (SLoop lid bod) (HReturned envS hS) ->
     cell hS a = Just Live
-  loopSLNRet ln eq evB evR {k = Z} =
+  loopSLNRet uk ln eq evB evR {k = Z} =
     void (leftNotRight (trans (sym (loopFixZero ctx sc lid bod))
       (trans (sym (checkStmtLoop Z ctx sc lid bod)) eq)))
-  loopSLNRet ln eq evB evR {k = S m} =
+  loopSLNRet uk ln eq evB evR {k = S m} =
     loopGo (checkStmts m ctx sc bod) Refl
     where
       loopGo : (resB : Either Diag Scopes) ->
@@ -484,16 +504,16 @@ mutual
         loopGo (Right scB) pB | False with
             (eqScopes (joinScopes sc scB) sc) proof pEq
           loopGo (Right scB) pB | False | True =
-            let lnB = iln.stmtsLNIH {funs} {chk} {fuel = m} ln pB evB
+            let lnB = iln.stmtsLNIH {funs} {chk} {fuel = m} uk ln pB evB
                 lnJ = MkLN (oaEqScopes pEq (oaJoinRight lnB.oaLN))
                         (nuoEqScopes pEq (nuoJoinRight lnB.oaLN lnB.nuoLN))
                         lnB.liveLN
-            in iln.stmtLNRetIH {funs} {chk} {fuel = S (S m)} lnJ eq evR
+            in iln.stmtLNRetIH {funs} {chk} {fuel = S (S m)} (stmtsUK uk evB) lnJ eq evR
           loopGo (Right scB) pB | False | False =
-            let lnB = iln.stmtsLNIH {funs} {chk} {fuel = m} ln pB evB
+            let lnB = iln.stmtsLNIH {funs} {chk} {fuel = m} uk ln pB evB
                 lnJ = MkLN (oaJoinRight lnB.oaLN)
                         (nuoJoinRight lnB.oaLN lnB.nuoLN) lnB.liveLN
-            in iln.stmtLNRetIH {funs} {chk} {fuel = S m} lnJ
+            in iln.stmtLNRetIH {funs} {chk} {fuel = S m} (stmtsUK uk evB) lnJ
                  (trans (checkStmtLoop m ctx (joinScopes sc scB) lid bod)
                     (trans (sym (loopFixFalse lid pEnd pB pEq))
                       (trans (sym (checkStmtLoop (S m) ctx sc lid bod)) eq)))

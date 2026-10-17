@@ -57,12 +57,15 @@ import Pagurus.Heap.Inh
 public export
 record WalkLNIHs (funs : List Fun) (ctx : Ctx) where
   constructor MkWalkLNIHs
+  -- UniqueKeys is an explicit argument (not {auto}): packing functions
+  -- as record values re-triggers Idris 0.8.0 auto-search multiple-solutions.
   stmtsLNIH :
     {cfuel : Nat} ->
     {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
     {fuel : Nat} ->
     {env, envB : HEnv} -> {h, hB : Heap} ->
     {ss : List Stmt} -> {sc, scB : Scopes} -> {a : Addr} ->
+    UniqueKeys env ->
     LiveNuo env h sc a ->
     checkStmts fuel ctx sc ss = Right scB ->
     HEvalStmts {funs} env h ss (HOk envB hB) ->
@@ -73,6 +76,7 @@ record WalkLNIHs (funs : List Fun) (ctx : Ctx) where
     {fuel : Nat} ->
     {env, envB : HEnv} -> {h, hB : Heap} ->
     {ss : List Stmt} -> {sc, scB : Scopes} -> {a : Addr} ->
+    UniqueKeys env ->
     LiveNuo env h sc a ->
     checkStmts fuel ctx sc ss = Right scB ->
     HEvalStmts {funs} env h ss (HReturned envB hB) ->

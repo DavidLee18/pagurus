@@ -10,8 +10,9 @@
 |||   positive outside Restore (`ownerCell` byte-identical)
 |||
 ||| This extract is the exprLN / exprsCallLN / reallocLN spine. `takeLN` /
-||| `asgPtrLN` / `declPtrLN` / `nuoNoTakeLeftover` stay in Restore: the full
-||| walker SCC exceeded ~4GB RSS before finishing. `takeLN` is `takeLNIH`.
+||| `asgPtrLN` / `declPtrLN` / `nuoNoTakeLeftover` live in RestoreTake:
+||| the full walker SCC exceeded ~4GB RSS before finishing. `takeLN` is
+||| `takeLNIH` (packed in Restore).
 |||
 ||| `nestedCallLN` is `nestedCallLNIH` (packed in Restore with `NestedLNIHs`).
 ||| RestoreCall is not imported here (no NestedLNIHs pack in this module).
@@ -191,6 +192,7 @@ nuoUseSet nuo0 lp0 lookV0 pSt p st lookP lp safe own nb with (natEqDec p n)
       safe own nb
 
 ||| `movePlace` cannot introduce a use-safe unique owner of `a`.
+export
 nuoMove :
   {env : HEnv} -> {sc, sc' : Scopes} -> {a : Addr} ->
   {n : Place} -> {nid : Nat} -> {nm : String} -> {v : HVal} ->
@@ -240,6 +242,7 @@ nuoMove nuo eq lookV =
         in replace {p = \s => NoUniqueOwner env s a} scEq
              (nuoMoveSet nuo pL lookV pS)
 
+export
 nuoBindDead :
   {env : HEnv} -> {sc : Scopes} -> {a : Addr} -> {n : Place} ->
   {v : HVal} -> {st' : Status} ->
@@ -259,6 +262,7 @@ nuoBindDead {n} {v} {st'} nuo uns p st look lp safe own nb with (natEqDec p n)
       safe own nb
 
 ||| `ANull` is use-safe but not owned, so it cannot witness a unique owner.
+export
 nuoBindNull :
   {env : HEnv} -> {sc : Scopes} -> {a : Addr} -> {n : Place} -> {v : HVal} ->
   NoUniqueOwner env sc a ->
@@ -279,6 +283,7 @@ nuoBindNull {n} {v} nuo p st look lp safe own nb with (natEqDec p n)
       safe own nb
 
 ||| Taking the unique owner of leftover `a` contradicts `NoUniqueOwner`.
+export
 takeLiveNuoContra :
   {ctx : Ctx} -> {sc, sc' : Scopes} -> {env : HEnv} -> {h : Heap} ->
   {nid : Nat} -> {n : Place} -> {nm : String} -> {fl : Flag} -> {a : Addr} ->
@@ -383,6 +388,7 @@ mutual
   exprLN ln eq (HEAsgPtr w env1 h1 ev) {e = EAssign id n nm Ptr rhs} =
     wln.asgPtrExprLNIH {funs} {chk} ln eq ev
 
+  export
   nuoUse :
     {env : HEnv} -> {sc, sc' : Scopes} -> {a : Addr} ->
     {n : Place} -> {nid : Nat} -> {nm : String} -> {v : HVal} ->
@@ -433,6 +439,7 @@ mutual
           in replace {p = \s => NoUniqueOwner env s a} scEq
                (nuoUseSetMiss nuo pL miss pS)
 
+  export
   exprsBorrowLN :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
     {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->
@@ -488,6 +495,7 @@ mutual
     in MkLN (oaAlloc ln1.oaLN) ln1.nuoLN
          (trans (allocPresCell h1 a nf) ln1.liveLN)
 
+  export
   reallocArgsLN :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
     {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->

@@ -74,8 +74,8 @@ mutual
     (\ev, pE, inh, oa => inhExprH {funs} {fk = lteRefl} (evalSize ev) dispatchExprs inh oa ev pE)
     (\ev, pT, inh, oa, oaY => inhTakeH {funs} {fk = lteRefl} (evalSize ev) dispatchExprs inh oa ev pT oaY)
     (\ev, pE, ln => exprLN {funs} {chk} {wln = walkLNIHs} ln pE ev)
-    (\ev, pT, ln => (takeLN {funs} {chk} ln pT ev).lnTLN)
-    (\ev, pT, ln, veq => nuoNoTakeLeftover {funs} {chk} ev pT ln veq)
+    (\ev, pT, ln => (takeLN {funs} {chk} {wln = walkLNIHs} ln pT ev).lnTLN)
+    (\ev, pT, ln, veq => nuoNoTakeLeftover {funs} {chk} {wln = walkLNIHs} ev pT ln veq)
     defNs
 
   ||| `exprHSafe` / `takeHSafe` only, so `Inh` does not close over `inhIH`.

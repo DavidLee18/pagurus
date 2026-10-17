@@ -678,3 +678,249 @@ uniqueOwnFromCallFun {f} ihs oa0 eq pb pd look evs =
                            (collectArgVals evs)}
        (sym meq) raw
 
+--------------------------------------------------------------------------------
+-- Run #62 (A) refutation: OA of paramScopes does not yield UniqueKeys.
+-- checkFun does not reject duplicate param places. OA is lookup-based
+-- (first-match); a shadowed second binding of the same key is invisible
+-- to every OverApprox clause and breaks UniqueKeys (UKCons miss).
+--------------------------------------------------------------------------------
+
+||| Two pointer parameters interned at the same place. `checkFun` accepts
+||| this (empty body + `checkStmtsNil`); there is no IR/checker
+||| distinct-param invariant. PascalCase so Idris 0.8 does not rebind
+||| them as implicit type binders.
+export
+DupParamFun : Fun
+DupParamFun = MkFun 1 "f" True
+  [ MkParam 0 0 "x" Ptr
+  , MkParam 2 0 "x" Ptr
+  ] []
+
+||| Caller env with a shadowed duplicate key. `lookupH 0` sees only the
+||| first `HVNone`; UniqueKeys requires the tail miss.
+export
+DupKeyEnv : HEnv
+DupKeyEnv = [(0, HVNone), (0, HVNone)]
+
+export
+DupParamCtx : Ctx
+DupParamCtx = MkCtx [] []
+
+||| Unfold only; `paramScopes` is `export` so the concrete list is not
+||| definitional. Modes stay `funModes` (may be `[]` here).
+||| Field projections on a PascalCase constant use `(.id)` — `DupParamFun.id`
+||| parses as a qualified name in Idris 0.8.
+export
+DupParamSc :
+  paramScopes DupParamCtx DupParamFun =
+    bindParams ((.id) DupParamFun) ((.params) DupParamFun)
+      (funModes DupParamCtx ((.name) DupParamFun))
+DupParamSc = paramScopesEq DupParamCtx DupParamFun
+
+export
+DupBindEq : (ms : List Consume) ->
+  bindParams ((.id) DupParamFun) ((.params) DupParamFun) ms =
+    bindParams 1 [MkParam 0 0 "x" Ptr, MkParam 2 0 "x" Ptr] ms
+DupBindEq _ = Refl
+
+export
+DupParamFunAccepted :
+  checkFun 8 DupParamCtx DupParamFun = Right ()
+DupParamFunAccepted =
+  checkFunDefRight {sc' = paramScopes DupParamCtx DupParamFun} Refl
+    (checkStmtsNil 8 DupParamCtx (paramScopes DupParamCtx DupParamFun))
+
+export
+DupKeyNotUK : UniqueKeys DupKeyEnv -> Void
+DupKeyNotUK (UKCons miss _) = justNotNothing miss
+
+HeadSt : List Consume -> Status
+HeadSt [] = Pagurus.Status.singleton (ABorrowed 1)
+HeadSt (m :: _) = paramStatus m 1
+
+MsTail : List Consume -> List Consume
+MsTail [] = []
+MsTail (_ :: ms) = ms
+
+BindDup : (ms : List Consume) ->
+  bindParams 1 [MkParam 0 0 "x" Ptr, MkParam 2 0 "x" Ptr] ms =
+    (0, HeadSt ms) :: bindParams 1 [MkParam 2 0 "x" Ptr] (MsTail ms)
+BindDup [] = Refl
+BindDup (_ :: _) = Refl
+
+BindDup2 : (ms : List Consume) ->
+  bindParams 1 [MkParam 2 0 "x" Ptr] ms = (0, HeadSt ms) :: []
+BindDup2 [] = Refl
+BindDup2 (_ :: _) = Refl
+
+LookConsHit : (st : Status) -> (rest : Scopes) ->
+  lookupPlace 0 ((0, st) :: rest) = Just st
+LookConsHit _ _ = Refl
+
+LookConsMiss : (p : Place) -> (st : Status) -> (rest : Scopes) ->
+  p == 0 = False ->
+  lookupPlace p ((0, st) :: rest) = lookupPlace p rest
+LookConsMiss p st rest pz with (p == 0)
+  LookConsMiss p st rest pz | False = Refl
+  LookConsMiss p st rest Refl | True impossible
+
+LookSc0 : (ms : List Consume) ->
+  lookupPlace 0 (bindParams 1 [MkParam 0 0 "x" Ptr, MkParam 2 0 "x" Ptr] ms) =
+    Just (HeadSt ms)
+LookSc0 ms =
+  trans (cong (lookupPlace 0) (BindDup ms))
+        (LookConsHit (HeadSt ms)
+           (bindParams 1 [MkParam 2 0 "x" Ptr] (MsTail ms)))
+
+LookScMiss : (ms : List Consume) -> (p : Place) ->
+  p == 0 = False ->
+  lookupPlace p (bindParams 1 [MkParam 0 0 "x" Ptr, MkParam 2 0 "x" Ptr] ms) =
+    Nothing
+LookScMiss ms p pz =
+  trans (cong (lookupPlace p) (BindDup ms))
+    (trans (LookConsMiss p (HeadSt ms)
+              (bindParams 1 [MkParam 2 0 "x" Ptr] (MsTail ms)) pz)
+      (trans (cong (lookupPlace p) (BindDup2 (MsTail ms)))
+             (LookConsMiss p (HeadSt (MsTail ms)) [] pz)))
+
+LookEnvHit : lookupH 0 DupKeyEnv = Just HVNone
+LookEnvHit = Refl
+
+LookEnvMiss : (p : Place) -> p == 0 = False -> lookupH p DupKeyEnv = Nothing
+LookEnvMiss p pz =
+  trans (lookupHConsMiss p 0 HVNone [(0, HVNone)] pz)
+        (lookupHConsMiss p 0 HVNone [] pz)
+
+HeadStNotNil : (ms : List Consume) -> HeadSt ms = [] -> Void
+HeadStNotNil [] eq = consNotNil eq
+HeadStNotNil (Never :: _) eq =
+  consNotNil (trans (sym (paramStatusNever 1)) eq)
+HeadStNotNil (May :: _) eq =
+  consNotNil (trans (sym (paramStatusMay 1)) eq)
+HeadStNotNil (Always :: _) eq =
+  consNotNil (trans (sym (paramStatusAlways 1)) eq)
+
+SnmHit : (ms : List Consume) -> (st : Status) ->
+  st = HeadSt ms ->
+  hasOwned st = False ->
+  hasBorrowed st = Nothing ->
+  Void
+SnmHit [] st eq _ nb =
+  borrowedIsBorrowed 1
+    (replace {p = \s => hasBorrowed s = Nothing} eq nb)
+SnmHit (Never :: _) st eq _ nb =
+  borrowedIsBorrowed 1
+    (replace {p = \s => hasBorrowed s = Nothing}
+       (trans eq (paramStatusNever 1)) nb)
+SnmHit (May :: _) st eq own _ =
+  falseNotTrue
+    (trans (sym own)
+      (replace {p = \s => hasOwned s = True}
+         (sym (trans eq (paramStatusMay 1))) ownedSingletonOwned))
+SnmHit (Always :: _) st eq own _ =
+  falseNotTrue
+    (trans (sym own)
+      (replace {p = \s => hasOwned s = True}
+         (sym (trans eq (paramStatusAlways 1))) ownedSingletonOwned))
+
+||| `OverApprox DupKeyEnv InitHeap (paramScopes DupParamCtx DupParamFun)`.
+||| Every OA clause is first-match; the shadowed `(0, HVNone)` is unseen.
+export
+OaDupKeyParamScopes :
+  OverApprox DupKeyEnv InitHeap (paramScopes DupParamCtx DupParamFun)
+OaDupKeyParamScopes = MkOA wfEmpty tracked dead uniq empty snm
+  where
+    Ms : List Consume
+    Ms = funModes DupParamCtx ((.name) DupParamFun)
+
+    lookNone : (p : Place) -> (v : HVal) ->
+      lookupH p DupKeyEnv = Just v -> v = HVNone
+    lookNone p v look with (natEqDec p 0)
+      lookNone 0 v look | Left Refl =
+        justInjH (trans (sym look) LookEnvHit)
+      lookNone p v look | Right ne =
+        void (nothingNotJustH (trans (sym (LookEnvMiss p ne)) look))
+
+    tracked : (p : Place) -> (v : HVal) ->
+      lookupH p DupKeyEnv = Just v ->
+      (st : Status ** lookupPlace p (paramScopes DupParamCtx DupParamFun) = Just st)
+    tracked p v look with (natEqDec p 0)
+      tracked 0 v look | Left Refl =
+        (HeadSt Ms **
+          trans (cong (lookupPlace 0) DupParamSc)
+            (trans (cong (lookupPlace 0) (DupBindEq Ms)) (LookSc0 Ms)))
+      tracked p v look | Right ne =
+        void (nothingNotJustH (trans (sym (LookEnvMiss p ne)) look))
+
+    dead : (p : Place) -> (st : Status) -> (v : HVal) ->
+      lookupPlace p (paramScopes DupParamCtx DupParamFun) = Just st ->
+      lookupH p DupKeyEnv = Just v ->
+      isDeadTracked InitHeap v = True ->
+      unsafeUse st = True
+    dead p st v _ look nl with (lookNone p v look)
+      dead p st HVNone _ look nl | Refl = void (falseNotTrue nl)
+
+    uniq : (p, q : Place) -> (a : Addr) ->
+      p == q = False ->
+      lookupH p DupKeyEnv = Just (HVPtr a) ->
+      lookupH q DupKeyEnv = Just (HVPtr a) ->
+      cell InitHeap a = Just Live ->
+      (stP : Status) -> lookupPlace p (paramScopes DupParamCtx DupParamFun) = Just stP ->
+      (stQ : Status) -> lookupPlace q (paramScopes DupParamCtx DupParamFun) = Just stQ ->
+      unsafeUse stP = False ->
+      hasOwned stP = True ->
+      hasBorrowed stP = Nothing ->
+      unsafeUse stQ = True
+    uniq p _ a _ lp _ _ _ _ _ _ _ _ _ =
+      void (noneNotPtrA (sym (lookNone p (HVPtr a) lp)))
+
+    empty : (p : Place) ->
+      lookupPlace p (paramScopes DupParamCtx DupParamFun) = Just [] ->
+      lookupH p DupKeyEnv = Nothing
+    empty p lp with (natEqDec p 0)
+      empty 0 lp | Left Refl =
+        let hit = trans (cong (lookupPlace 0) DupParamSc)
+                    (trans (cong (lookupPlace 0) (DupBindEq Ms)) (LookSc0 Ms))
+        in void (HeadStNotNil Ms (justInjH (trans (sym hit) lp)))
+      empty p lp | Right ne =
+        void (nothingNotJust
+          (trans (sym (trans (cong (lookupPlace p) DupParamSc)
+                         (trans (cong (lookupPlace p) (DupBindEq Ms))
+                                (LookScMiss Ms p ne))))
+                 lp))
+
+    snm : (p : Place) -> (st : Status) ->
+      lookupPlace p (paramScopes DupParamCtx DupParamFun) = Just st ->
+      unsafeUse st = False ->
+      hasOwned st = False ->
+      hasBorrowed st = Nothing ->
+      Either (lookupH p DupKeyEnv = Nothing) (lookupH p DupKeyEnv = Just HVNone)
+    snm p st lp _ own nb with (natEqDec p 0)
+      snm 0 st lp _ own nb | Left Refl =
+        let hit = trans (cong (lookupPlace 0) DupParamSc)
+                    (trans (cong (lookupPlace 0) (DupBindEq Ms)) (LookSc0 Ms))
+        in void (SnmHit Ms st (sym (justInjH (trans (sym hit) lp))) own nb)
+      snm p st lp _ own nb | Right ne =
+        void (nothingNotJust
+          (trans (sym (trans (cong (lookupPlace p) DupParamSc)
+                         (trans (cong (lookupPlace p) (DupBindEq Ms))
+                                (LookScMiss Ms p ne))))
+                 lp))
+
+||| (A) as stated is uninhabited: a function that produced UniqueKeys
+||| from OA of this `paramScopes` would be Void on the witness.
+||| Do not add UK as a protected premise.
+export
+paramScopesUKContra :
+  (OverApprox DupKeyEnv InitHeap (paramScopes DupParamCtx DupParamFun) ->
+   UniqueKeys DupKeyEnv) -> Void
+paramScopesUKContra lemma = DupKeyNotUK (lemma OaDupKeyParamScopes)
+
+||| Path B `HECallUser` requires `findFun funs callee = Just f`. Intra
+||| `funs = []` (`CheckAcceptedNoHeapCrash`) is uninhabited — verdict (a).
+export
+heCallUserNeedsFun :
+  {callee : String} -> {f : Fun} ->
+  findFun [] callee = Just f -> Void
+heCallUserNeedsFun look = emptyFunsNoUser callee look
+

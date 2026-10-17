@@ -49,6 +49,7 @@ modules = Pagurus.IR
         , Pagurus.Heap.If
         , Pagurus.Heap.Return
         , Pagurus.Heap.Unique
+        , Pagurus.Heap.UniqueFail
         , Pagurus.Heap.Xfer
         , Pagurus.Heap.Inh
         , Pagurus.Heap.RestoreAux

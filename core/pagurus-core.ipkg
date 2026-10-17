@@ -57,6 +57,7 @@ modules = Pagurus.IR
         , Pagurus.Heap.RestoreCall
         , Pagurus.Heap.RestoreWalk
         , Pagurus.Heap.RestoreTake
+        , Pagurus.Heap.RestoreIf
         , Pagurus.Heap.Restore
         , Pagurus.Heap.Dispatch
         , Pagurus.Heap.Expr

@@ -630,6 +630,7 @@ mutual
           ln1 = wln.takeLNIH {funs} {chk} ln pT evE
       in exprsModesRest {funs} {chk} {wln} {modes = ms} ln1 pEs evEs
 
+  export
   exprsModesRest :
     {funs : List Fun} -> {cfuel : Nat} -> {ctx : Ctx} ->
     {auto chk : FunsChecked cfuel ctx funs} -> {auto ihs : CallIHs funs ctx} ->

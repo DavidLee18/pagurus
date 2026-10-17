@@ -1273,6 +1273,11 @@ headNamesOwner own oa eq ev oa0 = resGo e ev Refl eq
 ||| walk under that hypothesis, then `alloc`. `ownerFrame` also takes the
 ||| places an earlier borrow captured: the owner place is one of them, and
 ||| this tail does not consume a read of those places.
+-- `{auto oih : OwnerIHs}` is not in these field types: a self-`auto`
+-- field is not strictly positive (group 6). Recursion is the
+-- `ownerCellGo` / `ownerFrameGo` functions, which take `{auto oih}`
+-- explicitly and are packed after the Restore SCC. Same style as
+-- NestedLNIHs (no self-`auto` field; run #57 UniqueKeys is explicit).
 public export
 record OwnerIHs (funs : List Fun) (ctx : Ctx) where
   constructor MkOwnerIHs
@@ -1281,7 +1286,6 @@ record OwnerIHs (funs : List Fun) (ctx : Ctx) where
     {env, env1 : HEnv} -> {h, h1 : Heap} -> {sc, sc' : Scopes} -> {a : Addr} ->
     {auto chk : FunsChecked cfuel ctx funs} ->
     {auto ihs : CallIHs funs ctx} ->
-    {auto oih : OwnerIHs funs ctx} ->
     UniqueKeys env ->
     (own : Own env sc a) ->
     OverApprox env h sc ->
@@ -1299,7 +1303,6 @@ record OwnerIHs (funs : List Fun) (ctx : Ctx) where
     {env, env1 : HEnv} -> {h, h1 : Heap} -> {sc, sc' : Scopes} -> {a : Addr} ->
     {auto chk : FunsChecked cfuel ctx funs} ->
     {auto ihs : CallIHs funs ctx} ->
-    {auto oih : OwnerIHs funs ctx} ->
     UniqueKeys env ->
     (own : Own env sc a) ->
     OverApprox env h sc ->
@@ -1313,53 +1316,10 @@ record OwnerIHs (funs : List Fun) (ctx : Ctx) where
     noOwnerHere (bindFrame ps (collectArgVals evs)) (bindParams fid ps ms) a = False ->
     Void
 
-||| Cell of `a` stays live across a tail that does not free the owner.
-||| Nonempty tails are `ownerCellGo` after the Restore SCC.
-heldOwnerCell :
-  {funs : List Fun} -> {ctx : Ctx} ->
-  {auto ihs : CallIHs funs ctx} ->
-  {callee : String} -> {es : List Expr} -> {ms : List Consume} ->
-  {env, env1 : HEnv} -> {h, h1 : Heap} -> {sc, sc' : Scopes} -> {a : Addr} ->
-  (own : Own env sc a) ->
-  OverApprox env h sc ->
-  (live : List Place) ->
-  placeIn own.ownQ live = True ->
-  storedLiveGo ctx.summaries live es ms = False ->
-  callOverlap ctx.summaries es ms = False ->
-  checkArgsModes ctx sc callee es ms = Right sc' ->
-  HEvalExprs {funs} env h es (HROk HVNone env1 h1) ->
-  cell h1 a = Just Live
-heldOwnerCell own oa _ _ _ _ eq HEArgsNil =
-  let scEq = rightInj (trans (sym (checkArgsModesNil ctx sc callee ms)) eq)
-  in ownLive (oaRewrite scEq oa) (ownRewrite scEq own)
-
-||| A tail whose frame still has a unique owner of `a` contradicts the
-||| quiet footprints: that owner value was read from the protected place.
-||| Nonempty tails are `ownerFrameGo` after the Restore SCC.
-ownerFrameVoid :
-  {funs : List Fun} -> {ctx : Ctx} ->
-  {auto ihs : CallIHs funs ctx} ->
-  {fid : Nat} -> {ps : List Param} ->
-  {callee : String} -> {es : List Expr} -> {ms : List Consume} ->
-  {env, env1 : HEnv} -> {h, h1 : Heap} -> {sc, sc' : Scopes} -> {a : Addr} ->
-  (own : Own env sc a) ->
-  OverApprox env h sc ->
-  (live : List Place) ->
-  placeIn own.ownQ live = True ->
-  storedLiveGo ctx.summaries live es ms = False ->
-  callOverlap ctx.summaries es ms = False ->
-  checkArgsModes ctx sc callee es ms = Right sc' ->
-  (evs : HEvalExprs {funs} env h es (HROk HVNone env1 h1)) ->
-  noOwnerHere (bindFrame ps (collectArgVals evs)) (bindParams fid ps ms) a = False ->
-  Void
-ownerFrameVoid {ps = []} own oa _ _ _ _ _ evs pno =
-  void (trueNotFalse
-    (replace {p = \e => noOwnerHere e (bindParams fid [] ms) a = False}
-       (bindFrameNil (collectArgVals evs)) pno))
-ownerFrameVoid {ms = []} own oa _ _ _ _ _ evs pno =
-  extraFrameNotOwner fid ps (collectArgVals evs) a pno
-ownerFrameVoid own oa _ _ _ _ eq HEArgsNil pno =
-  noOwnerHereMissVoid fid ps ms a pno
+-- Empty-tail cell / frame facts used to live here as `heldOwnerCell` /
+-- `ownerFrameVoid` stubs. Those were not covering (nonempty is
+-- `ownerCellGo` / `ownerFrameGo` after the SCC). Inlined at those
+-- HEArgsNil / empty-ps / empty-ms clauses so the stubs are gone.
 
 --------------------------------------------------------------------------------
 -- LiveNuo through an accepted body.
@@ -13983,7 +13943,8 @@ mutual
     HEvalExprs {funs} env h es (HROk HVNone env1 h1) ->
     cell h1 a = Just Live
   ownerCellGo {chk} {ihs} {oih} uk own oa live pin sb ov qw eq HEArgsNil =
-    heldOwnerCell {ihs} own oa live pin sb ov eq HEArgsNil
+    let scEq = rightInj (trans (sym (checkArgsModesNil ctx sc callee ms)) eq)
+    in ownLive (oaRewrite scEq oa) (ownRewrite scEq own)
   ownerCellGo {chk} {ihs} {oih} uk own oa live pin sb ov qw eq
       (HEArgsCons v envA hA evE evEs) {es = e :: es} {ms = []} =
     let (sc1 ** (fl ** (pT, pEs))) = argsModesExtraSplit eq
@@ -17718,11 +17679,13 @@ mutual
     noOwnerHere (bindFrame ps (collectArgVals evs)) (bindParams fid ps ms) a = False ->
     Void
   ownerFrameGo {chk} {ihs} {oih} {ps = []} uk own oa live pin sb ov qw eq evs pno =
-    ownerFrameVoid {ps = []} {ihs} own oa live pin sb ov eq evs pno
+    void (trueNotFalse
+      (replace {p = \e => noOwnerHere e (bindParams fid [] ms) a = False}
+         (bindFrameNil (collectArgVals evs)) pno))
   ownerFrameGo {chk} {ihs} {oih} {ms = []} uk own oa live pin sb ov qw eq evs pno =
-    ownerFrameVoid {ms = []} {ihs} own oa live pin sb ov eq evs pno
+    extraFrameNotOwner fid ps (collectArgVals evs) a pno
   ownerFrameGo {chk} {ihs} {oih} uk own oa live pin sb ov qw eq HEArgsNil pno =
-    ownerFrameVoid {ihs} own oa live pin sb ov eq HEArgsNil pno
+    noOwnerHereMissVoid fid ps ms a pno
   ownerFrameGo {chk} {ihs} {oih} uk own oa live pin sb ov qw eq
       (HEArgsCons v envA hA evE evEs)
       {ps = MkParam id pl nm Copy :: ps1} {es = e :: es} {ms = m :: ms} pno =
@@ -19904,6 +19867,38 @@ ownerIhs :
   {auto ihs : CallIHs funs ctx} ->
   OwnerIHs funs ctx
 ownerIhs {chk} {ihs} = MkOwnerIHs
+  (\uk, own, oa, live, pin, sb, ov, qw, eq, evs =>
+     ownerCellGo {chk} {ihs} {oih = ownerIhs {chk} {ihs}}
+       uk own oa live pin sb ov qw eq evs)
+  (\uk, own, oa, live, pin, sb, ov, qw, eq, evs, pno =>
+     ownerFrameGo {chk} {ihs} {oih = ownerIhs {chk} {ihs}}
+       uk own oa live pin sb ov qw eq evs pno)
+
+||| Packed `BindLNIHs` after the Restore SCC. `fln` / `wln` are explicit
+||| (not `{auto}`): passing `frameLNIHs` / `walkLNIHs` as auto values
+||| re-triggers Idris 0.8.0 multiple-solutions / FunsChecked at pack time
+||| (groups 3/4). Callers supply those IHs at the use site.
+|||
+||| This inhabitant is not available inside the stmtsLN mutual, so
+||| `nestedBoundLN` (RestoreCall, invoked from `nestedCallLN` during that
+||| SCC) cannot take `bln` without either growing the SCC or adding
+||| BindLNIHs to `nestedCallLNIH` (Dispatch / exprLN — not authorised).
+export
+bindLNIHs :
+  {funs : List Fun} -> {ctx : Ctx} ->
+  {cfuel : Nat} ->
+  {auto chk : FunsChecked cfuel ctx funs} ->
+  {auto ihs : CallIHs funs ctx} ->
+  {fln : FrameLNIHs funs ctx} ->
+  {wln : WalkLNIHs funs ctx} ->
+  BindLNIHs funs ctx
+bindLNIHs {chk} {ihs} {fln} {wln} = MkBindLNIHs
+  (\ln, eq, evs, pno =>
+     frameOwnerVoid {funs} {chk} {ihs} {fln} ln eq evs pno)
+  (\ln, eq, evs =>
+     exprsModesRest {funs} {chk} {ihs} {wln} ln eq evs)
+  (\own, oa, eq, ev, oa0 =>
+     headNamesOwner {funs} {ihs} own oa eq ev oa0)
   (\uk, own, oa, live, pin, sb, ov, qw, eq, evs =>
      ownerCellGo {chk} {ihs} {oih = ownerIhs {chk} {ihs}}
        uk own oa live pin sb ov qw eq evs)

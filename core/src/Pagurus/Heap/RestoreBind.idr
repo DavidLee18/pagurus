@@ -5,7 +5,8 @@
 ||| `frameOwnerVoidIH` because this module has no `exprLN` / `takeLN`.
 ||| `exprsModesRest` / `headNamesOwner` stay in Restore.
 ||| `OwnerIHs` stays in Restore. bindOk takes ownerCell/ownerFrame
-||| via BindLNIHs without that self-auto cycle.
+||| via BindLNIHs without that self-auto cycle. Packed after the Restore
+||| SCC as `bindLNIHs` (explicit `{fln}` / `{wln}`, not `{auto}`).
 module Pagurus.Heap.RestoreBind
 
 import Pagurus.IR

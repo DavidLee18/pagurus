@@ -1104,6 +1104,41 @@ xferLivePtrNeqCanary =
   xferLivePtrNeq {d = 1} {p = 3} {live = [2]} {id = 0} {nm = "r"}
     {rhs = EAssign 1 1 "n" Ptr (EVar 2 2 "x")} Refl Refl
 
+||| dest intern of leftover intern is in `xferLive` of the rhs
+||| (`internShiftXferLive`), not `valuePlaces rhs ++ xferLive`
+||| (`internShiftXfer`). `xferLivePtrNeq` lifts that across an outer
+||| dest intern that is not this dest intern (`pdGo False`).
+export
+internShiftXferPtrNeq :
+  {acc : List (String, List Consume)} ->
+  {d, p, q : Place} -> {live : List Place} ->
+  {id : Nat} -> {nm : String} -> {rhs : Expr} ->
+  p == d = False ->
+  placeIn q live = True ->
+  placeIn q (fst (argFootprint acc rhs)) = False ->
+  shiftTo d q rhs = True ->
+  keepsDest d q rhs = True ->
+  placeIn d (valuePlaces (EAssign id p nm Ptr rhs)
+             ++ xferLive live (EAssign id p nm Ptr rhs)) = True
+internShiftXferPtrNeq {acc} {d} {p} {q} {live} {id} {nm} {rhs} pd pin nin hit kd =
+  placeInJoinRX {p = d}
+    {xs = valuePlaces (EAssign id p nm Ptr rhs)}
+    {ys = xferLive live (EAssign id p nm Ptr rhs)}
+    (xferLivePtrNeq {d} {p} {live} {id} {nm} {rhs} pd
+       (internShiftXferLive {acc} {d} {q} {live} {e = rhs} pin nin hit kd))
+
+export
+internShiftXferPtrNeqCanary :
+  placeIn 1
+    (valuePlaces
+       (EAssign 0 3 "r" Ptr (EAssign 1 1 "n" Ptr (EVar 2 2 "x")))
+     ++ xferLive [2]
+          (EAssign 0 3 "r" Ptr (EAssign 1 1 "n" Ptr (EVar 2 2 "x")))) = True
+internShiftXferPtrNeqCanary =
+  internShiftXferPtrNeq {acc = []} {d = 1} {p = 3} {q = 2} {live = [2]}
+    {id = 0} {nm = "r"} {rhs = EAssign 1 1 "n" Ptr (EVar 2 2 "x")}
+    Refl Refl Refl Refl Refl
+
 export
 callMissEvalXCanary :
   placeIn 1 (fst (argsEvalFoot [] [])) = False

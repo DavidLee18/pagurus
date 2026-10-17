@@ -18215,39 +18215,14 @@ mutual
                                                   {id = aid} {p} {q = own.ownQ} {nm} {rhs}
                                                   (ninEvalWX {acc = ctx.summaries}
                                                      {e = EAssign aid p nm Ptr rhs} {m} nH1)
-                                              rhsHit : (h : Bool) -> (k : Bool) ->
-                                                       shiftTo ownA.ownQ own.ownQ rhs = h ->
-                                                       keepsDest ownA.ownQ own.ownQ rhs = k ->
-                                                       placeIn ownA.ownQ
-                                                         (valuePlaces
-                                                            (EAssign aid p nm Ptr rhs)
-                                                          ++ xferLive live
-                                                               (EAssign aid p nm Ptr rhs))
-                                                         = True
-                                              rhsHit True True ph pk =
-                                                placeInJoinR
-                                                  {p = ownA.ownQ}
-                                                  {xs = valuePlaces
-                                                          (EAssign aid p nm Ptr rhs)}
-                                                  {ys = xferLive live
-                                                          (EAssign aid p nm Ptr rhs)}
-                                                  (xferLivePtrNeq {d = ownA.ownQ} {p}
-                                                     {live} {id = aid} {nm} {rhs} pd
-                                                     (internShiftXfer
-                                                        {acc = ctx.summaries}
-                                                        {d = ownA.ownQ} {q = own.ownQ}
-                                                        {live} {e = rhs}
-                                                        pin ninRhs ph pk))
-                                              rhsHit True False _ _ =
-                                                ptrRest ev
-                                              rhsHit False _ _ _ =
-                                                ptrRest ev
                                               lookStart : env1 = env ->
                                                           lookupH ownA.ownQ env = Just (HVPtr a)
                                               lookStart eq =
                                                 let look1 = trans
                                                               (sym (lookupHSetMiss ownA.ownQ p v
-                                                                      env1 pd))
+                                                                      env1
+                                                                      (trans (sym (eqNatSym p
+                                                                         ownA.ownQ)) pd)))
                                                               lookR
                                                 in replace
                                                      {p = \en => lookupH ownA.ownQ en =
@@ -18262,33 +18237,26 @@ mutual
                                                      (EAssign aid p nm Ptr rhs)
                                                    ++ xferLive live
                                                         (EAssign aid p nm Ptr rhs)) = True
-                                              ptrRest HELit = void (startVoid (lookStart p0) ownA.ownLp)
-                                              ptrRest HENull = void (startVoid (lookStart p0) ownA.ownLp)
-                                              ptrRest HEUnsup = void (startVoid (lookStart p0) ownA.ownLp)
-                                              ptrRest (HEVarLive _ _ _) =
-                                                void (startVoid (lookStart p0) ownA.ownLp)
-                                              ptrRest (HEVarNone _) =
-                                                void (startVoid (lookStart p0) ownA.ownLp)
-                                              ptrRest (HEVarCopy _) =
-                                                void (startVoid (lookStart p0) ownA.ownLp)
-                                              ptrRest (HEVarMiss _) =
-                                                void (startVoid (lookStart p0) ownA.ownLp)
-                                              ptrRest (HEAsgCopy _ _ _ _) =
-                                                void (startVoid (lookStart p0) ownA.ownLp)
-                                              ptrRest (HEAsgPtr _ _ _ _) =
-                                                void (startVoid (lookStart p0) ownA.ownLp)
-                                              ptrRest (HEUse _ _ evs) =
-                                                void (startVoid (lookStart p0) ownA.ownLp)
-                                              ptrRest (HEMalloc _ _ _) =
-                                                void (startVoid (lookStart p0) ownA.ownLp)
-                                              ptrRest (HECall _ _ _ _) =
-                                                void (startVoid (lookStart p0) ownA.ownLp)
-                                              ptrRest (HECallUser _ _ _ _ _ _ _ _ _ _) =
-                                                void (startVoid (lookStart p0) ownA.ownLp)
-                                              ptrRest (HECallUserRet _ _ _ _ _ _ _ _ _ _) =
-                                                void (startVoid (lookStart p0) ownA.ownLp)
-                                              ptrRest (HERealloc _ _ _ _ _) =
-                                                void (startVoid (lookStart p0) ownA.ownLp)
+                                              ptrRest _ = void (startVoid (lookStart p0) ownA.ownLp)
+                                              rhsHit : (h : Bool) -> (k : Bool) ->
+                                                       shiftTo ownA.ownQ own.ownQ rhs = h ->
+                                                       keepsDest ownA.ownQ own.ownQ rhs = k ->
+                                                       placeIn ownA.ownQ
+                                                         (valuePlaces
+                                                            (EAssign aid p nm Ptr rhs)
+                                                          ++ xferLive live
+                                                               (EAssign aid p nm Ptr rhs))
+                                                         = True
+                                              rhsHit True True ph pk =
+                                                internShiftXferPtrNeq
+                                                  {acc = ctx.summaries}
+                                                  {d = ownA.ownQ} {p} {q = own.ownQ}
+                                                  {live} {id = aid} {nm} {rhs}
+                                                  pd pin ninRhs ph pk
+                                              rhsHit True False _ _ =
+                                                ptrRest ev
+                                              rhsHit False _ _ _ =
+                                                ptrRest ev
                                       argsIn :
                                         {es : List Expr} -> {env0 : HEnv} -> {h0 : Heap} ->
                                         {hArgs : Heap} -> {live0 : List Place} ->

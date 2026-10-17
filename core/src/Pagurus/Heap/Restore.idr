@@ -17870,8 +17870,22 @@ mutual
                                               pin nH0 ph pk
                                             _ = liveA
                                         in pinV
-                                      both True False _ _ = ownInXfer evA pE nH0 Refl ownA.ownLook
-                                      both False _ _ _ = ownInXfer evA pE nH0 Refl ownA.ownLook
+                                      both True False _ pk = ownInXfer evA pE nH0 Refl ownA.ownLook
+                                                              nbothTF
+                                        where
+                                          nbothTF :
+                                            Not (shiftTo ownA.ownQ own.ownQ e = True,
+                                                 keepsDest ownA.ownQ own.ownQ e = True)
+                                          nbothTF (_, pkT) =
+                                            trueNotFalse (trans (sym pkT) pk)
+                                      both False _ ph _ = ownInXfer evA pE nH0 Refl ownA.ownLook
+                                                            nbothF
+                                        where
+                                          nbothF :
+                                            Not (shiftTo ownA.ownQ own.ownQ e = True,
+                                                 keepsDest ownA.ownQ own.ownQ e = True)
+                                          nbothF (phT, _) =
+                                            trueNotFalse (trans (sym phT) ph)
                                       ownInXfer :
                                         {e1 : Expr} -> {env0 : HEnv} -> {h0 : Heap} ->
                                         {w1 : HVal} -> {envR : HEnv} -> {hR : Heap} ->
@@ -17881,9 +17895,11 @@ mutual
                                           (fst (argModeFoot ctx.summaries e1 m)) = False ->
                                         env0 = env ->
                                         lookupH ownA.ownQ envR = Just (HVPtr a) ->
+                                        Not (shiftTo ownA.ownQ own.ownQ e = True,
+                                             keepsDest ownA.ownQ own.ownQ e = True) ->
                                         placeIn ownA.ownQ
                                           (valuePlaces e1 ++ xferLive live e1) = True
-                                      ownInXfer HELit {e1 = ELit id} pE1 _ p0 lookR =
+                                      ownInXfer HELit {e1 = ELit id} pE1 _ p0 lookR _ =
                                         let scEq = rightInj
                                                      (trans (sym (checkExprLit ctx sc id)) pE1)
                                             lpD = replace
@@ -17893,7 +17909,7 @@ mutual
                                         in void (startVoid
                                           (replace {p = \en => lookupH ownA.ownQ en = Just (HVPtr a)}
                                              p0 lookR) lpD)
-                                      ownInXfer HENull {e1 = ENull id} pE1 _ p0 lookR =
+                                      ownInXfer HENull {e1 = ENull id} pE1 _ p0 lookR _ =
                                         let scEq = rightInj
                                                      (trans (sym (checkExprNull ctx sc id)) pE1)
                                             lpD = replace
@@ -17903,25 +17919,26 @@ mutual
                                         in void (startVoid
                                           (replace {p = \en => lookupH ownA.ownQ en = Just (HVPtr a)}
                                              p0 lookR) lpD)
-                                      ownInXfer HEUnsup {e1 = EUnsupported id reason} pE1 _ _ _ =
+                                      ownInXfer HEUnsup {e1 = EUnsupported id reason} pE1 _ _ _ _ =
                                         void (unsupExprContraH id reason pE1)
                                       ownInXfer ev@(HEVarLive _ look _) {e1 = EVar nid n nm}
-                                          {env0} {h0} pE1 _ p0 lookR =
+                                          {env0} {h0} pE1 _ p0 lookR _ =
                                         varIn env0 h0 env0 h0 nid n nm ev pE1 p0 lookR look
                                       ownInXfer ev@(HEVarNone look) {e1 = EVar nid n nm}
-                                          {env0} {h0} pE1 _ p0 lookR =
+                                          {env0} {h0} pE1 _ p0 lookR _ =
                                         varNone env0 h0 env0 h0 nid n nm ev pE1 p0 lookR
                                           (replace {p = \en => lookupH n en = Just HVNone} p0 look)
                                       ownInXfer ev@(HEVarCopy look) {e1 = EVar nid n nm}
-                                          {env0} {h0} pE1 _ p0 lookR =
+                                          {env0} {h0} pE1 _ p0 lookR _ =
                                         varCopy env0 h0 env0 h0 nid n nm ev pE1 p0 lookR
                                           (replace {p = \en => lookupH n en = Just HVCopy} p0 look)
                                       ownInXfer ev@(HEVarMiss miss) {e1 = EVar nid n nm}
-                                          {env0} {h0} pE1 _ p0 lookR =
+                                          {env0} {h0} pE1 _ p0 lookR _ =
                                         varMiss env0 h0 env0 h0 nid n nm ev pE1 p0 lookR
                                           (replace {p = \en => lookupH n en = Nothing} p0 miss)
                                       ownInXfer (HEAsgCopy v env1 h1 ev)
-                                          {e1 = EAssign id n nm Copy rhs} pE1 nH1 p0 lookR =
+                                          {e1 = EAssign id n nm Copy rhs} pE1 nH1 p0 lookR
+                                          nboth =
                                         copyGo (shiftTo ownA.ownQ own.ownQ rhs) Refl
                                         where
                                           pERhs : checkExpr ctx sc rhs = Right sc1
@@ -17956,55 +17973,60 @@ mutual
                                                   (rewrite keepsDestCopy {id} {n} {nm} {rhs}
                                                      {d = ownA.ownQ} {q = own.ownQ} in pk)
                                               kKeep False _ =
-                                                ownInXfer ev pERhs nHRhs p0 lookR
+                                                ownInXfer ev pERhs nHRhs p0 lookR nboth
                                           copyGo False _ =
-                                            ownInXfer ev pERhs nHRhs p0 lookR
+                                            ownInXfer ev pERhs nHRhs p0 lookR nboth
                                       ownInXfer (HEAsgPtr v env1 h1 ev)
                                           {e1 = EAssign aid p nm Ptr rhs}
-                                          {env0} {h0} pE1 nH1 p0 lookR =
+                                          {env0} {h0} pE1 nH1 p0 lookR nboth =
                                         ptrIn aid p nm rhs v env0 h0 env1 h1 ev pE1 nH1 p0 lookR
-                                      ownInXfer (HEUse _ _ evs) {e1 = EUse uid args} _ nH1 p0 lookR =
+                                          nboth
+                                      ownInXfer (HEUse _ _ evs) {e1 = EUse uid args} _ nH1 p0 lookR
+                                          nboth =
                                         argsIn pin (ninEvalWX {acc = ctx.summaries}
                                                       {e = EUse uid args} {m} nH1)
-                                          p0 lookR evs
-                                      ownInXfer (HEMalloc _ _ evs) {e1 = EMalloc mid args} _ nH1 p0 lookR =
+                                          p0 lookR nboth evs
+                                      ownInXfer (HEMalloc _ _ evs) {e1 = EMalloc mid args} _ nH1 p0 lookR
+                                          nboth =
                                         argsIn pin (ninEvalWX {acc = ctx.summaries}
                                                       {e = EMalloc mid args} {m} nH1)
-                                          p0 lookR evs
-                                      ownInXfer (HECall _ _ _ evs) {e1 = ECall cid callee args} _ nH1 p0 lookR =
+                                          p0 lookR nboth evs
+                                      ownInXfer (HECall _ _ _ evs) {e1 = ECall cid callee args} _ nH1 p0 lookR
+                                          nboth =
                                         argsIn pin
                                           (callMissEvalX
                                              {acc = ctx.summaries}
                                              {ms = calleeModes ctx.summaries callee}
                                              (ninEvalWX {acc = ctx.summaries}
                                                 {e = ECall cid callee args} {m} nH1))
-                                          p0 lookR evs
+                                          p0 lookR nboth evs
                                       ownInXfer (HECallUser _ _ _ _ _ _ evs _ _ _)
-                                          {e1 = ECall cid callee args} _ nH1 p0 lookR =
+                                          {e1 = ECall cid callee args} _ nH1 p0 lookR nboth =
                                         argsIn pin
                                           (callMissEvalX
                                              {acc = ctx.summaries}
                                              {ms = calleeModes ctx.summaries callee}
                                              (ninEvalWX {acc = ctx.summaries}
                                                 {e = ECall cid callee args} {m} nH1))
-                                          p0 lookR evs
+                                          p0 lookR nboth evs
                                       ownInXfer (HECallUserRet _ _ _ _ _ _ evs _ _ _)
-                                          {e1 = ECall cid callee args} _ nH1 p0 lookR =
+                                          {e1 = ECall cid callee args} _ nH1 p0 lookR nboth =
                                         argsIn pin
                                           (callMissEvalX
                                              {acc = ctx.summaries}
                                              {ms = calleeModes ctx.summaries callee}
                                              (ninEvalWX {acc = ctx.summaries}
                                                 {e = ECall cid callee args} {m} nH1))
-                                          p0 lookR evs
-                                      ownInXfer (HERealloc _ _ _ _ evr) {e1 = ECall cid callee args} _ nH1 p0 lookR =
+                                          p0 lookR nboth evs
+                                      ownInXfer (HERealloc _ _ _ _ evr) {e1 = ECall cid callee args} _ nH1 p0 lookR
+                                          nboth =
                                         argsIn pin
                                           (callMissEvalX
                                              {acc = ctx.summaries}
                                              {ms = calleeModes ctx.summaries callee}
                                              (ninEvalWX {acc = ctx.summaries}
                                                 {e = ECall cid callee args} {m} nH1))
-                                          p0 lookR (reallocToExprs evr)
+                                          p0 lookR nboth (reallocToExprs evr)
                                       varIn : (envX : HEnv) -> (hX : Heap) ->
                                               (envY : HEnv) -> (hY : Heap) ->
                                               (nid : Nat) -> (n : Place) -> (nm : String) ->
@@ -18160,10 +18182,13 @@ mutual
                                                         (EAssign aid p nm Ptr rhs) m)) = False ->
                                               envX = env ->
                                               lookupH ownA.ownQ (setH p v env1) = Just (HVPtr a) ->
+                                              Not (shiftTo ownA.ownQ own.ownQ e = True,
+                                                   keepsDest ownA.ownQ own.ownQ e = True) ->
                                               placeIn ownA.ownQ
                                                 (valuePlaces (EAssign aid p nm Ptr rhs)
                                                  ++ xferLive live (EAssign aid p nm Ptr rhs)) = True
-                                      ptrIn aid p nm rhs v envX hX env1 h1 ev pE1 nH1 p0 lookR =
+                                      ptrIn aid p nm rhs v envX hX env1 h1 ev pE1 nH1 p0 lookR
+                                          nboth =
                                         pdGo (p == ownA.ownQ) Refl
                                         where
                                           pdGo : (eqb : Bool) -> p == ownA.ownQ = eqb ->
@@ -18687,12 +18712,12 @@ mutual
                                                                           (HEUse _ _ evs)
                                                                           lookI _ _ ninI =
                                                                         argsIn pin ninI p0 lookI
-                                                                          evs
+                                                                          nboth evs
                                                                       innerXfer {eI = EMalloc mid args}
                                                                           (HEMalloc _ _ evs)
                                                                           lookI _ _ ninI =
                                                                         argsIn pin ninI p0 lookI
-                                                                          evs
+                                                                          nboth evs
                                                                       innerXfer {eI = ECall cid callee args}
                                                                           (HECall _ _ _ evs)
                                                                           lookI _ _ ninI =
@@ -18703,7 +18728,7 @@ mutual
                                                                                 ctx.summaries
                                                                                 callee}
                                                                              ninI)
-                                                                          p0 lookI evs
+                                                                          p0 lookI nboth evs
                                                                       innerXfer {eI = ECall cid callee args}
                                                                           (HECallUser _ _ _ _ _ _ evs _ _ _)
                                                                           lookI _ _ ninI =
@@ -18714,7 +18739,7 @@ mutual
                                                                                 ctx.summaries
                                                                                 callee}
                                                                              ninI)
-                                                                          p0 lookI evs
+                                                                          p0 lookI nboth evs
                                                                       innerXfer {eI = ECall cid callee args}
                                                                           (HECallUserRet _ _ _ _ _ _ evs _ _ _)
                                                                           lookI _ _ ninI =
@@ -18725,7 +18750,7 @@ mutual
                                                                                 ctx.summaries
                                                                                 callee}
                                                                              ninI)
-                                                                          p0 lookI evs
+                                                                          p0 lookI nboth evs
                                                                       innerXfer {eI = ECall cid callee args}
                                                                           (HERealloc _ _ _ _ evr)
                                                                           lookI _ _ ninI =
@@ -18736,7 +18761,7 @@ mutual
                                                                                 ctx.summaries
                                                                                 callee}
                                                                              ninI)
-                                                                          p0 lookI
+                                                                          p0 lookI nboth
                                                                           (reallocToExprs evr)
                                                                       innerXfer {eI = EAssign iid3 d3 nm3 Ptr rhs3}
                                                                           (HEAsgPtr v3 env3 h3 ev3)
@@ -18925,7 +18950,7 @@ mutual
                                                               (HEUse _ _ evs)
                                                               lookU _ _ ninR xferEq =
                                                             let pinX = argsIn pin ninR p0 lookU
-                                                                         evs
+                                                                         nboth evs
                                                                 pinXfer = replace
                                                                   {p = \xs =>
                                                                     placeIn ownA.ownQ xs = True}
@@ -18946,7 +18971,7 @@ mutual
                                                               (HEMalloc _ _ evs)
                                                               lookU _ _ ninR xferEq =
                                                             let pinX = argsIn pin ninR p0 lookU
-                                                                         evs
+                                                                         nboth evs
                                                                 pinXfer = replace
                                                                   {p = \xs =>
                                                                     placeIn ownA.ownQ xs = True}
@@ -18973,7 +18998,7 @@ mutual
                                                                                ctx.summaries
                                                                                callee}
                                                                             ninR)
-                                                                         p0 lookU evs
+                                                                         p0 lookU nboth evs
                                                                 pinXfer = replace
                                                                   {p = \xs =>
                                                                     placeIn ownA.ownQ xs = True}
@@ -19000,7 +19025,7 @@ mutual
                                                                                ctx.summaries
                                                                                callee}
                                                                             ninR)
-                                                                         p0 lookU evs
+                                                                         p0 lookU nboth evs
                                                                 pinXfer = replace
                                                                   {p = \xs =>
                                                                     placeIn ownA.ownQ xs = True}
@@ -19027,7 +19052,7 @@ mutual
                                                                                ctx.summaries
                                                                                callee}
                                                                             ninR)
-                                                                         p0 lookU evs
+                                                                         p0 lookU nboth evs
                                                                 pinXfer = replace
                                                                   {p = \xs =>
                                                                     placeIn ownA.ownQ xs = True}
@@ -19054,7 +19079,7 @@ mutual
                                                                                ctx.summaries
                                                                                callee}
                                                                             ninR)
-                                                                         p0 lookU
+                                                                         p0 lookU nboth
                                                                          (reallocToExprs evr)
                                                                 pinXfer = replace
                                                                   {p = \xs =>
@@ -19100,16 +19125,425 @@ mutual
                                           (fst (argsEvalFoot ctx.summaries es)) = False ->
                                         env0 = env ->
                                         lookupH ownA.ownQ envArgs = Just (HVPtr a) ->
+                                        Not (shiftTo ownA.ownQ own.ownQ e = True,
+                                             keepsDest ownA.ownQ own.ownQ e = True) ->
                                         HEvalExprs {funs} env0 h0 es
                                           (HROk HVNone envArgs hArgs) ->
                                         placeIn ownA.ownQ (xferArgs live0 es) = True
-                                      argsIn pin0 _ p00 look0 HEArgsNil =
-                                        void (startVoid
-                                          (replace {p = \en => lookupH ownA.ownQ en =
-                                                      Just (HVPtr a)}
-                                             p00 look0)
-                                          ownA.ownLp)
+                                      -- empty args: `p00` puts dest intern `lookupH` at
+                                      -- START. Do not pass `ownA.ownLp` at `sc1` into
+                                      -- `startVoid`. Miss of `W` of `e` keeps Unique Own
+                                      -- START (`exprKeepUniqInv`) and `noShiftContra`.
+                                      -- Unique-unsafe True True is Void (`nboth`):
+                                      -- `argsIn` is only `ownInXfer`, and `ownInXfer` is
+                                      -- only `both True False` / `both False`.
+                                      argsIn pin0 _ p00 look0 nboth HEArgsNil =
+                                        missE (placeIn ownA.ownQ
+                                                 (fst (argFootprint ctx.summaries e)))
+                                          Refl
+                                        where
+                                          lookS : lookupH ownA.ownQ env = Just (HVPtr a)
+                                          lookS = replace
+                                                    {p = \en => lookupH ownA.ownQ en =
+                                                                  Just (HVPtr a)}
+                                                    p00 look0
+                                          missE : (b : Bool) ->
+                                                  placeIn ownA.ownQ
+                                                    (fst (argFootprint ctx.summaries e))
+                                                  = b ->
+                                                  placeIn ownA.ownQ
+                                                    (xferArgs live0 []) = True
+                                          missE False ninE =
+                                            let (stD ** (lpD, _, safeD, _)) =
+                                                  exprKeepUniqInv {e} {p = ownA.ownQ}
+                                                    ninE pE
+                                                    ownA.ownLp ownA.ownHas
+                                                    ownA.ownSafe ownA.ownNb
+                                            in void (noShiftContra oa ne
+                                                       own.ownLook own.ownLp
+                                                       own.ownSafe own.ownHas
+                                                       own.ownNb
+                                                       lookS lpD safeD)
+                                          missE True pinE =
+                                            inLive (placeIn ownA.ownQ live0) Refl
+                                            where
+                                              inLive : (b : Bool) ->
+                                                       placeIn ownA.ownQ live0 = b ->
+                                                       placeIn ownA.ownQ
+                                                         (xferArgs live0 []) = True
+                                              inLive True pinL = pinL
+                                              inLive False nL =
+                                                uGo (oa.tracked ownA.ownQ (HVPtr a) lookS)
+                                                where
+                                                  uGo : (tr : (stD **
+                                                          lookupPlace ownA.ownQ sc =
+                                                            Just stD)) ->
+                                                        placeIn ownA.ownQ
+                                                          (xferArgs live0 []) = True
+                                                  uGo (stD ** lpD) =
+                                                    uD (unsafeUse stD) Refl
+                                                    where
+                                                      uD : (b : Bool) ->
+                                                           unsafeUse stD = b ->
+                                                           placeIn ownA.ownQ
+                                                             (xferArgs live0 []) = True
+                                                      uD False safeD =
+                                                        void (startVoidSafe lookS lpD safeD)
+                                                      uD True _ =
+                                                        rem (shiftTos ownA.ownQ own.ownQ [])
+                                                          Refl
+                                                        where
+                                                          rem : (h : Bool) ->
+                                                                shiftTos ownA.ownQ own.ownQ []
+                                                                = h ->
+                                                                placeIn ownA.ownQ
+                                                                  (xferArgs live0 []) = True
+                                                          rem True ph =
+                                                            void (trueNotFalse (sym ph))
+                                                          rem False _ =
+                                                            eSh (shiftTo ownA.ownQ own.ownQ e)
+                                                              (keepsDest ownA.ownQ own.ownQ e)
+                                                              Refl Refl
+                                                            where
+                                                              eSh : (h : Bool) -> (k : Bool) ->
+                                                                    shiftTo ownA.ownQ own.ownQ e
+                                                                    = h ->
+                                                                    keepsDest ownA.ownQ own.ownQ e
+                                                                    = k ->
+                                                                    placeIn ownA.ownQ
+                                                                      (xferArgs live0 []) = True
+                                                              eSh h k ph pk =
+                                                                wGo h k ph pk
+                                                                where
+                                                                  mutual
+                                                                    wGo : (h0 : Bool) -> (k0 : Bool) ->
+                                                                        shiftTo ownA.ownQ own.ownQ e
+                                                                        = h0 ->
+                                                                        keepsDest ownA.ownQ own.ownQ e
+                                                                        = k0 ->
+                                                                        placeIn ownA.ownQ
+                                                                          (xferArgs live0 [])
+                                                                        = True
+                                                                    wGo True True ph0 pk0 =
+                                                                      void (nboth (ph0, pk0))
+                                                                    wGo True False _ _ =
+                                                                      wVoid e pinE
+                                                                    wGo False _ _ _ =
+                                                                      wVoid e pinE
+                                                                    wVoid : (e0 : Expr) ->
+                                                                          placeIn ownA.ownQ
+                                                                            (fst (argFootprint
+                                                                              ctx.summaries e0))
+                                                                          = True ->
+                                                                          placeIn ownA.ownQ
+                                                                            (xferArgs live0 [])
+                                                                          = True
+                                                                    wVoid (ELit _) pinW =
+                                                                      void (trueNotFalse (sym pinW))
+                                                                    wVoid (ENull _) pinW =
+                                                                      void (trueNotFalse (sym pinW))
+                                                                    wVoid (EVar _ _ _) pinW =
+                                                                      void (trueNotFalse (sym pinW))
+                                                                    wVoid (EUnsupported _ _) pinW =
+                                                                      void (trueNotFalse (sym pinW))
+                                                                    wVoid (EUse _ []) pinW =
+                                                                      void (trueNotFalse (sym pinW))
+                                                                    wVoid (EMalloc _ []) pinW =
+                                                                      void (trueNotFalse (sym pinW))
+                                                                    wVoid (ECall _ _ []) pinW =
+                                                                      void (trueNotFalse (sym pinW))
+                                                                    wVoid (EAssign _ _ _ Copy rhs)
+                                                                        pinW =
+                                                                      wVoid rhs pinW
+                                                                    wVoid (EUse _ (a :: as)) pinW =
+                                                                      hd (placeIn ownA.ownQ
+                                                                            (fst (argFootprint
+                                                                              ctx.summaries a)))
+                                                                        Refl
+                                                                      where
+                                                                        hd : (b : Bool) ->
+                                                                             placeIn ownA.ownQ
+                                                                               (fst (argFootprint
+                                                                                 ctx.summaries a))
+                                                                             = b ->
+                                                                             placeIn ownA.ownQ
+                                                                               (xferArgs live0 [])
+                                                                             = True
+                                                                        hd True pinA = wVoid a pinA
+                                                                        hd False nA =
+                                                                          tl as
+                                                                            (placeInSuffTrue
+                                                                               {xs = fst (argFootprint
+                                                                                 ctx.summaries a)}
+                                                                               {ys = fst (argsEvalFoot
+                                                                                 ctx.summaries as)}
+                                                                               pinW nA)
+                                                                    wVoid (EMalloc _ (a :: as)) pinW =
+                                                                      hd (placeIn ownA.ownQ
+                                                                            (fst (argFootprint
+                                                                              ctx.summaries a)))
+                                                                        Refl
+                                                                      where
+                                                                        hd : (b : Bool) ->
+                                                                             placeIn ownA.ownQ
+                                                                               (fst (argFootprint
+                                                                                 ctx.summaries a))
+                                                                             = b ->
+                                                                             placeIn ownA.ownQ
+                                                                               (xferArgs live0 [])
+                                                                             = True
+                                                                        hd True pinA = wVoid a pinA
+                                                                        hd False nA =
+                                                                          tl as
+                                                                            (placeInSuffTrue
+                                                                               {xs = fst (argFootprint
+                                                                                 ctx.summaries a)}
+                                                                               {ys = fst (argsEvalFoot
+                                                                                 ctx.summaries as)}
+                                                                               pinW nA)
+                                                                    wVoid (ECall cid callee
+                                                                             (a :: as)) pinW =
+                                                                      hd (placeIn ownA.ownQ
+                                                                            (fst (argModeFoot
+                                                                              ctx.summaries a
+                                                                              (consumeHead
+                                                                                (calleeModes
+                                                                                  ctx.summaries
+                                                                                  callee)))))
+                                                                        Refl
+                                                                      where
+                                                                        hd : (b : Bool) ->
+                                                                             placeIn ownA.ownQ
+                                                                               (fst (argModeFoot
+                                                                                 ctx.summaries a
+                                                                                 (consumeHead
+                                                                                   (calleeModes
+                                                                                     ctx.summaries
+                                                                                     callee))))
+                                                                             = b ->
+                                                                             placeIn ownA.ownQ
+                                                                               (xferArgs live0 [])
+                                                                             = True
+                                                                        hd True pinA =
+                                                                          wMode a
+                                                                            (consumeHead
+                                                                              (calleeModes
+                                                                                ctx.summaries
+                                                                                callee))
+                                                                            pinA
+                                                                        hd False nA =
+                                                                          tlCall as
+                                                                            (consumeTail
+                                                                              (calleeModes
+                                                                                ctx.summaries
+                                                                                callee))
+                                                                            (placeInSuffTrue
+                                                                               {xs = fst (argModeFoot
+                                                                                 ctx.summaries a
+                                                                                 (consumeHead
+                                                                                   (calleeModes
+                                                                                     ctx.summaries
+                                                                                     callee)))}
+                                                                               {ys = fst (argsCallFoot
+                                                                                 ctx.summaries as
+                                                                                 (consumeTail
+                                                                                   (calleeModes
+                                                                                     ctx.summaries
+                                                                                     callee)))}
+                                                                               pinW nA)
+                                                                    wVoid (EAssign aid p nm Ptr rhs)
+                                                                        pinW =
+                                                                      pd (p == ownA.ownQ) Refl
+                                                                      where
+                                                                        pinCons :
+                                                                          placeIn ownA.ownQ
+                                                                            (p :: fst (argFootprint
+                                                                              ctx.summaries rhs))
+                                                                          = True
+                                                                        pinCons = replace
+                                                                          {p = \w =>
+                                                                            placeIn ownA.ownQ w = True}
+                                                                          (argFootprintAsgPtr
+                                                                             {acc = ctx.summaries}
+                                                                             {id = aid} {nm} p rhs)
+                                                                          pinW
+                                                                        pd : (eqb : Bool) ->
+                                                                             p == ownA.ownQ = eqb ->
+                                                                             placeIn ownA.ownQ
+                                                                               (xferArgs live0 [])
+                                                                             = True
+                                                                        pd True _ =
+                                                                          rhsW (placeIn ownA.ownQ
+                                                                                  (fst (argFootprint
+                                                                                     ctx.summaries
+                                                                                     rhs)))
+                                                                            Refl
+                                                                          where
+                                                                            rhsW : (b : Bool) ->
+                                                                                   placeIn ownA.ownQ
+                                                                                     (fst (argFootprint
+                                                                                       ctx.summaries
+                                                                                       rhs))
+                                                                                   = b ->
+                                                                                   placeIn ownA.ownQ
+                                                                                     (xferArgs live0 [])
+                                                                                   = True
+                                                                            rhsW True pinR =
+                                                                              wVoid rhs pinR
+                                                                            rhsW False _ =
+                                                                              void (startVoidSafe
+                                                                                      lookS lpD
+                                                                                      ownA.ownSafe)
+                                                                        pd False neP =
+                                                                          let neD = trans
+                                                                                      (sym (eqNatSym
+                                                                                         p ownA.ownQ))
+                                                                                      neP
+                                                                          in case orTrue
+                                                                                    {a = ownA.ownQ == p}
+                                                                                    {b = placeIn
+                                                                                       ownA.ownQ
+                                                                                       (fst (argFootprint
+                                                                                          ctx.summaries
+                                                                                          rhs))}
+                                                                                    pinCons of
+                                                                               Left eqD =>
+                                                                                 void (trueNotFalse
+                                                                                   (trans (sym eqD)
+                                                                                      neD))
+                                                                               Right pinR =>
+                                                                                 wVoid rhs pinR
+                                                                    tl : (es0 : List Expr) ->
+                                                                         placeIn ownA.ownQ
+                                                                           (fst (argsEvalFoot
+                                                                             ctx.summaries es0))
+                                                                         = True ->
+                                                                         placeIn ownA.ownQ
+                                                                           (xferArgs live0 []) = True
+                                                                    tl [] pinT =
+                                                                      void (trueNotFalse (sym pinT))
+                                                                    tl (b :: bs) pinT =
+                                                                      wVoid (EUse 0 (b :: bs)) pinT
+                                                                    tlCall : (es0 : List Expr) ->
+                                                                             (ms0 : List Consume) ->
+                                                                             placeIn ownA.ownQ
+                                                                               (fst (argsCallFoot
+                                                                                 ctx.summaries es0
+                                                                                 ms0))
+                                                                             = True ->
+                                                                             placeIn ownA.ownQ
+                                                                               (xferArgs live0 [])
+                                                                             = True
+                                                                    tlCall [] _ pinT =
+                                                                      void (trueNotFalse (sym pinT))
+                                                                    tlCall (b :: bs) ms0 pinT =
+                                                                      hd (placeIn ownA.ownQ
+                                                                            (fst (argModeFoot
+                                                                              ctx.summaries b
+                                                                              (consumeHead ms0))))
+                                                                        Refl
+                                                                      where
+                                                                        hd : (b0 : Bool) ->
+                                                                             placeIn ownA.ownQ
+                                                                               (fst (argModeFoot
+                                                                                 ctx.summaries b
+                                                                                 (consumeHead ms0)))
+                                                                             = b0 ->
+                                                                             placeIn ownA.ownQ
+                                                                               (xferArgs live0 [])
+                                                                             = True
+                                                                        hd True pinA =
+                                                                          wMode b (consumeHead ms0)
+                                                                            pinA
+                                                                        hd False nA =
+                                                                          tlCall bs (consumeTail ms0)
+                                                                            (placeInSuffTrue
+                                                                               {xs = fst (argModeFoot
+                                                                                 ctx.summaries b
+                                                                                 (consumeHead ms0))}
+                                                                               {ys = fst (argsCallFoot
+                                                                                 ctx.summaries bs
+                                                                                 (consumeTail ms0))}
+                                                                               pinT nA)
+                                                                    wMode : (e1 : Expr) ->
+                                                                            (m1 : Consume) ->
+                                                                            placeIn ownA.ownQ
+                                                                              (fst (argModeFoot
+                                                                                ctx.summaries e1 m1))
+                                                                            = True ->
+                                                                            placeIn ownA.ownQ
+                                                                              (xferArgs live0 [])
+                                                                            = True
+                                                                    wMode e1 Never pinM =
+                                                                      wVoid e1 pinM
+                                                                    wMode e1 May pinM =
+                                                                      wr (placeIn ownA.ownQ
+                                                                            (fst (argFootprint
+                                                                              ctx.summaries e1)))
+                                                                        Refl
+                                                                      where
+                                                                        pinOpen :
+                                                                          placeIn ownA.ownQ
+                                                                            (fst (argFootprint
+                                                                              ctx.summaries e1)
+                                                                             ++
+                                                                             snd (argFootprint
+                                                                               ctx.summaries e1)
+                                                                             ++ valuePlaces e1)
+                                                                          = True
+                                                                        pinOpen = replace
+                                                                          {p = \xs =>
+                                                                            placeIn ownA.ownQ xs = True}
+                                                                          (modeWMayEq {acc = ctx.summaries}
+                                                                             e1)
+                                                                          pinM
+                                                                        wr : (b : Bool) ->
+                                                                             placeIn ownA.ownQ
+                                                                               (fst (argFootprint
+                                                                                 ctx.summaries e1))
+                                                                             = b ->
+                                                                             placeIn ownA.ownQ
+                                                                               (xferArgs live0 [])
+                                                                             = True
+                                                                        wr True pinW = wVoid e1 pinW
+                                                                        wr False nW =
+                                                                          void (startVoidSafe lookS lpD
+                                                                                  ownA.ownSafe)
+                                                                    wMode e1 Always pinM =
+                                                                      wr (placeIn ownA.ownQ
+                                                                            (fst (argFootprint
+                                                                              ctx.summaries e1)))
+                                                                        Refl
+                                                                      where
+                                                                        pinOpen :
+                                                                          placeIn ownA.ownQ
+                                                                            (fst (argFootprint
+                                                                              ctx.summaries e1)
+                                                                             ++
+                                                                             snd (argFootprint
+                                                                               ctx.summaries e1)
+                                                                             ++ valuePlaces e1)
+                                                                          = True
+                                                                        pinOpen = replace
+                                                                          {p = \xs =>
+                                                                            placeIn ownA.ownQ xs = True}
+                                                                          (modeWAlwaysEq
+                                                                             {acc = ctx.summaries} e1)
+                                                                          pinM
+                                                                        wr : (b : Bool) ->
+                                                                             placeIn ownA.ownQ
+                                                                               (fst (argFootprint
+                                                                                 ctx.summaries e1))
+                                                                             = b ->
+                                                                             placeIn ownA.ownQ
+                                                                               (xferArgs live0 [])
+                                                                             = True
+                                                                        wr True pinW = wVoid e1 pinW
+                                                                        wr False nW =
+                                                                          void (startVoidSafe lookS lpD
+                                                                                  ownA.ownSafe)
                                       argsIn {es = e1 :: es} {live0} pin0 nin0 p00 look0
+                                          nboth
                                           (HEArgsCons _ envM hM evE evEs) =
                                         capGo (placeIn ownA.ownQ (xferLive live0 e1)) Refl
                                         where
@@ -19138,8 +19572,8 @@ mutual
                                                   {d = ownA.ownQ} {q = own.ownQ}
                                                   {live = xferLive live0 e1} {es}
                                                   pinD0 pin1 nT kd
-                                              kdT False _ _ = argsIn pin1 nT p00 look0 evEs
-                                          capGo False _ = argsIn pin1 nT p00 look0 evEs
+                                              kdT False _ _ = argsIn pin1 nT p00 look0 nboth evEs
+                                          capGo False _ = argsIn pin1 nT p00 look0 nboth evEs
                         in unsGo (unsafeUse st) Refl
                   in vp (placeIn ownA.ownQ (valuePlaces e)) Refl
             ptrGo : (b : Addr) -> (eqb : Bool) -> a == b = eqb ->

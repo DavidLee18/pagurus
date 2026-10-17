@@ -89,6 +89,74 @@ mutual
   reallocUK uk HRNil = uk
   reallocUK uk (HRHeadOk _ _ _ evE evEs) = exprsUK (exprUK uk evE) evEs
 
+-- Statement-level UniqueKeys preservation, mirroring `exprUK`.
+-- Ok and Returned only: crash constructors do not produce a post-env.
+-- Pointer assign/decl bind via `uniqueKeysSetH` (same as `HEAsgPtr`).
+-- User-call bodies run in `bindFrame` (`bindFrameUK`); the caller post-env
+-- is the post-args env (`exprsUK`).
+mutual
+  export
+  ||| `UniqueKeys` survives an accepted `HOk` statement.
+  stmtUK : {funs : List Fun} -> {env, env' : HEnv} -> {h, h' : Heap} ->
+    {s : Stmt} ->
+    UniqueKeys env ->
+    HEvalStmt {funs} env h s (HOk env' h') ->
+    UniqueKeys env'
+  stmtUK uk (HSDropLive _ _ _) = uk
+  stmtUK uk (HSDropNone _) = uk
+  stmtUK uk (HSDropMiss _) = uk
+  stmtUK uk (HSAsgCopy _ _ _ ev) = exprUK uk ev
+  stmtUK uk (HSAsgPtr v _ _ ev) {s = SAssign _ n _ _ _} =
+    uniqueKeysSetH n v (exprUK uk ev)
+  stmtUK uk HSDeclNoneCopy = uk
+  stmtUK uk HSDeclNonePtr {s = SDecl _ n _ _ _} =
+    uniqueKeysSetH n HVNone uk
+  stmtUK uk (HSDeclJustCopy _ _ _ ev) = exprUK uk ev
+  stmtUK uk (HSDeclJustPtr v _ _ ev) {s = SDecl _ n _ _ _} =
+    uniqueKeysSetH n v (exprUK uk ev)
+  stmtUK uk (HSCall _ _ _ evs) = exprsUK uk evs
+  stmtUK uk (HSCallUser _ _ _ _ _ _ evs _ _ _) = exprsUK uk evs
+  stmtUK uk (HSCallUserRet _ _ _ _ _ _ evs _ _ _) = exprsUK uk evs
+  stmtUK uk (HSExpr _ _ _ ev) = exprUK uk ev
+  stmtUK uk HSUnsup = uk
+  stmtUK uk (HSBlock ev) = stmtsUK uk ev
+  stmtUK uk (HSIfThen _ _ _ evC evT) = stmtsUK (exprUK uk evC) evT
+  stmtUK uk (HSIfElse _ _ _ evC evE) = stmtsUK (exprUK uk evC) evE
+  stmtUK uk HSLoopZ = uk
+  stmtUK uk (HSLoopS _ _ evB evR) = stmtUK (stmtsUK uk evB) evR
+
+  export
+  stmtsUK : {funs : List Fun} -> {env, env' : HEnv} -> {h, h' : Heap} ->
+    {ss : List Stmt} ->
+    UniqueKeys env ->
+    HEvalStmts {funs} env h ss (HOk env' h') ->
+    UniqueKeys env'
+  stmtsUK uk HSNil = uk
+  stmtsUK uk (HSConsOk _ _ evS evSS) = stmtsUK (stmtUK uk evS) evSS
+
+  export
+  stmtUKRet : {funs : List Fun} -> {env, env' : HEnv} -> {h, h' : Heap} ->
+    {s : Stmt} ->
+    UniqueKeys env ->
+    HEvalStmt {funs} env h s (HReturned env' h') ->
+    UniqueKeys env'
+  stmtUKRet uk HSRetNone = uk
+  stmtUKRet uk (HSRet _ _ _ ev) = exprUK uk ev
+  stmtUKRet uk (HSBlock ev) = stmtsUKRet uk ev
+  stmtUKRet uk (HSIfThen _ _ _ evC evT) = stmtsUKRet (exprUK uk evC) evT
+  stmtUKRet uk (HSIfElse _ _ _ evC evE) = stmtsUKRet (exprUK uk evC) evE
+  stmtUKRet uk (HSLoopRet _ _ evB) = stmtsUKRet uk evB
+  stmtUKRet uk (HSLoopS _ _ evB evR) = stmtUKRet (stmtsUK uk evB) evR
+
+  export
+  stmtsUKRet : {funs : List Fun} -> {env, env' : HEnv} -> {h, h' : Heap} ->
+    {ss : List Stmt} ->
+    UniqueKeys env ->
+    HEvalStmts {funs} env h ss (HReturned env' h') ->
+    UniqueKeys env'
+  stmtsUKRet uk (HSConsRet _ _ evS) = stmtUKRet uk evS
+  stmtsUKRet uk (HSConsOk _ _ evS evSS) = stmtsUKRet (stmtUK uk evS) evSS
+
 ||| LiveNuo / owner-cell helpers bindOk used while it sat in the stmtsLN SCC.
 ||| `ownerCellIH` / `ownerFrameIH` match `OwnerIHs` fields without the
 ||| self-`auto` that is not strictly positive outside Restore.

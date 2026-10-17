@@ -18215,19 +18215,48 @@ mutual
                                                   {id = aid} {p} {q = own.ownQ} {nm} {rhs}
                                                   (ninEvalWX {acc = ctx.summaries}
                                                      {e = EAssign aid p nm Ptr rhs} {m} nH1)
-                                              lookStart : env1 = env ->
-                                                          lookupH ownA.ownQ env = Just (HVPtr a)
-                                              lookStart eq =
-                                                let look1 = trans
-                                                              (sym (lookupHSetMiss ownA.ownQ p v
-                                                                      env1
-                                                                      (trans (sym (eqNatSym p
-                                                                         ownA.ownQ)) pd)))
-                                                              lookR
-                                                in replace
-                                                     {p = \en => lookupH ownA.ownQ en =
-                                                                   Just (HVPtr a)}
-                                                     eq look1
+                                              -- dest intern != outer dest `p`. `setH p` does not
+                                              -- change that binding (`lookupHSetMiss`).
+                                              neDP : ownA.ownQ == p = False
+                                              neDP = trans (sym (eqNatSym p ownA.ownQ)) pd
+                                              look1 : lookupH ownA.ownQ env1 = Just (HVPtr a)
+                                              look1 = trans
+                                                        (sym (lookupHSetMiss ownA.ownQ p v
+                                                                env1 neDP))
+                                                        lookR
+                                              -- dest intern miss of assign `W` (`p :: W_rhs`).
+                                              ninAsgW :
+                                                placeIn ownA.ownQ
+                                                  (fst (argFootprint ctx.summaries rhs))
+                                                = False ->
+                                                placeIn ownA.ownQ
+                                                  (fst (argFootprint ctx.summaries
+                                                          (EAssign aid p nm Ptr rhs)))
+                                                = False
+                                              ninAsgW ninD =
+                                                replace
+                                                  {p = \w => placeIn ownA.ownQ w = False}
+                                                  (sym (argFootprintAsgPtr
+                                                          {acc = ctx.summaries}
+                                                          {id = aid} {nm} p rhs))
+                                                  (rewrite neDP in rewrite ninD in Refl)
+                                              liftAsgValue :
+                                                placeIn ownA.ownQ (valuePlaces rhs) = True ->
+                                                placeIn ownA.ownQ
+                                                  (valuePlaces
+                                                     (EAssign aid p nm Ptr rhs)) = True
+                                              liftAsgValue pinV = liveGo (maybeLivePtr rhs) Refl
+                                                where
+                                                  liveGo : (b : Bool) ->
+                                                           maybeLivePtr rhs = b ->
+                                                           placeIn ownA.ownQ
+                                                             (valuePlaces
+                                                                (EAssign aid p nm Ptr rhs))
+                                                           = True
+                                                  liveGo True pm =
+                                                    rewrite pm in placeInTail pinV
+                                                  liveGo False pm =
+                                                    rewrite pm in pinV
                                               ptrRest :
                                                 {w : HVal} -> {envR1 : HEnv} -> {hR1 : Heap} ->
                                                 HEvalExpr {funs} envX hX rhs
@@ -18237,7 +18266,812 @@ mutual
                                                      (EAssign aid p nm Ptr rhs)
                                                    ++ xferLive live
                                                         (EAssign aid p nm Ptr rhs)) = True
-                                              ptrRest _ = void (startVoid (lookStart p0) ownA.ownLp)
+                                              ptrRest _ =
+                                                destW (placeIn ownA.ownQ
+                                                         (fst (argFootprint ctx.summaries rhs)))
+                                                  Refl
+                                                where
+                                                  destW : (b : Bool) ->
+                                                          placeIn ownA.ownQ
+                                                            (fst (argFootprint
+                                                                    ctx.summaries rhs))
+                                                          = b ->
+                                                          placeIn ownA.ownQ
+                                                            (valuePlaces
+                                                               (EAssign aid p nm Ptr rhs)
+                                                             ++ xferLive live
+                                                                  (EAssign aid p nm Ptr rhs))
+                                                          = True
+                                                  -- rhs eval does not write dest intern:
+                                                  -- `asgPtrEnv` of this Ptr assign keeps the
+                                                  -- binding (`envX` → `setH p v env1`), then
+                                                  -- `p0` (`envX = env`). Do not assert
+                                                  -- `env1 = env`. Unique Own at START is
+                                                  -- `exprKeepUniqInv` of the same W miss.
+                                                  destW False ninD =
+                                                    let ninOuter = ninAsgW ninD
+                                                        frAsg = exprEnvFrameOf
+                                                                  {acc = ctx.summaries}
+                                                                  {env = envX} {h = hX}
+                                                                  {env' = setH p v env1}
+                                                                  {h' = h1}
+                                                                  {e = EAssign aid p nm Ptr rhs}
+                                                                  (HEAsgPtr v env1 h1 ev)
+                                                        lookX = trans
+                                                                  (sym (frAsg ownA.ownQ ninOuter))
+                                                                  lookR
+                                                        lookS = replace
+                                                                  {p = \en =>
+                                                                    lookupH ownA.ownQ en =
+                                                                      Just (HVPtr a)}
+                                                                  p0 lookX
+                                                        (stD ** (lpD, _, safeD, _)) =
+                                                          exprKeepUniqInv
+                                                            {e = EAssign aid p nm Ptr rhs}
+                                                            {p = ownA.ownQ}
+                                                            ninOuter pE1
+                                                            ownA.ownLp ownA.ownHas
+                                                            ownA.ownSafe ownA.ownNb
+                                                    in void (noShiftContra oa ne
+                                                               own.ownLook own.ownLp
+                                                               own.ownSafe own.ownHas
+                                                               own.ownNb
+                                                               lookS lpD safeD)
+                                                  destW True pinD =
+                                                    valGo (placeIn ownA.ownQ (valuePlaces rhs))
+                                                      Refl
+                                                    where
+                                                      valGo : (b : Bool) ->
+                                                              placeIn ownA.ownQ
+                                                                (valuePlaces rhs) = b ->
+                                                              placeIn ownA.ownQ
+                                                                (valuePlaces
+                                                                   (EAssign aid p nm Ptr rhs)
+                                                                 ++ xferLive live
+                                                                      (EAssign aid p nm Ptr rhs))
+                                                              = True
+                                                      valGo True pinV =
+                                                        placeInAppendL
+                                                          {xs = valuePlaces
+                                                                  (EAssign aid p nm Ptr rhs)}
+                                                          {ys = xferLive live
+                                                                  (EAssign aid p nm Ptr rhs)}
+                                                          (liftAsgValue pinV)
+                                                      valGo False nV =
+                                                        hitGo ev look1 pinD nV ninRhs Refl
+                                                        where
+                                                          hitGo :
+                                                            {eR : Expr} -> {wR : HVal} ->
+                                                            {envR : HEnv} -> {hR : Heap} ->
+                                                            HEvalExpr {funs} envX hX eR
+                                                              (HROk wR envR hR) ->
+                                                            lookupH ownA.ownQ envR =
+                                                              Just (HVPtr a) ->
+                                                            placeIn ownA.ownQ
+                                                              (fst (argFootprint
+                                                                      ctx.summaries eR))
+                                                            = True ->
+                                                            placeIn ownA.ownQ
+                                                              (valuePlaces eR) = False ->
+                                                            placeIn own.ownQ
+                                                              (fst (argFootprint
+                                                                      ctx.summaries eR))
+                                                            = False ->
+                                                            xferLive live rhs =
+                                                              xferLive live eR ->
+                                                            placeIn ownA.ownQ
+                                                              (valuePlaces
+                                                                 (EAssign aid p nm Ptr rhs)
+                                                               ++ xferLive live
+                                                                    (EAssign aid p nm Ptr rhs))
+                                                            = True
+                                                          hitGo HELit _ pinW _ _ _ =
+                                                            void (trueNotFalse
+                                                              (trans (sym pinW) Refl))
+                                                          hitGo HENull _ pinW _ _ _ =
+                                                            void (trueNotFalse
+                                                              (trans (sym pinW) Refl))
+                                                          hitGo HEUnsup _ pinW _ _ _ =
+                                                            void (trueNotFalse
+                                                              (trans (sym pinW) Refl))
+                                                          hitGo (HEVarLive _ _ _) _ pinW _ _ _ =
+                                                            void (trueNotFalse
+                                                              (trans (sym pinW) Refl))
+                                                          hitGo (HEVarNone _) _ pinW _ _ _ =
+                                                            void (trueNotFalse
+                                                              (trans (sym pinW) Refl))
+                                                          hitGo (HEVarCopy _) _ pinW _ _ _ =
+                                                            void (trueNotFalse
+                                                              (trans (sym pinW) Refl))
+                                                          hitGo (HEVarMiss _) _ pinW _ _ _ =
+                                                            void (trueNotFalse
+                                                              (trans (sym pinW) Refl))
+                                                          hitGo {eR = EAssign cid n nmC Copy rhsC}
+                                                              (HEAsgCopy _ _ _ evR)
+                                                              lookC pinW nVal ninR xferEq =
+                                                            hitGo evR lookC
+                                                              (replace
+                                                                 {p = \wr =>
+                                                                   placeIn ownA.ownQ (fst wr)
+                                                                   = True}
+                                                                 (argFootprintCopyEq
+                                                                    {acc = ctx.summaries}
+                                                                    {id = cid} {n} {nm = nmC}
+                                                                    {rhs = rhsC})
+                                                                 pinW)
+                                                              (replace
+                                                                 {p = \vs =>
+                                                                   placeIn ownA.ownQ vs = False}
+                                                                 (valuePlacesCopyEq
+                                                                    {id = cid} {n} {nm = nmC}
+                                                                    {rhs = rhsC})
+                                                                 nVal)
+                                                              (replace
+                                                                 {p = \wr =>
+                                                                   placeIn own.ownQ (fst wr)
+                                                                   = False}
+                                                                 (argFootprintCopyEq
+                                                                    {acc = ctx.summaries}
+                                                                    {id = cid} {n} {nm = nmC}
+                                                                    {rhs = rhsC})
+                                                                 ninR)
+                                                              (trans xferEq
+                                                                 (xferLiveCopyEq
+                                                                    {live} {id = cid} {n}
+                                                                    {nm = nmC} {rhs = rhsC}))
+                                                          hitGo {eR = EAssign iid d nm2 Ptr rhs2}
+                                                              (HEAsgPtr v2 env2 h2 evR)
+                                                              lookN pinW nVal ninR xferEq =
+                                                            ndGo (d == ownA.ownQ) Refl
+                                                            where
+                                                              ndGo : (eqb : Bool) ->
+                                                                     d == ownA.ownQ = eqb ->
+                                                                     placeIn ownA.ownQ
+                                                                       (valuePlaces
+                                                                          (EAssign aid p nm
+                                                                             Ptr rhs)
+                                                                        ++ xferLive live
+                                                                             (EAssign aid p nm
+                                                                                Ptr rhs))
+                                                                     = True
+                                                              ndGo True pd2 =
+                                                                let peq = eqNatTrue d
+                                                                            ownA.ownQ pd2
+                                                                    lookSet = replace
+                                                                      {p = \q =>
+                                                                        lookupH q
+                                                                          (setH d v2 env2) =
+                                                                        Just (HVPtr a)}
+                                                                      (sym peq) lookN
+                                                                    vEq = justInjH
+                                                                      (trans (sym lookSet)
+                                                                         (lookupHSetHit d v2
+                                                                            env2))
+                                                                    pm = exprMaybeLive rhs2 evR
+                                                                           (sym vEq)
+                                                                    pinNested = replace
+                                                                      {p = \q =>
+                                                                        placeIn q
+                                                                          (valuePlaces
+                                                                             (EAssign iid d
+                                                                                nm2 Ptr rhs2))
+                                                                        = True}
+                                                                      peq
+                                                                      (replace
+                                                                         {p = \xs =>
+                                                                           placeIn d xs = True}
+                                                                         (sym (valuePlacesPtr
+                                                                                 iid d nm2
+                                                                                 rhs2 pm))
+                                                                         (placeInHeadX d
+                                                                            (valuePlaces rhs2)))
+                                                                in void (trueNotFalse
+                                                                     (trans (sym pinNested)
+                                                                        nVal))
+                                                              ndGo False pd2 =
+                                                                let neD = trans
+                                                                            (sym (eqNatSym d
+                                                                               ownA.ownQ))
+                                                                            pd2
+                                                                    pinCons = replace
+                                                                      {p = \w =>
+                                                                        placeIn ownA.ownQ w
+                                                                        = True}
+                                                                      (argFootprintAsgPtr
+                                                                         {acc = ctx.summaries}
+                                                                         {id = iid} {nm = nm2}
+                                                                         d rhs2)
+                                                                      pinW
+                                                                    lookInner = trans
+                                                                      (sym (lookupHSetMiss
+                                                                              ownA.ownQ d v2
+                                                                              env2 neD))
+                                                                      lookN
+                                                                    ninInnerL = snd
+                                                                      (ninAsgPtrW
+                                                                         {acc = ctx.summaries}
+                                                                         {id = iid} {dest = d}
+                                                                         {nm = nm2} {rhs = rhs2}
+                                                                         {p = own.ownQ} ninR)
+                                                                in case orTrue
+                                                                          {a = ownA.ownQ == d}
+                                                                          {b = placeIn ownA.ownQ
+                                                                             (fst (argFootprint
+                                                                                     ctx.summaries
+                                                                                     rhs2))}
+                                                                          pinCons of
+                                                                     Left eqD =>
+                                                                       void (trueNotFalse
+                                                                         (trans (sym eqD) neD))
+                                                                     Right pinInner =>
+                                                                       inVal pinInner lookInner
+                                                                         ninInnerL
+                                                                         (placeIn ownA.ownQ
+                                                                            (valuePlaces rhs2))
+                                                                         Refl
+                                                                where
+                                                                  inVal :
+                                                                    placeIn ownA.ownQ
+                                                                      (fst (argFootprint
+                                                                              ctx.summaries
+                                                                              rhs2)) = True ->
+                                                                    lookupH ownA.ownQ env2 =
+                                                                      Just (HVPtr a) ->
+                                                                    placeIn own.ownQ
+                                                                      (fst (argFootprint
+                                                                              ctx.summaries
+                                                                              rhs2)) = False ->
+                                                                    (b : Bool) ->
+                                                                    placeIn ownA.ownQ
+                                                                      (valuePlaces rhs2) = b ->
+                                                                    placeIn ownA.ownQ
+                                                                      (valuePlaces
+                                                                         (EAssign aid p nm
+                                                                            Ptr rhs)
+                                                                       ++ xferLive live
+                                                                            (EAssign aid p nm
+                                                                               Ptr rhs))
+                                                                    = True
+                                                                  inVal _ _ _ True pinV2 =
+                                                                    void (trueNotFalse
+                                                                      (trans (sym
+                                                                         (liveGo
+                                                                            (maybeLivePtr rhs2)
+                                                                            Refl))
+                                                                         nVal))
+                                                                    where
+                                                                      liveGo : (b : Bool) ->
+                                                                               maybeLivePtr
+                                                                                 rhs2 = b ->
+                                                                               placeIn ownA.ownQ
+                                                                                 (valuePlaces
+                                                                                    (EAssign
+                                                                                       iid d
+                                                                                       nm2 Ptr
+                                                                                       rhs2))
+                                                                               = True
+                                                                      liveGo True pm =
+                                                                        rewrite pm in
+                                                                          placeInTail pinV2
+                                                                      liveGo False pm =
+                                                                        rewrite pm in pinV2
+                                                                  inVal pinInner lookInner
+                                                                      ninInnerL False nV2 =
+                                                                    let pinRhs2 = innerXfer evR
+                                                                                    lookInner
+                                                                                    pinInner
+                                                                                    nV2
+                                                                                    ninInnerL
+                                                                        pinMid = xferLivePtrNeq
+                                                                          {d = ownA.ownQ} {p = d}
+                                                                          {live} {id = iid}
+                                                                          {nm = nm2}
+                                                                          {rhs = rhs2} pd2
+                                                                          pinRhs2
+                                                                        pinXfer = replace
+                                                                          {p = \xs =>
+                                                                            placeIn ownA.ownQ
+                                                                              xs = True}
+                                                                          (sym xferEq) pinMid
+                                                                        pinL = xferLivePtrNeq
+                                                                          {d = ownA.ownQ} {p}
+                                                                          {live} {id = aid}
+                                                                          {nm} {rhs} pd pinXfer
+                                                                    in placeInJoinR
+                                                                         {xs = valuePlaces
+                                                                            (EAssign aid p nm
+                                                                               Ptr rhs)}
+                                                                         {ys = xferLive live
+                                                                            (EAssign aid p nm
+                                                                               Ptr rhs)}
+                                                                         pinL
+                                                                    where
+                                                                      -- dest intern in
+                                                                      -- `xferLive` of the
+                                                                      -- walked expr. Matching
+                                                                      -- unifies that expr
+                                                                      -- (`xferArgs` of Use).
+                                                                      -- Nested dest `d` and
+                                                                      -- outer dest `p` are
+                                                                      -- the two `xferLivePtrNeq`
+                                                                      -- lifts above, not here.
+                                                                      innerXfer :
+                                                                        {eI : Expr} ->
+                                                                        {wI : HVal} ->
+                                                                        {envI : HEnv} ->
+                                                                        {hI : Heap} ->
+                                                                        HEvalExpr {funs} envX hX
+                                                                          eI (HROk wI envI hI) ->
+                                                                        lookupH ownA.ownQ envI =
+                                                                          Just (HVPtr a) ->
+                                                                        placeIn ownA.ownQ
+                                                                          (fst (argFootprint
+                                                                                  ctx.summaries
+                                                                                  eI)) = True ->
+                                                                        placeIn ownA.ownQ
+                                                                          (valuePlaces eI) =
+                                                                          False ->
+                                                                        placeIn own.ownQ
+                                                                          (fst (argFootprint
+                                                                                  ctx.summaries
+                                                                                  eI)) = False ->
+                                                                        placeIn ownA.ownQ
+                                                                          (xferLive live eI) =
+                                                                          True
+                                                                      innerXfer HELit _ pinW _ _ =
+                                                                        void (trueNotFalse
+                                                                          (trans (sym pinW)
+                                                                             Refl))
+                                                                      innerXfer HENull _ pinW _ _ =
+                                                                        void (trueNotFalse
+                                                                          (trans (sym pinW)
+                                                                             Refl))
+                                                                      innerXfer HEUnsup _ pinW _ _ =
+                                                                        void (trueNotFalse
+                                                                          (trans (sym pinW)
+                                                                             Refl))
+                                                                      innerXfer (HEVarLive _ _ _)
+                                                                          _ pinW _ _ =
+                                                                        void (trueNotFalse
+                                                                          (trans (sym pinW)
+                                                                             Refl))
+                                                                      innerXfer (HEVarNone _)
+                                                                          _ pinW _ _ =
+                                                                        void (trueNotFalse
+                                                                          (trans (sym pinW)
+                                                                             Refl))
+                                                                      innerXfer (HEVarCopy _)
+                                                                          _ pinW _ _ =
+                                                                        void (trueNotFalse
+                                                                          (trans (sym pinW)
+                                                                             Refl))
+                                                                      innerXfer (HEVarMiss _)
+                                                                          _ pinW _ _ =
+                                                                        void (trueNotFalse
+                                                                          (trans (sym pinW)
+                                                                             Refl))
+                                                                      innerXfer {eI = EAssign cid n nmC Copy rhsC}
+                                                                          (HEAsgCopy _ _ _ evC)
+                                                                          lookC pinW nVal ninR =
+                                                                        innerXfer evC lookC
+                                                                          (replace
+                                                                             {p = \wr =>
+                                                                               placeIn ownA.ownQ
+                                                                                 (fst wr) = True}
+                                                                             (argFootprintCopyEq
+                                                                                {acc = ctx.summaries}
+                                                                                {id = cid} {n}
+                                                                                {nm = nmC}
+                                                                                {rhs = rhsC})
+                                                                             pinW)
+                                                                          (replace
+                                                                             {p = \vs =>
+                                                                               placeIn ownA.ownQ
+                                                                                 vs = False}
+                                                                             (valuePlacesCopyEq
+                                                                                {id = cid} {n}
+                                                                                {nm = nmC}
+                                                                                {rhs = rhsC})
+                                                                             nVal)
+                                                                          (replace
+                                                                             {p = \wr =>
+                                                                               placeIn own.ownQ
+                                                                                 (fst wr) = False}
+                                                                             (argFootprintCopyEq
+                                                                                {acc = ctx.summaries}
+                                                                                {id = cid} {n}
+                                                                                {nm = nmC}
+                                                                                {rhs = rhsC})
+                                                                             ninR)
+                                                                      innerXfer {eI = EUse uid args}
+                                                                          (HEUse _ _ evs)
+                                                                          lookI _ _ ninI =
+                                                                        argsIn pin ninI p0 lookI
+                                                                          evs
+                                                                      innerXfer {eI = EMalloc mid args}
+                                                                          (HEMalloc _ _ evs)
+                                                                          lookI _ _ ninI =
+                                                                        argsIn pin ninI p0 lookI
+                                                                          evs
+                                                                      innerXfer {eI = ECall cid callee args}
+                                                                          (HECall _ _ _ evs)
+                                                                          lookI _ _ ninI =
+                                                                        argsIn pin
+                                                                          (callMissEvalX
+                                                                             {acc = ctx.summaries}
+                                                                             {ms = calleeModes
+                                                                                ctx.summaries
+                                                                                callee}
+                                                                             ninI)
+                                                                          p0 lookI evs
+                                                                      innerXfer {eI = ECall cid callee args}
+                                                                          (HECallUser _ _ _ _ _ _ evs _ _ _)
+                                                                          lookI _ _ ninI =
+                                                                        argsIn pin
+                                                                          (callMissEvalX
+                                                                             {acc = ctx.summaries}
+                                                                             {ms = calleeModes
+                                                                                ctx.summaries
+                                                                                callee}
+                                                                             ninI)
+                                                                          p0 lookI evs
+                                                                      innerXfer {eI = ECall cid callee args}
+                                                                          (HECallUserRet _ _ _ _ _ _ evs _ _ _)
+                                                                          lookI _ _ ninI =
+                                                                        argsIn pin
+                                                                          (callMissEvalX
+                                                                             {acc = ctx.summaries}
+                                                                             {ms = calleeModes
+                                                                                ctx.summaries
+                                                                                callee}
+                                                                             ninI)
+                                                                          p0 lookI evs
+                                                                      innerXfer {eI = ECall cid callee args}
+                                                                          (HERealloc _ _ _ _ evr)
+                                                                          lookI _ _ ninI =
+                                                                        argsIn pin
+                                                                          (callMissEvalX
+                                                                             {acc = ctx.summaries}
+                                                                             {ms = calleeModes
+                                                                                ctx.summaries
+                                                                                callee}
+                                                                             ninI)
+                                                                          p0 lookI
+                                                                          (reallocToExprs evr)
+                                                                      innerXfer {eI = EAssign iid3 d3 nm3 Ptr rhs3}
+                                                                          (HEAsgPtr v3 env3 h3 ev3)
+                                                                          lookN pinW nVal ninR =
+                                                                        ndI (d3 == ownA.ownQ) Refl
+                                                                        where
+                                                                          ndI : (eqb : Bool) ->
+                                                                                d3 == ownA.ownQ =
+                                                                                  eqb ->
+                                                                                placeIn ownA.ownQ
+                                                                                  (xferLive live
+                                                                                     (EAssign iid3
+                                                                                        d3 nm3 Ptr
+                                                                                        rhs3)) =
+                                                                                  True
+                                                                          ndI True pd3 =
+                                                                            let peq = eqNatTrue d3
+                                                                                        ownA.ownQ
+                                                                                        pd3
+                                                                                lookSet = replace
+                                                                                  {p = \q =>
+                                                                                    lookupH q
+                                                                                      (setH d3 v3
+                                                                                         env3) =
+                                                                                    Just (HVPtr a)}
+                                                                                  (sym peq) lookN
+                                                                                vEq = justInjH
+                                                                                  (trans (sym lookSet)
+                                                                                     (lookupHSetHit
+                                                                                        d3 v3 env3))
+                                                                                pm = exprMaybeLive
+                                                                                       rhs3 ev3
+                                                                                       (sym vEq)
+                                                                                pinNested = replace
+                                                                                  {p = \q =>
+                                                                                    placeIn q
+                                                                                      (valuePlaces
+                                                                                         (EAssign
+                                                                                            iid3 d3
+                                                                                            nm3 Ptr
+                                                                                            rhs3))
+                                                                                    = True}
+                                                                                  peq
+                                                                                  (replace
+                                                                                     {p = \xs =>
+                                                                                       placeIn d3
+                                                                                         xs = True}
+                                                                                     (sym
+                                                                                        (valuePlacesPtr
+                                                                                           iid3 d3
+                                                                                           nm3 rhs3
+                                                                                           pm))
+                                                                                     (placeInHeadX d3
+                                                                                        (valuePlaces
+                                                                                           rhs3)))
+                                                                            in void (trueNotFalse
+                                                                                 (trans
+                                                                                    (sym pinNested)
+                                                                                    nVal))
+                                                                          ndI False pd3 =
+                                                                            let neD3 = trans
+                                                                                         (sym
+                                                                                            (eqNatSym
+                                                                                               d3
+                                                                                               ownA.ownQ))
+                                                                                         pd3
+                                                                                pinCons = replace
+                                                                                  {p = \w =>
+                                                                                    placeIn
+                                                                                      ownA.ownQ w
+                                                                                    = True}
+                                                                                  (argFootprintAsgPtr
+                                                                                     {acc = ctx.summaries}
+                                                                                     {id = iid3}
+                                                                                     {nm = nm3}
+                                                                                     d3 rhs3)
+                                                                                  pinW
+                                                                                look3 = trans
+                                                                                  (sym
+                                                                                     (lookupHSetMiss
+                                                                                        ownA.ownQ d3
+                                                                                        v3 env3
+                                                                                        neD3))
+                                                                                  lookN
+                                                                                nin3 = snd
+                                                                                  (ninAsgPtrW
+                                                                                     {acc = ctx.summaries}
+                                                                                     {id = iid3}
+                                                                                     {dest = d3}
+                                                                                     {nm = nm3}
+                                                                                     {rhs = rhs3}
+                                                                                     {p = own.ownQ}
+                                                                                     ninR)
+                                                                            in case orTrue
+                                                                                      {a = ownA.ownQ
+                                                                                         == d3}
+                                                                                      {b = placeIn
+                                                                                         ownA.ownQ
+                                                                                         (fst
+                                                                                            (argFootprint
+                                                                                               ctx.summaries
+                                                                                               rhs3))}
+                                                                                      pinCons of
+                                                                                 Left eqD =>
+                                                                                   void
+                                                                                     (trueNotFalse
+                                                                                        (trans
+                                                                                           (sym eqD)
+                                                                                           neD3))
+                                                                                 Right pin3W =>
+                                                                                   inVI pin3W look3
+                                                                                     nin3
+                                                                                     (placeIn
+                                                                                        ownA.ownQ
+                                                                                        (valuePlaces
+                                                                                           rhs3))
+                                                                                     Refl
+                                                                            where
+                                                                              inVI :
+                                                                                placeIn ownA.ownQ
+                                                                                  (fst (argFootprint
+                                                                                          ctx.summaries
+                                                                                          rhs3)) =
+                                                                                  True ->
+                                                                                lookupH ownA.ownQ
+                                                                                  env3 =
+                                                                                  Just (HVPtr a) ->
+                                                                                placeIn own.ownQ
+                                                                                  (fst (argFootprint
+                                                                                          ctx.summaries
+                                                                                          rhs3)) =
+                                                                                  False ->
+                                                                                (b : Bool) ->
+                                                                                placeIn ownA.ownQ
+                                                                                  (valuePlaces rhs3)
+                                                                                = b ->
+                                                                                placeIn ownA.ownQ
+                                                                                  (xferLive live
+                                                                                     (EAssign iid3 d3
+                                                                                        nm3 Ptr
+                                                                                        rhs3)) =
+                                                                                  True
+                                                                              inVI _ _ _ True pinV3 =
+                                                                                void (trueNotFalse
+                                                                                  (trans (sym
+                                                                                     (liveGo3
+                                                                                        (maybeLivePtr
+                                                                                           rhs3)
+                                                                                        Refl))
+                                                                                     nVal))
+                                                                                where
+                                                                                  liveGo3 :
+                                                                                    (b : Bool) ->
+                                                                                    maybeLivePtr
+                                                                                      rhs3 = b ->
+                                                                                    placeIn
+                                                                                      ownA.ownQ
+                                                                                      (valuePlaces
+                                                                                         (EAssign
+                                                                                            iid3 d3
+                                                                                            nm3 Ptr
+                                                                                            rhs3))
+                                                                                    = True
+                                                                                  liveGo3 True pm =
+                                                                                    rewrite pm in
+                                                                                      placeInTail
+                                                                                        pinV3
+                                                                                  liveGo3 False pm =
+                                                                                    rewrite pm in
+                                                                                      pinV3
+                                                                              inVI pin3W look3 nin3
+                                                                                  False nV3 =
+                                                                                let pinRhs3 =
+                                                                                      innerXfer ev3
+                                                                                        look3 pin3W
+                                                                                        nV3 nin3
+                                                                                in xferLivePtrNeq
+                                                                                     {d = ownA.ownQ}
+                                                                                     {p = d3}
+                                                                                     {live}
+                                                                                     {id = iid3}
+                                                                                     {nm = nm3}
+                                                                                     {rhs = rhs3}
+                                                                                     pd3 pinRhs3
+                                                          hitGo {eR = EUse uid args}
+                                                              (HEUse _ _ evs)
+                                                              lookU _ _ ninR xferEq =
+                                                            let pinX = argsIn pin ninR p0 lookU
+                                                                         evs
+                                                                pinXfer = replace
+                                                                  {p = \xs =>
+                                                                    placeIn ownA.ownQ xs = True}
+                                                                  (sym xferEq) pinX
+                                                                pinL = xferLivePtrNeq
+                                                                         {d = ownA.ownQ} {p}
+                                                                         {live} {id = aid} {nm}
+                                                                         {rhs} pd pinXfer
+                                                            in placeInJoinR
+                                                                 {xs = valuePlaces
+                                                                         (EAssign aid p nm
+                                                                            Ptr rhs)}
+                                                                 {ys = xferLive live
+                                                                         (EAssign aid p nm
+                                                                            Ptr rhs)}
+                                                                 pinL
+                                                          hitGo {eR = EMalloc mid args}
+                                                              (HEMalloc _ _ evs)
+                                                              lookU _ _ ninR xferEq =
+                                                            let pinX = argsIn pin ninR p0 lookU
+                                                                         evs
+                                                                pinXfer = replace
+                                                                  {p = \xs =>
+                                                                    placeIn ownA.ownQ xs = True}
+                                                                  (sym xferEq) pinX
+                                                                pinL = xferLivePtrNeq
+                                                                         {d = ownA.ownQ} {p}
+                                                                         {live} {id = aid} {nm}
+                                                                         {rhs} pd pinXfer
+                                                            in placeInJoinR
+                                                                 {xs = valuePlaces
+                                                                         (EAssign aid p nm
+                                                                            Ptr rhs)}
+                                                                 {ys = xferLive live
+                                                                         (EAssign aid p nm
+                                                                            Ptr rhs)}
+                                                                 pinL
+                                                          hitGo {eR = ECall cid callee args}
+                                                              (HECall _ _ _ evs)
+                                                              lookU _ _ ninR xferEq =
+                                                            let pinX = argsIn pin
+                                                                         (callMissEvalX
+                                                                            {acc = ctx.summaries}
+                                                                            {ms = calleeModes
+                                                                               ctx.summaries
+                                                                               callee}
+                                                                            ninR)
+                                                                         p0 lookU evs
+                                                                pinXfer = replace
+                                                                  {p = \xs =>
+                                                                    placeIn ownA.ownQ xs = True}
+                                                                  (sym xferEq) pinX
+                                                                pinL = xferLivePtrNeq
+                                                                         {d = ownA.ownQ} {p}
+                                                                         {live} {id = aid} {nm}
+                                                                         {rhs} pd pinXfer
+                                                            in placeInJoinR
+                                                                 {xs = valuePlaces
+                                                                         (EAssign aid p nm
+                                                                            Ptr rhs)}
+                                                                 {ys = xferLive live
+                                                                         (EAssign aid p nm
+                                                                            Ptr rhs)}
+                                                                 pinL
+                                                          hitGo {eR = ECall cid callee args}
+                                                              (HECallUser _ _ _ _ _ _ evs _ _ _)
+                                                              lookU _ _ ninR xferEq =
+                                                            let pinX = argsIn pin
+                                                                         (callMissEvalX
+                                                                            {acc = ctx.summaries}
+                                                                            {ms = calleeModes
+                                                                               ctx.summaries
+                                                                               callee}
+                                                                            ninR)
+                                                                         p0 lookU evs
+                                                                pinXfer = replace
+                                                                  {p = \xs =>
+                                                                    placeIn ownA.ownQ xs = True}
+                                                                  (sym xferEq) pinX
+                                                                pinL = xferLivePtrNeq
+                                                                         {d = ownA.ownQ} {p}
+                                                                         {live} {id = aid} {nm}
+                                                                         {rhs} pd pinXfer
+                                                            in placeInJoinR
+                                                                 {xs = valuePlaces
+                                                                         (EAssign aid p nm
+                                                                            Ptr rhs)}
+                                                                 {ys = xferLive live
+                                                                         (EAssign aid p nm
+                                                                            Ptr rhs)}
+                                                                 pinL
+                                                          hitGo {eR = ECall cid callee args}
+                                                              (HECallUserRet _ _ _ _ _ _ evs _ _ _)
+                                                              lookU _ _ ninR xferEq =
+                                                            let pinX = argsIn pin
+                                                                         (callMissEvalX
+                                                                            {acc = ctx.summaries}
+                                                                            {ms = calleeModes
+                                                                               ctx.summaries
+                                                                               callee}
+                                                                            ninR)
+                                                                         p0 lookU evs
+                                                                pinXfer = replace
+                                                                  {p = \xs =>
+                                                                    placeIn ownA.ownQ xs = True}
+                                                                  (sym xferEq) pinX
+                                                                pinL = xferLivePtrNeq
+                                                                         {d = ownA.ownQ} {p}
+                                                                         {live} {id = aid} {nm}
+                                                                         {rhs} pd pinXfer
+                                                            in placeInJoinR
+                                                                 {xs = valuePlaces
+                                                                         (EAssign aid p nm
+                                                                            Ptr rhs)}
+                                                                 {ys = xferLive live
+                                                                         (EAssign aid p nm
+                                                                            Ptr rhs)}
+                                                                 pinL
+                                                          hitGo {eR = ECall cid callee args}
+                                                              (HERealloc _ _ _ _ evr)
+                                                              lookU _ _ ninR xferEq =
+                                                            let pinX = argsIn pin
+                                                                         (callMissEvalX
+                                                                            {acc = ctx.summaries}
+                                                                            {ms = calleeModes
+                                                                               ctx.summaries
+                                                                               callee}
+                                                                            ninR)
+                                                                         p0 lookU
+                                                                         (reallocToExprs evr)
+                                                                pinXfer = replace
+                                                                  {p = \xs =>
+                                                                    placeIn ownA.ownQ xs = True}
+                                                                  (sym xferEq) pinX
+                                                                pinL = xferLivePtrNeq
+                                                                         {d = ownA.ownQ} {p}
+                                                                         {live} {id = aid} {nm}
+                                                                         {rhs} pd pinXfer
+                                                            in placeInJoinR
+                                                                 {xs = valuePlaces
+                                                                         (EAssign aid p nm
+                                                                            Ptr rhs)}
+                                                                 {ys = xferLive live
+                                                                         (EAssign aid p nm
+                                                                            Ptr rhs)}
+                                                                 pinL
                                               rhsHit : (h : Bool) -> (k : Bool) ->
                                                        shiftTo ownA.ownQ own.ownQ rhs = h ->
                                                        keepsDest ownA.ownQ own.ownQ rhs = k ->
@@ -18259,13 +19093,15 @@ mutual
                                                 ptrRest ev
                                       argsIn :
                                         {es : List Expr} -> {env0 : HEnv} -> {h0 : Heap} ->
-                                        {hArgs : Heap} -> {live0 : List Place} ->
+                                        {envArgs : HEnv} -> {hArgs : Heap} ->
+                                        {live0 : List Place} ->
                                         placeIn own.ownQ live0 = True ->
                                         placeIn own.ownQ
                                           (fst (argsEvalFoot ctx.summaries es)) = False ->
                                         env0 = env ->
-                                        lookupH ownA.ownQ envR = Just (HVPtr a) ->
-                                        HEvalExprs {funs} env0 h0 es (HROk HVNone envR hArgs) ->
+                                        lookupH ownA.ownQ envArgs = Just (HVPtr a) ->
+                                        HEvalExprs {funs} env0 h0 es
+                                          (HROk HVNone envArgs hArgs) ->
                                         placeIn ownA.ownQ (xferArgs live0 es) = True
                                       argsIn pin0 _ p00 look0 HEArgsNil =
                                         void (startVoid

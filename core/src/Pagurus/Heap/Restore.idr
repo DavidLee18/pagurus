@@ -17960,8 +17960,9 @@ mutual
                                           copyGo False _ =
                                             ownInXfer ev pERhs nHRhs p0 lookR
                                       ownInXfer (HEAsgPtr v env1 h1 ev)
-                                          {e1 = EAssign aid p nm Ptr rhs} pE1 nH1 p0 lookR =
-                                        ptrIn aid p nm rhs v env1 h1 ev pE1 nH1 p0 lookR
+                                          {e1 = EAssign aid p nm Ptr rhs}
+                                          {env0} {h0} pE1 nH1 p0 lookR =
+                                        ptrIn aid p nm rhs v env0 h0 env1 h1 ev pE1 nH1 p0 lookR
                                       ownInXfer (HEUse _ _ evs) {e1 = EUse uid args} _ nH1 p0 lookR =
                                         argsIn pin (ninEvalWX {acc = ctx.summaries}
                                                       {e = EUse uid args} {m} nH1)
@@ -18150,18 +18151,19 @@ mutual
                                                  (useKeepLookupInv neN ownA.ownLp pU))
                                       ptrIn : (aid : Nat) -> (p : Place) -> (nm : String) ->
                                               (rhs : Expr) -> (v : HVal) ->
+                                              (envX : HEnv) -> (hX : Heap) ->
                                               (env1 : HEnv) -> (h1 : Heap) ->
-                                              HEvalExpr {funs} env0 h0 rhs (HROk v env1 h1) ->
+                                              HEvalExpr {funs} envX hX rhs (HROk v env1 h1) ->
                                               checkExpr ctx sc (EAssign aid p nm Ptr rhs) = Right sc1 ->
                                               placeIn own.ownQ
                                                 (fst (argModeFoot ctx.summaries
                                                         (EAssign aid p nm Ptr rhs) m)) = False ->
-                                              env0 = env ->
-                                              lookupH ownA.ownQ envR = Just (HVPtr a) ->
+                                              envX = env ->
+                                              lookupH ownA.ownQ (setH p v env1) = Just (HVPtr a) ->
                                               placeIn ownA.ownQ
                                                 (valuePlaces (EAssign aid p nm Ptr rhs)
                                                  ++ xferLive live (EAssign aid p nm Ptr rhs)) = True
-                                      ptrIn aid p nm rhs v env1 h1 ev pE1 nH1 p0 lookR =
+                                      ptrIn aid p nm rhs v envX hX env1 h1 ev pE1 nH1 p0 lookR =
                                         pdGo (p == ownA.ownQ) Refl
                                         where
                                           pdGo : (eqb : Bool) -> p == ownA.ownQ = eqb ->
@@ -18186,7 +18188,7 @@ mutual
                                                     vEq = justInjH
                                                             (trans (sym lookSet)
                                                                (lookupHSetHit p v env1))
-                                                    pm = exprMaybeLive rhs ev vEq
+                                                    pm = exprMaybeLive rhs ev (sym vEq)
                                                     pinD = replace
                                                              {p = \q => placeIn q
                                                                 (valuePlaces
@@ -18253,7 +18255,7 @@ mutual
                                                      eq look1
                                               ptrRest :
                                                 {w : HVal} -> {envR1 : HEnv} -> {hR1 : Heap} ->
-                                                HEvalExpr {funs} env0 h0 rhs
+                                                HEvalExpr {funs} envX hX rhs
                                                   (HROk w envR1 hR1) ->
                                                 placeIn ownA.ownQ
                                                   (valuePlaces

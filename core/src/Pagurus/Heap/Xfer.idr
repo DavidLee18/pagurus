@@ -58,6 +58,7 @@ overlapReadNested =
   overlapRead {q = 4} {e = EAssign 1 1 "n" Ptr (EVar 3 4 "x")} {ys = [4]}
     Refl Refl
 
+export
 placeInHeadX : (d : Place) -> (qs : List Place) -> placeIn d (d :: qs) = True
 placeInHeadX d qs = rewrite eqNatRefl d in Refl
 

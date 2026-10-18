@@ -208,3 +208,39 @@ takeUseOkH uid ih eq (Right sc1) pA =
       flEq = cong snd (rightInj (trans (sym (takeUseRight uid pA)) eq))
   in htRewrite scEq (replace {p = \f => HTOut f (HROk HVNone env1 h1) sc1} flEq
        (htGhostRes (ih sc1 pA)))
+
+||| `takeOwner` of a call is Ghost or Owner, never Null.
+export
+callNotNull :
+  {ctx : Ctx} -> {sc, scT : Scopes} ->
+  {cid : Nat} -> {callee : String} -> {args : List Expr} ->
+  takeOwner ctx sc (ECall cid callee args) = Right (scT, Null) ->
+  Void
+callNotNull {ctx} {sc} {cid} {callee} {args} eq =
+  cGo (checkCall ctx sc cid callee args) Refl
+  where
+    cGo : (res : Either Diag Scopes) ->
+          checkCall ctx sc cid callee args = res -> Void
+    cGo (Left d) pC =
+      tGo (isRealloc callee && not (isDefined ctx callee)) Refl
+      where
+        tGo : (b : Bool) ->
+              isRealloc callee && not (isDefined ctx callee) = b -> Void
+        tGo False pF =
+          void (leftNotRight (trans (sym (takeCallLeft
+            (trans (checkExprCall ctx sc cid callee args) pC))) eq))
+        tGo True pF =
+          void (leftNotRight (trans (sym (takeReallocLeft pF pC)) eq))
+    cGo (Right scC) pC =
+      fGo (isRealloc callee && not (isDefined ctx callee)) Refl
+      where
+        fGo : (b : Bool) ->
+              isRealloc callee && not (isDefined ctx callee) = b -> Void
+        fGo False pF =
+          let pE = trans (checkExprCall ctx sc cid callee args) pC
+          in void (Pagurus.Checker.nullNotGhost (sym (cong snd (rightInj
+               (trans (sym (takeCallRight pF pE)) eq)))))
+        fGo True pF =
+          void (Pagurus.Checker.ownerNotNull (cong snd (rightInj
+            (trans (sym (takeReallocRight pF pC)) eq))))
+

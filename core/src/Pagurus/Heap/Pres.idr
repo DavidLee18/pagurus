@@ -713,3 +713,150 @@ mutual
       stmtStay wf evS prf ph1
     stmtsStayRet wf (HSConsOk env1 h1 evS evSS) prf eq | Just cl1 =
       stmtsStayRet (stmtWf wf evS) evSS ph1 eq
+
+--------------------------------------------------------------------------------
+-- A Freed cell stays Freed (eval only markFreed of Live, alloc at h.next).
+--------------------------------------------------------------------------------
+
+dropKeepFreed :
+  {h : Heap} -> {a, b : Addr} ->
+  cell h a = Just Freed ->
+  cell h b = Just Live ->
+  cell (markFreed b h) a = Just Freed
+dropKeepFreed {h} {a} {b} fr live with (a == b) proof pab
+  dropKeepFreed fr live | True =
+    void (liveNotFreed (justInjH (trans (sym
+      (replace {p = \x => cell h x = Just Live} (sym (eqNatTrue a b pab)) live)) fr)))
+  dropKeepFreed fr live | False =
+    trans (markFreedMiss a b h pab) fr
+
+mutual
+  export
+  exprFreedKeep :
+    {funs : List Fun} -> {env, env' : HEnv} -> {h, h' : Heap} ->
+    {e : Expr} -> {v : HVal} -> {a : Addr} ->
+    HeapWF h ->
+    HEvalExpr {funs} env h e (HROk v env' h') ->
+    cell h a = Just Freed ->
+    cell h' a = Just Freed
+  exprFreedKeep wf HELit prf = prf
+  exprFreedKeep wf HENull prf = prf
+  exprFreedKeep wf (HEVarLive _ _ _) prf = prf
+  exprFreedKeep wf (HEVarNone _) prf = prf
+  exprFreedKeep wf (HEVarCopy _) prf = prf
+  exprFreedKeep wf (HEVarMiss _) prf = prf
+  exprFreedKeep wf (HEMalloc env1 h1 evs) prf =
+    let fr1 = exprsFreedKeep wf evs prf
+        nf = justNotFresh h1 (exprsWf wf evs) a fr1
+    in trans (allocPresCell h1 a nf) fr1
+  exprFreedKeep wf (HEAsgCopy _ _ _ ev) prf = exprFreedKeep wf ev prf
+  exprFreedKeep wf (HEAsgPtr _ _ _ ev) prf = exprFreedKeep wf ev prf
+  exprFreedKeep wf (HECall _ _ _ evs) prf = exprsFreedKeep wf evs prf
+  exprFreedKeep wf (HECallUser _ _ _ _ env1 h1 evs _ _ evBody) prf =
+    stmtsFreedKeep (exprsWf wf evs) evBody (exprsFreedKeep wf evs prf)
+  exprFreedKeep wf (HECallUserRet _ _ _ _ env1 h1 evs _ _ evBody) prf =
+    stmtsFreedKeepRet (exprsWf wf evs) evBody (exprsFreedKeep wf evs prf)
+  exprFreedKeep wf (HERealloc _ _ env1 h1 evs) prf =
+    let fr1 = reallocFreedKeep wf evs prf
+        nf = justNotFresh h1 (reallocWf wf evs) a fr1
+    in trans (allocPresCell h1 a nf) fr1
+  exprFreedKeep wf (HEUse _ _ evs) prf = exprsFreedKeep wf evs prf
+  exprFreedKeep wf HEUnsup prf = prf
+
+  export
+  exprsFreedKeep :
+    {funs : List Fun} -> {env, env' : HEnv} -> {h, h' : Heap} ->
+    {es : List Expr} -> {v : HVal} -> {a : Addr} ->
+    HeapWF h ->
+    HEvalExprs {funs} env h es (HROk v env' h') ->
+    cell h a = Just Freed ->
+    cell h' a = Just Freed
+  exprsFreedKeep wf HEArgsNil prf = prf
+  exprsFreedKeep wf (HEArgsCons w env1 h1 evE evEs) prf =
+    exprsFreedKeep (exprWf wf evE) evEs (exprFreedKeep wf evE prf)
+
+  export
+  reallocFreedKeep :
+    {funs : List Fun} -> {env, env' : HEnv} -> {h, h' : Heap} ->
+    {es : List Expr} -> {v : HVal} -> {a : Addr} ->
+    HeapWF h ->
+    HEvalReallocArgs {funs} env h es (HROk v env' h') ->
+    cell h a = Just Freed ->
+    cell h' a = Just Freed
+  reallocFreedKeep wf HRNil prf = prf
+  reallocFreedKeep wf (HRHeadOk w env1 h1 evE evEs) prf =
+    exprsFreedKeep (exprWf wf evE) evEs (exprFreedKeep wf evE prf)
+
+  stmtFreedKeep :
+    {funs : List Fun} -> {env, env' : HEnv} -> {h, h' : Heap} ->
+    {s : Stmt} -> {a : Addr} ->
+    HeapWF h ->
+    HEvalStmt {funs} env h s (HOk env' h') ->
+    cell h a = Just Freed ->
+    cell h' a = Just Freed
+  stmtFreedKeep wf (HSDropLive b look clB) prf = dropKeepFreed prf clB
+  stmtFreedKeep wf (HSDropNone _) prf = prf
+  stmtFreedKeep wf (HSDropMiss _) prf = prf
+  stmtFreedKeep wf (HSAsgCopy _ _ _ ev) prf = exprFreedKeep wf ev prf
+  stmtFreedKeep wf (HSAsgPtr _ _ _ ev) prf = exprFreedKeep wf ev prf
+  stmtFreedKeep wf HSDeclNoneCopy prf = prf
+  stmtFreedKeep wf HSDeclNonePtr prf = prf
+  stmtFreedKeep wf (HSDeclJustCopy _ _ _ ev) prf = exprFreedKeep wf ev prf
+  stmtFreedKeep wf (HSDeclJustPtr _ _ _ ev) prf = exprFreedKeep wf ev prf
+  stmtFreedKeep wf (HSCall _ _ _ evs) prf = exprsFreedKeep wf evs prf
+  stmtFreedKeep wf (HSCallUser _ _ _ _ env1 h1 evs _ _ evBody) prf =
+    stmtsFreedKeep (exprsWf wf evs) evBody (exprsFreedKeep wf evs prf)
+  stmtFreedKeep wf (HSCallUserRet _ _ _ _ env1 h1 evs _ _ evBody) prf =
+    stmtsFreedKeepRet (exprsWf wf evs) evBody (exprsFreedKeep wf evs prf)
+  stmtFreedKeep wf (HSExpr _ _ _ ev) prf = exprFreedKeep wf ev prf
+  stmtFreedKeep wf HSUnsup prf = prf
+  stmtFreedKeep wf (HSBlock ev) prf = stmtsFreedKeep wf ev prf
+  stmtFreedKeep wf (HSIfThen v env0 h0 evC evT) prf =
+    stmtsFreedKeep (exprWf wf evC) evT (exprFreedKeep wf evC prf)
+  stmtFreedKeep wf (HSIfElse v env0 h0 evC evE) prf =
+    stmtsFreedKeep (exprWf wf evC) evE (exprFreedKeep wf evC prf)
+  stmtFreedKeep wf HSLoopZ prf = prf
+  stmtFreedKeep wf (HSLoopS env1 h1 evB evR) prf =
+    stmtFreedKeep (stmtsWf wf evB) evR (stmtsFreedKeep wf evB prf)
+
+  stmtFreedKeepRet :
+    {funs : List Fun} -> {env, env' : HEnv} -> {h, h' : Heap} ->
+    {s : Stmt} -> {a : Addr} ->
+    HeapWF h ->
+    HEvalStmt {funs} env h s (HReturned env' h') ->
+    cell h a = Just Freed ->
+    cell h' a = Just Freed
+  stmtFreedKeepRet wf HSRetNone prf = prf
+  stmtFreedKeepRet wf (HSRet _ _ _ ev) prf = exprFreedKeep wf ev prf
+  stmtFreedKeepRet wf (HSBlock ev) prf = stmtsFreedKeepRet wf ev prf
+  stmtFreedKeepRet wf (HSIfThen v env0 h0 evC evT) prf =
+    stmtsFreedKeepRet (exprWf wf evC) evT (exprFreedKeep wf evC prf)
+  stmtFreedKeepRet wf (HSIfElse v env0 h0 evC evE) prf =
+    stmtsFreedKeepRet (exprWf wf evC) evE (exprFreedKeep wf evC prf)
+  stmtFreedKeepRet wf (HSLoopRet _ _ evB) prf = stmtsFreedKeepRet wf evB prf
+  stmtFreedKeepRet wf (HSLoopS env1 h1 evB evR) prf =
+    stmtFreedKeepRet (stmtsWf wf evB) evR (stmtsFreedKeep wf evB prf)
+
+  export
+  stmtsFreedKeep :
+    {funs : List Fun} -> {env, env' : HEnv} -> {h, h' : Heap} ->
+    {ss : List Stmt} -> {a : Addr} ->
+    HeapWF h ->
+    HEvalStmts {funs} env h ss (HOk env' h') ->
+    cell h a = Just Freed ->
+    cell h' a = Just Freed
+  stmtsFreedKeep wf HSNil prf = prf
+  stmtsFreedKeep wf (HSConsOk env1 h1 evS evSS) prf =
+    stmtsFreedKeep (stmtWf wf evS) evSS (stmtFreedKeep wf evS prf)
+
+  export
+  stmtsFreedKeepRet :
+    {funs : List Fun} -> {env, env' : HEnv} -> {h, h' : Heap} ->
+    {ss : List Stmt} -> {a : Addr} ->
+    HeapWF h ->
+    HEvalStmts {funs} env h ss (HReturned env' h') ->
+    cell h a = Just Freed ->
+    cell h' a = Just Freed
+  stmtsFreedKeepRet wf (HSConsRet env1 h1 ev) prf = stmtFreedKeepRet wf ev prf
+  stmtsFreedKeepRet wf (HSConsOk env1 h1 evS evSS) prf =
+    stmtsFreedKeepRet (stmtWf wf evS) evSS (stmtFreedKeep wf evS prf)

@@ -33,6 +33,7 @@ modules = Pagurus.IR
         , Pagurus.Heap.Update
         , Pagurus.Heap.Frame
         , Pagurus.Heap.Pres
+        , Pagurus.Heap.Footprint
         , Pagurus.Heap.Act
         , Pagurus.Heap.Drop
         , Pagurus.Heap.Thm
@@ -48,7 +49,16 @@ modules = Pagurus.IR
         , Pagurus.Heap.If
         , Pagurus.Heap.Return
         , Pagurus.Heap.Unique
+        , Pagurus.Heap.UniqueFail
+        , Pagurus.Heap.Xfer
         , Pagurus.Heap.Inh
+        , Pagurus.Heap.RestoreAux
+        , Pagurus.Heap.RestoreBind
+        , Pagurus.Heap.RestoreFrame
+        , Pagurus.Heap.RestoreCall
+        , Pagurus.Heap.RestoreWalk
+        , Pagurus.Heap.RestoreTake
+        , Pagurus.Heap.RestoreIf
         , Pagurus.Heap.Restore
         , Pagurus.Heap.Dispatch
         , Pagurus.Heap.Expr

@@ -203,10 +203,10 @@ argsModesMoveCons es ms pc ihE ihEs eq r (Left _) pT =
 argsModesMoveCons es ms pc ihE ihEs eq r (Right (sc1, Ghost)) pT =
   void (leftNotRight (trans (sym (argsModesMoveGhost es ms pc pT)) eq))
 argsModesMoveCons es ms pc ihE ihEs eq r (Right (sc1, Owner)) pT =
-  ihEs sc1 (trans (sym (argsModesMoveRight es ms pc pT ownerNotGhost)) eq)
+  ihEs sc1 (trans (sym (argsModesMoveRight es ms pc pT Pagurus.Checker.ownerNotGhost)) eq)
     (fromOk (ihE sc1 Owner pT))
 argsModesMoveCons es ms pc ihE ihEs eq r (Right (sc1, Null)) pT =
-  ihEs sc1 (trans (sym (argsModesMoveRight es ms pc pT nullNotGhost)) eq)
+  ihEs sc1 (trans (sym (argsModesMoveRight es ms pc pT Pagurus.Checker.nullNotGhost)) eq)
     (fromOk (ihE sc1 Null pT))
 
 export
@@ -249,8 +249,8 @@ argsModesExtraCons es ihE ihEs eq r (Left _) pT =
 argsModesExtraCons es ihE ihEs eq r (Right (sc1, Ghost)) pT =
   void (leftNotRight (trans (sym (argsModesExtraGhost es pT)) eq))
 argsModesExtraCons es ihE ihEs eq r (Right (sc1, Owner)) pT =
-  ihEs sc1 (trans (sym (argsModesExtraRight es pT ownerNotGhost)) eq)
+  ihEs sc1 (trans (sym (argsModesExtraRight es pT Pagurus.Checker.ownerNotGhost)) eq)
     (fromOk (ihE sc1 Owner pT))
 argsModesExtraCons es ihE ihEs eq r (Right (sc1, Null)) pT =
-  ihEs sc1 (trans (sym (argsModesExtraRight es pT nullNotGhost)) eq)
+  ihEs sc1 (trans (sym (argsModesExtraRight es pT Pagurus.Checker.nullNotGhost)) eq)
     (fromOk (ihE sc1 Null pT))

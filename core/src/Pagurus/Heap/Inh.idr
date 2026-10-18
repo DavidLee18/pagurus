@@ -1921,6 +1921,21 @@ inhNotPtrExpr : (k : Nat) ->
 inhNotPtrExpr k = (inhOps k).inhNotPtrExpr
 
 export
+inhValsCall : (k : Nat) ->
+      {funs : List Fun} -> {ctx : Ctx} -> {a : Addr} ->
+      ExprIHs funs ctx ->
+      {idC : Nat} -> {calleeC : String} -> {argsC : List Expr} ->
+      {env0 : HEnv} -> {h0 : Heap} -> {sc0, scY : Scopes} ->
+      {envY : HEnv} -> {hY : Heap} ->
+      InHand env0 h0 sc0 a ->
+      OverApprox env0 h0 sc0 ->
+      (evs : HEvalExprs {funs} env0 h0 argsC (HROk HVNone envY hY)) ->
+      checkCall ctx sc0 idC calleeC argsC = Right scY ->
+      {fk : LTE (exprsSize evs) k} ->
+      ValsNot (collectArgVals evs) a
+inhValsCall k = (inhOps k).inhValsCall
+
+export
 inhValsModes : (k : Nat) ->
       {funs : List Fun} -> {ctx : Ctx} -> {a : Addr} ->
       ExprIHs funs ctx ->

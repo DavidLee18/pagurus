@@ -30,6 +30,7 @@ import Pagurus.Heap.If
 import Pagurus.Heap.Seq
 import Pagurus.Heap.Ended
 import Pagurus.Heap.Restore
+import Pagurus.Heap.RestoreCall
 import Pagurus.Heap.Unique
 import Pagurus.Heap.Inh
 
@@ -72,9 +73,10 @@ mutual
     (\ev, sc0, sc1, fl, p, oa => takeHSafe {funs} {chk} ev sc0 sc1 fl p oa)
     (\ev, pE, inh, oa => inhExprH {funs} {fk = lteRefl} (evalSize ev) dispatchExprs inh oa ev pE)
     (\ev, pT, inh, oa, oaY => inhTakeH {funs} {fk = lteRefl} (evalSize ev) dispatchExprs inh oa ev pT oaY)
-    (\ev, pE, ln => exprLN {funs} {chk} ln pE ev)
-    (\ev, pT, ln => (takeLN {funs} {chk} ln pT ev).lnTLN)
-    (\ev, pT, ln, veq => nuoNoTakeLeftover {funs} {chk} ev pT ln veq)
+    (\ev, pE, ln => exprLNBare {funs} {chk} {nln = nestedLNIHs} {wln = walkLNIHs}
+                      (bindLNIHs {fln = frameLNIHs} {wln = walkLNIHs}) ln pE ev)
+    (\ev, pT, ln => (takeLN {funs} {chk} {wln = walkLNIHs} ln pT ev).lnTLN)
+    (\ev, pT, ln, veq => nuoNoTakeLeftover {funs} {chk} {wln = walkLNIHs} ev pT ln veq)
     defNs
 
   ||| `exprHSafe` / `takeHSafe` only, so `Inh` does not close over `inhIH`.
@@ -637,7 +639,9 @@ mutual
         out = stmtsHSafe {funs} {chk} evBody cfuel (paramScopes ctx f) scB pBdy oaF
         leftoverSafe = uniqueOwnFrom pB eq oa bok evs
     in restoreCaller oa1 (hOutWf out)
-         (restoreFromBind {funs} oa1 oaBind bok leftoverSafe pBdyP evBody)
+         (restoreFromBind {funs} {nln = nestedLNIHs}
+            (bindLNIHs {fln = frameLNIHs} {wln = walkLNIHs})
+            oa1 oaBind bok leftoverSafe pBdyP evBody)
     where
       uniqueOwnFrom :
         isBuiltinName callee = False ->
@@ -843,7 +847,9 @@ mutual
         pBdyP = replace {p = \sc0 => checkStmts cfuel ctx sc0 f.body = Right scB}
                   (paramScopesEq ctx f) pBdy
         leftoverSafe = uniqueOwnRet pB eq oa bok evs
-    in restoreCaller oa1 (hRetWf out) (restoreFromBindRet {funs} oa1 oaBind bok leftoverSafe pBdyP evBody)
+    in restoreCaller oa1 (hRetWf out) (restoreFromBindRet {funs} {nln = nestedLNIHs}
+         (bindLNIHs {fln = frameLNIHs} {wln = walkLNIHs})
+         oa1 oaBind bok leftoverSafe pBdyP evBody)
     where
       uniqueOwnRet :
         isBuiltinName callee = False ->

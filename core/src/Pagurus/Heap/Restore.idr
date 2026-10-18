@@ -4588,6 +4588,51 @@ data CellArgs : List Expr -> Type where
                   CellArgs args -> CellArgs es ->
                   CellArgs (EAssign id dest nm Ptr (EMalloc mid args) :: es)
 
+||| Pointer assignment copies the rvalue; invert to that rvalue eval.
+asgPtrRhs :
+  {funs : List Fun} -> {env, env1 : HEnv} -> {h, h1 : Heap} ->
+  {id : Nat} -> {dest : Place} -> {nm : String} -> {rhs : Expr} ->
+  {v : HVal} ->
+  HEvalExpr {funs} env h (EAssign id dest nm Ptr rhs) (HROk v env1 h1) ->
+  (env0 : HEnv ** h0 : Heap **
+    HEvalExpr {funs} env h rhs (HROk v env0 h0))
+asgPtrRhs (HEAsgPtr v env0 h0 ev) = (env0 ** h0 ** ev)
+
+nullOkNone :
+  {funs : List Fun} -> {env, env1 : HEnv} -> {h, h1 : Heap} ->
+  {nid : Nat} -> {v : HVal} ->
+  HEvalExpr {funs} env h (ENull nid) (HROk v env1 h1) ->
+  v = HVNone
+nullOkNone HENull = Refl
+
+litOkCopy :
+  {funs : List Fun} -> {env, env1 : HEnv} -> {h, h1 : Heap} ->
+  {lid : Nat} -> {v : HVal} ->
+  HEvalExpr {funs} env h (ELit lid) (HROk v env1 h1) ->
+  v = HVCopy
+litOkCopy HELit = Refl
+
+useOkNone :
+  {funs : List Fun} -> {env, env1 : HEnv} -> {h, h1 : Heap} ->
+  {uid : Nat} -> {args : List Expr} -> {v : HVal} ->
+  HEvalExpr {funs} env h (EUse uid args) (HROk v env1 h1) ->
+  v = HVNone
+useOkNone (HEUse _ _ _) = Refl
+
+mallocOkPtr :
+  {funs : List Fun} -> {env, env1 : HEnv} -> {h, h1 : Heap} ->
+  {mid : Nat} -> {args : List Expr} -> {v : HVal} ->
+  HEvalExpr {funs} env h (EMalloc mid args) (HROk v env1 h1) ->
+  (b : Addr ** v = HVPtr b)
+mallocOkPtr (HEMalloc _ hA _) = (fst (alloc hA) ** Refl)
+
+||| `[]` is only `HEArgsNil`, so the caller env/heap are unchanged.
+argsNilEnv :
+  {funs : List Fun} -> {env, env1 : HEnv} -> {h, h1 : Heap} ->
+  HEvalExprs {funs} env h [] (HROk HVNone env1 h1) ->
+  (env1 = env, h1 = h)
+argsNilEnv HEArgsNil = (Refl, Refl)
+
 ||| A `CellArgs` list keeps an already-live cell. A pointer store copies
 ||| its right-hand side and does not mark the old cell `Freed`. Nested
 ||| `malloc` is `allocKeepsLive`. This does not rebuild `Own`.
@@ -4649,6 +4694,32 @@ cellArgsLive (CellAsgMalloc inner rest)
       wfA = exprsWf wf evs
       liveH = allocKeepsLive hA a wfA liveA
   in cellArgsLive rest evEs (allocWF hA wfA) liveH
+cellArgsLive (CellAsgNull rest) (HEArgsCons HVCopy _ _ ev _) _ _ =
+  let (_ ** (_ ** evR)) = asgPtrRhs ev
+  in void (hvCopyNotNone (nullOkNone evR))
+cellArgsLive (CellAsgNull rest) (HEArgsCons (HVPtr _) _ _ ev _) _ _ =
+  let (_ ** (_ ** evR)) = asgPtrRhs ev
+  in void (hvNoneNotPtr (sym (nullOkNone evR)))
+cellArgsLive (CellAsgLit rest) (HEArgsCons HVNone _ _ ev _) _ _ =
+  let (_ ** (_ ** evR)) = asgPtrRhs ev
+  in void (hvCopyNotNone (sym (litOkCopy evR)))
+cellArgsLive (CellAsgLit rest) (HEArgsCons (HVPtr _) _ _ ev _) _ _ =
+  let (_ ** (_ ** evR)) = asgPtrRhs ev
+  in void (hvCopyNotPtr (sym (litOkCopy evR)))
+cellArgsLive (CellAsgUse _ rest) (HEArgsCons HVCopy _ _ ev _) _ _ =
+  let (_ ** (_ ** evR)) = asgPtrRhs ev
+  in void (hvCopyNotNone (useOkNone evR))
+cellArgsLive (CellAsgUse _ rest) (HEArgsCons (HVPtr _) _ _ ev _) _ _ =
+  let (_ ** (_ ** evR)) = asgPtrRhs ev
+  in void (hvNoneNotPtr (sym (useOkNone evR)))
+cellArgsLive (CellAsgMalloc _ rest) (HEArgsCons HVNone _ _ ev _) _ _ =
+  let (_ ** (_ ** evR)) = asgPtrRhs ev
+      (_ ** veq) = mallocOkPtr evR
+  in void (hvNoneNotPtr veq)
+cellArgsLive (CellAsgMalloc _ rest) (HEArgsCons HVCopy _ _ ev _) _ _ =
+  let (_ ** (_ ** evR)) = asgPtrRhs ev
+      (_ ** veq) = mallocOkPtr evR
+  in void (hvCopyNotPtr veq)
 
 ||| `malloc` of a `CellArgs` list keeps that owner cell through `alloc`.
 ||| `borrowListOA` is the pre-alloc `HeapWF`. The cell is `cellArgsLive`.
@@ -4779,14 +4850,16 @@ callNilArgsLive :
   cell h1 a = Just Live
 callNilArgsLive (HEArgsCons _ _ _ (HECall _ _ _ HEArgsNil) evEs) rest own oa _ =
   cellArgsLive rest evEs oa.wf (ownLive oa own)
-callNilArgsLive (HEArgsCons _ _ _ ev@(HECallUser _ _ _ _ _ _ HEArgsNil _ _ _) evEs)
+callNilArgsLive (HEArgsCons _ _ _ ev@(HECallUser _ _ _ _ _ _ evs _ _ _) evEs)
     rest own oa eq =
-  let (scA ** (pE, _)) =
+  let (Refl, Refl) = argsNilEnv evs
+      (scA ** (pE, _)) =
         argsBorrowSplit {ctx} {sc} {e = ECall nid callee []} {es} eq
   in callNilUserLive ev evEs rest own oa pE
-callNilArgsLive (HEArgsCons _ _ _ ev@(HECallUserRet _ _ _ _ _ _ HEArgsNil _ _ _) evEs)
+callNilArgsLive (HEArgsCons _ _ _ ev@(HECallUserRet _ _ _ _ _ _ evs _ _ _) evEs)
     rest own oa eq =
-  let (scA ** (pE, _)) =
+  let (Refl, Refl) = argsNilEnv evs
+      (scA ** (pE, _)) =
         argsBorrowSplit {ctx} {sc} {e = ECall nid callee []} {es} eq
   in callNilUserLive ev evEs rest own oa pE
 callNilArgsLive (HEArgsCons _ _ _ (HERealloc _ _ _ hA HRNil) evEs) rest own oa _ =
